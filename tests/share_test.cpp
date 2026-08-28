@@ -32,8 +32,11 @@ zano_p2pool::Share make_vector_share() {
     share.share_height = 1;
     share.timestamp = UINT64_C(0x0102030405060708);
     share.zano_height = 165014;
-    share.mining_header_hash = hex_to_bytes(
+    const auto mining_header = hex_to_bytes(
         "43147bd3560a1385c7359475e8974bbfc7aeac85c328e779e037b2d8eeec604e");
+    CHECK(mining_header.size() == share.mining_header_hash.size());
+    std::copy(
+        mining_header.begin(), mining_header.end(), share.mining_header_hash.begin());
     share.nonce = UINT64_C(0x1122334455667788);
     share.share_difficulty = difficulty128_from_decimal("100000000");
     share.network_difficulty = difficulty128_from_decimal("1229990");
