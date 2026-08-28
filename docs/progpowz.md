@@ -1,8 +1,8 @@
 # ProgPoWZ compatibility notes
 
-This document records the consensus-facing mining path observed in the current Zano source before zano-p2pool implements share hashing.
+This document records the consensus-facing mining path observed in the current Zano source before zano-p2pool accepts shares.
 
-Source audit baseline: Zano `master` around commit `1508cf6ae3ef44a52d66137d30f800b06ce917ee` (2026-08-28 audit).
+Source audit baseline: Zano commit `1508cf6ae3ef44a52d66137d30f800b06ce917ee` (2026-08-28 audit).
 
 ## Difficulty and target
 
@@ -38,7 +38,7 @@ Important compatibility details:
 - Epoch number is `height / 30000` using integer division.
 - The ProgPoW revision declared by Zano is `0.9.2`.
 - The canonical entry point is `progpow::hash(context, height, header_hash, nonce)`.
-- The full epoch context is obtained for the calculated epoch before hashing.
+- Zano's production core obtains a full epoch context for the calculated epoch.
 - Zano's block hashing blob stores the 64-bit mining nonce starting at byte offset `1`.
 - Zano zeroes that nonce before computing the `cn_fast_hash` that becomes the ProgPoW header hash.
 - The actual submitted nonce is passed separately into ProgPoW.
@@ -50,10 +50,41 @@ Zano's built-in Stratum server follows the same path. It keeps the nonce-zeroed 
 
 This separation is useful for P2Pool: a share job can carry an immutable header hash plus height/epoch information, while each miner varies only the nonce.
 
-## Implementation policy
+## Exact-source backend
 
-Consensus behavior must be tested against Zano vectors before a share is accepted.
+During testnet development, zano-p2pool can compile against the exact ProgPoW implementation embedded in a local Zano source checkout instead of copying miner code into this repository.
 
-The ProgPoW implementation embedded in Zano identifies itself as Apache-2.0 licensed code. zano-p2pool will not import a large implementation blindly; we will either use a pinned compatible upstream dependency or a small reviewed integration of the exact required components, with license notices retained.
+Configure with an absolute Zano source path:
 
-The GPL-licensed `hyle-team/progminer` repository is useful as an interoperability reference, but its code should not be copied into this project unless the project's licensing strategy explicitly permits that dependency.
+```bash
+cmake -S . -B build-zano \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DZANO_P2POOL_ZANO_SOURCE_DIR="$HOME/path/to/zano"
+
+cmake --build build-zano -j"$(nproc)"
+ctest --test-dir build-zano --output-on-failure
+```
+
+When enabled, `progpowz_hash()` supports two context modes:
+
+- `Light`: uses the Ethash light cache. It computes the same result with far less memory and is used for deterministic compatibility tests.
+- `Full`: uses Zano's full epoch context/DAG and is intended for high-throughput pool share verification.
+
+The normal build remains available without a Zano checkout. In that configuration the ProgPoWZ API exists but reports the backend unavailable and hashing calls fail explicitly rather than silently using a different algorithm.
+
+## Compatibility vector
+
+The exact-source build tests the standard ProgPoW 0.9.2 block-0 vector:
+
+```text
+header     ffeeddccbbaa9988776655443322110000112233445566778899aabbccddeeff
+nonce      123456789abcdef0
+mix hash   c2e883b6876ec4cc514b9cea269f343095619faf9f2edcafb3fcf6928fa58141
+final hash fa70fbf9979f80ec3db2c3f118a5e683fcf5f54ea7edc41b0b5d336508694cb8
+```
+
+GitHub CI also checks out only `contrib/ethereum/libethash` from the audited Zano commit above and runs this vector. This prevents an upstream change from silently changing consensus behavior in our build.
+
+## Licensing policy
+
+The ProgPoW/libethash implementation embedded in Zano identifies itself as Apache-2.0 licensed code. zano-p2pool does not import the GPL-licensed `hyle-team/progminer` source. `progminer` remains useful as an interoperability/Stratum reference only unless the project's licensing strategy explicitly changes.

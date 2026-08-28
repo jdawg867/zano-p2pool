@@ -31,3 +31,43 @@ jobs:
 
       - name: Test
         run: ctest --test-dir build --output-on-failure
+
+  progpowz-compat:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout zano-p2pool
+        uses: actions/checkout@v4
+
+      - name: Checkout audited Zano libethash
+        uses: actions/checkout@v4
+        with:
+          repository: hyle-team/zano
+          ref: 1508cf6ae3ef44a52d66137d30f800b06ce917ee
+          path: zano-src
+          sparse-checkout: |
+            contrib/ethereum/libethash
+          sparse-checkout-cone-mode: false
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            libboost-dev \
+            libcurl4-openssl-dev \
+            libjson-c-dev \
+            pkg-config
+
+      - name: Configure with exact Zano ProgPoWZ
+        run: |
+          cmake -S . -B build-zano \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DZANO_P2POOL_ZANO_SOURCE_DIR="$GITHUB_WORKSPACE/zano-src"
+
+      - name: Build with exact Zano ProgPoWZ
+        run: cmake --build build-zano -j2
+
+      - name: Test ProgPoWZ compatibility
+        run: ctest --test-dir build-zano --output-on-failure

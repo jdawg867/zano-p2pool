@@ -11,6 +11,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(ZANO_P2POOL_BUILD_TESTS "Build zano-p2pool tests" ON)
+set(ZANO_P2POOL_ZANO_SOURCE_DIR "" CACHE PATH
+    "Path to a Zano source tree used to enable exact ProgPoWZ support")
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(CURL REQUIRED IMPORTED_TARGET libcurl)
@@ -19,6 +21,7 @@ pkg_check_modules(JSONC REQUIRED IMPORTED_TARGET json-c)
 add_library(zano_p2pool_core
     src/block_template.cpp
     src/pow_target.cpp
+    src/progpowz.cpp
     src/rpc_client.cpp
 )
 
@@ -38,6 +41,47 @@ target_compile_options(zano_p2pool_core PRIVATE
     -Wextra
     -Wpedantic
 )
+
+if(ZANO_P2POOL_ZANO_SOURCE_DIR)
+    get_filename_component(
+        _zano_source_dir
+        "${ZANO_P2POOL_ZANO_SOURCE_DIR}"
+        ABSOLUTE
+    )
+    set(_zano_libethash_dir
+        "${_zano_source_dir}/contrib/ethereum/libethash")
+
+    if(NOT EXISTS "${_zano_libethash_dir}/CMakeLists.txt")
+        message(FATAL_ERROR
+            "ZANO_P2POOL_ZANO_SOURCE_DIR does not point to a Zano source tree: "
+            "${_zano_source_dir}")
+    endif()
+
+    enable_language(C)
+    find_package(Threads REQUIRED)
+
+    add_subdirectory(
+        "${_zano_libethash_dir}"
+        "${CMAKE_BINARY_DIR}/zano-libethash"
+        EXCLUDE_FROM_ALL
+    )
+
+    # Zano's libethash CMake target relies on include paths supplied by the
+    # parent Zano build. Supply the same root explicitly when embedded here.
+    target_include_directories(ethash PUBLIC "${_zano_libethash_dir}")
+    target_link_libraries(ethash PUBLIC Threads::Threads)
+
+    target_compile_definitions(zano_p2pool_core PUBLIC
+        ZANO_P2POOL_HAVE_PROGPOWZ=1
+    )
+    target_link_libraries(zano_p2pool_core PUBLIC ethash)
+
+    message(STATUS
+        "ProgPoWZ enabled from Zano source: ${_zano_libethash_dir}")
+else()
+    message(STATUS
+        "ProgPoWZ backend disabled; set ZANO_P2POOL_ZANO_SOURCE_DIR to enable it")
+endif()
 
 add_executable(zano-p2pool src/main.cpp)
 target_link_libraries(zano-p2pool PRIVATE zano_p2pool_core)
@@ -59,4 +103,8 @@ if(ZANO_P2POOL_BUILD_TESTS)
     add_executable(pow_target_test tests/pow_target_test.cpp)
     target_link_libraries(pow_target_test PRIVATE zano_p2pool_core)
     add_test(NAME pow_target_test COMMAND pow_target_test)
+
+    add_executable(progpowz_test tests/progpowz_test.cpp)
+    target_link_libraries(progpowz_test PRIVATE zano_p2pool_core)
+    add_test(NAME progpowz_test COMMAND progpowz_test)
 endif()
