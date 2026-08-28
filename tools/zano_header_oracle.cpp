@@ -28,6 +28,9 @@ int main(int argc, char** argv) {
 
     const auto header_blob =
         t_serializable_object_to_blob(static_cast<currency::block_header>(block));
+    const auto miner_prefix_blob =
+        t_serializable_object_to_blob(
+            static_cast<currency::transaction_prefix>(block.miner_tx));
     const crypto::hash miner_tx_hash =
         currency::get_transaction_hash(block.miner_tx);
     const crypto::hash tree_root = currency::get_tx_tree_hash(block);
@@ -51,6 +54,16 @@ int main(int argc, char** argv) {
     std::cout << "block_header_bytes=" << header_blob.size() << '\n';
     std::cout << "block_header_hex="
               << epee::string_tools::buff_to_hex_nodelimer(header_blob) << '\n';
+    std::cout << "miner_tx_version=" << block.miner_tx.version << '\n';
+    std::cout << "miner_tx_hardfork_id="
+              << static_cast<unsigned>(block.miner_tx.hardfork_id) << '\n';
+    std::cout << "miner_tx_vin_count=" << block.miner_tx.vin.size() << '\n';
+    std::cout << "miner_tx_extra_count=" << block.miner_tx.extra.size() << '\n';
+    std::cout << "miner_tx_vout_count=" << block.miner_tx.vout.size() << '\n';
+    std::cout << "miner_tx_prefix_bytes=" << miner_prefix_blob.size() << '\n';
+    std::cout << "miner_tx_prefix_hex="
+              << epee::string_tools::buff_to_hex_nodelimer(miner_prefix_blob)
+              << '\n';
     std::cout << "miner_tx_hash="
               << epee::string_tools::pod_to_hex(miner_tx_hash) << '\n';
     std::cout << "tx_hashes_count=" << block.tx_hashes.size() << '\n';
