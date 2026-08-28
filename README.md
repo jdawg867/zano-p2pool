@@ -2,7 +2,7 @@
 
 Experimental decentralized P2Pool-style mining software for **Zano**.
 
-> Status: early development. Do not use with funds or production mining yet.
+> Status: early development. Testnet is the default. Do not use with funds or production mining yet.
 
 ## Goal
 
@@ -25,7 +25,19 @@ The first milestone intentionally covers only Zano daemon integration:
 - parse the live PoW template;
 - expose height, previous hash, difficulty, reward, seed, and blob;
 - provide a `submitblock` RPC method;
-- unit-test block-template parsing.
+- unit-test block-template parsing;
+- validate first against Zano testnet.
+
+## Zano network defaults
+
+Current Zano source defines:
+
+| Network | Daemon RPC | Zano P2P | Zano Stratum |
+| --- | ---: | ---: | ---: |
+| Mainnet | 11211 | 11121 | 11777 |
+| Testnet | 12111 | 11314 | 11888 |
+
+Zano testnet binaries are built with `TESTNET=TRUE`. This project's development default is testnet so early testing cannot accidentally target mainnet simply by omitting `--network`.
 
 ## Requirements
 
@@ -41,7 +53,6 @@ sudo apt install -y \
   pkg-config
 ```
 
-
 ## Build
 
 ```bash
@@ -50,21 +61,37 @@ cmake --build build -j"$(nproc)"
 ctest --test-dir build --output-on-failure
 ```
 
-## Run
+## Run on Zano testnet
 
 `getblocktemplate` needs a Zano payout address.
 
 ```bash
 ./build/zano-p2pool \
-  --rpc-url http://127.0.0.1:11211/json_rpc \
-  --wallet YOUR_ZANO_ADDRESS
+  --network testnet \
+  --wallet YOUR_TESTNET_ZANO_ADDRESS
+```
+
+That defaults to:
+
+```text
+http://127.0.0.1:12111/json_rpc
+```
+
+You can override the endpoint when needed:
+
+```bash
+./build/zano-p2pool \
+  --network testnet \
+  --rpc-url http://127.0.0.1:12111/json_rpc \
+  --wallet YOUR_TESTNET_ZANO_ADDRESS
 ```
 
 Expected output:
 
 ```text
 zano-p2pool v0.1.0-dev
-RPC: http://127.0.0.1:11211/json_rpc
+Network: testnet
+RPC: http://127.0.0.1:12111/json_rpc
 
 Template status: OK
 Height:          ...
@@ -75,7 +102,13 @@ ProgPoWZ seed:   ...
 Blob bytes:      ...
 ```
 
-## Current Zano RPC references
+Mainnet mode exists for later development but currently emits a warning:
+
+```bash
+./build/zano-p2pool --network mainnet --wallet YOUR_ZANO_ADDRESS
+```
+
+## Current Zano references
 
 - `getblocktemplate`: https://docs.zano.org/docs/build/rpc-api/daemon-rpc-api/getblocktemplate/
 - `submitblock`: https://docs.zano.org/docs/build/rpc-api/daemon-rpc-api/submitblock/
