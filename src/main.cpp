@@ -1,4 +1,5 @@
 #include "zano_p2pool/pow_target.hpp"
+#include "zano_p2pool/progpowz.hpp"
 #include "zano_p2pool/rpc_client.hpp"
 
 #include <cstdlib>
@@ -114,7 +115,12 @@ int main(int argc, char** argv) {
 
         std::cout << "zano-p2pool v0.1.0-dev\n";
         std::cout << "Network: " << network_name(options.network) << '\n';
-        std::cout << "RPC: " << options.rpc_url << "\n\n";
+        std::cout << "RPC: " << options.rpc_url << '\n';
+        std::cout << "ProgPoWZ backend: "
+                  << (zano_p2pool::progpowz_available()
+                          ? zano_p2pool::progpowz_revision()
+                          : "disabled")
+                  << "\n\n";
 
         if (options.network == Network::Mainnet) {
             std::cerr
@@ -131,6 +137,8 @@ int main(int argc, char** argv) {
 
         std::cout << "Template status: " << block.status << '\n';
         std::cout << "Height:          " << block.height << '\n';
+        std::cout << "ProgPoWZ epoch:  "
+                  << zano_p2pool::progpowz_epoch(block.height) << '\n';
         std::cout << "Previous hash:   " << block.prev_hash << '\n';
         std::cout << "Difficulty:      " << block.difficulty << '\n';
         std::cout << "Target:          " << target.hex() << '\n';
