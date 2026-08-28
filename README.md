@@ -18,29 +18,11 @@ Build a native Zano P2Pool network where:
 
 ## Milestone 0.1
 
-The first milestone established Zano daemon integration:
-
-- connect to `zanod` JSON-RPC;
-- call `getblocktemplate`;
-- parse the live PoW template;
-- expose height, previous hash, difficulty, reward, seed, and blob;
-- provide a `submitblock` RPC method;
-- validate against Zano testnet first.
-
-Milestone 0.1 was validated against live Zano testnet and merged to `main`.
+The first milestone established Zano daemon integration and was validated against live Zano testnet before merging to `main`.
 
 ## Milestone 0.2
 
-The second milestone established the consensus-critical local PoW path:
-
-- Zano-compatible uint128 difficulty and 256-bit target handling;
-- exact Zano ProgPoWZ backend integration;
-- canonical mining-header derivation from RPC `blocktemplate_blob`;
-- local share-vs-network difficulty classification;
-- deterministic exact-Zano compatibility vectors;
-- always-on consensus test checks in Release builds.
-
-Milestone 0.2 was validated against live Zano testnet and merged to `main`.
+The second milestone established the consensus-critical local PoW path and was validated against live Zano testnet before merging to `main`.
 
 ## Milestone 0.3
 
@@ -84,9 +66,7 @@ ctest --test-dir build --output-on-failure
 
 ## Run
 
-`getblocktemplate` needs a Zano payout address.
-
-Testnet is the development default:
+`getblocktemplate` needs a Zano payout address. Testnet is the development default:
 
 ```bash
 ./build/zano-p2pool \
@@ -94,41 +74,14 @@ Testnet is the development default:
   --wallet YOUR_TESTNET_ZANO_ADDRESS
 ```
 
-This resolves to:
-
-```text
-http://127.0.0.1:12111/json_rpc
-```
-
-You can also select mainnet explicitly:
-
-```bash
-./build/zano-p2pool \
-  --network mainnet \
-  --wallet YOUR_ZANO_ADDRESS
-```
-
-or override the RPC endpoint directly with `--rpc-url`.
+This resolves to `http://127.0.0.1:12111/json_rpc`.
 
 ## Current Zano network defaults
-
-From the current Zano source:
 
 | Network | Daemon RPC | Zano P2P | Zano Stratum |
 |---|---:|---:|---:|
 | mainnet | 11211 | 11121 | 11777 |
 | testnet | 12111 | 11314 | 11888 |
-
-Zano testnet itself is a testnet build (`cmake -D TESTNET=TRUE ..`).
-
-## Current Zano references
-
-- `getblocktemplate`: https://docs.zano.org/docs/build/rpc-api/daemon-rpc-api/getblocktemplate/
-- `submitblock`: https://docs.zano.org/docs/build/rpc-api/daemon-rpc-api/submitblock/
-- Zano source: https://github.com/hyle-team/zano
-- Zano difficulty implementation: https://github.com/hyle-team/zano/blob/master/src/currency_core/difficulty.cpp
-- Zano target tests: https://github.com/hyle-team/zano/blob/master/tests/hash-target.cpp
-- Zano ProgPoWZ miner reference: https://github.com/hyle-team/progminer
 
 ## Development roadmap
 
