@@ -51,9 +51,9 @@ int main() {
         throw std::runtime_error("failed to open testnet fixture: " + fixture_path);
     }
 
-    const std::string fixture_text(
+    const std::string fixture_text{
         std::istreambuf_iterator<char>(input),
-        std::istreambuf_iterator<char>());
+        std::istreambuf_iterator<char>()};
 
     json_object* fixture = json_tokener_parse(fixture_text.c_str());
     if (!fixture) {
