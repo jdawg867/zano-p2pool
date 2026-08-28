@@ -8,16 +8,52 @@
 
 namespace {
 
+enum class Network {
+    Mainnet,
+    Testnet,
+};
+
+constexpr const char* kMainnetRpcUrl =
+    "http://127.0.0.1:11211/json_rpc";
+constexpr const char* kTestnetRpcUrl =
+    "http://127.0.0.1:12111/json_rpc";
+
 struct Options {
-    std::string rpc_url{"http://127.0.0.1:11211/json_rpc"};
+    Network network{Network::Testnet};
+    std::string rpc_url;
     std::string wallet;
 };
+
+const char* network_name(Network network) {
+    return network == Network::Testnet ? "testnet" : "mainnet";
+}
+
+const char* default_rpc_url(Network network) {
+    return network == Network::Testnet ? kTestnetRpcUrl : kMainnetRpcUrl;
+}
+
+Network parse_network(const std::string& value) {
+    if (value == "testnet") {
+        return Network::Testnet;
+    }
+    if (value == "mainnet") {
+        return Network::Mainnet;
+    }
+
+    throw std::runtime_error(
+        "--network must be either 'testnet' or 'mainnet'");
+}
 
 void print_usage(const char* program) {
     std::cout
         << "Usage: " << program
         << " --wallet ZANO_ADDRESS"
-        << " [--rpc-url http://127.0.0.1:11211/json_rpc]\n";
+        << " [--network testnet|mainnet]"
+        << " [--rpc-url URL]\n\n"
+        << "Defaults:\n"
+        << "  network: testnet\n"
+        << "  testnet RPC: " << kTestnetRpcUrl << '\n'
+        << "  mainnet RPC: " << kMainnetRpcUrl << '\n';
 }
 
 Options parse_args(int argc, char** argv) {
@@ -39,6 +75,14 @@ Options parse_args(int argc, char** argv) {
             continue;
         }
 
+        if (arg == "--network") {
+            if (++i >= argc) {
+                throw std::runtime_error("--network requires a value");
+            }
+            options.network = parse_network(argv[i]);
+            continue;
+        }
+
         if (arg == "--rpc-url") {
             if (++i >= argc) {
                 throw std::runtime_error("--rpc-url requires a value");
@@ -54,6 +98,10 @@ Options parse_args(int argc, char** argv) {
         throw std::runtime_error("--wallet is required");
     }
 
+    if (options.rpc_url.empty()) {
+        options.rpc_url = default_rpc_url(options.network);
+    }
+
     return options;
 }
 
@@ -64,7 +112,14 @@ int main(int argc, char** argv) {
         const auto options = parse_args(argc, argv);
 
         std::cout << "zano-p2pool v0.1.0-dev\n";
+        std::cout << "Network: " << network_name(options.network) << '\n';
         std::cout << "RPC: " << options.rpc_url << "\n\n";
+
+        if (options.network == Network::Mainnet) {
+            std::cerr
+                << "WARNING: mainnet mode is experimental and not yet "
+                   "recommended for production mining.\n";
+        }
 
         const zano_p2pool::RpcClient rpc(options.rpc_url);
         const auto block = rpc.get_block_template(
