@@ -1,6 +1,6 @@
 #include "zano_p2pool/pow_target.hpp"
+#include "test_check.hpp"
 
-#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
@@ -10,7 +10,7 @@
 namespace {
 
 zano_p2pool::Hash256 from_hex(std::string_view hex) {
-    assert(hex.size() == 64);
+    CHECK(hex.size() == 64);
 
     auto nibble = [](char ch) -> std::uint8_t {
         if (ch >= '0' && ch <= '9') {
@@ -22,7 +22,7 @@ zano_p2pool::Hash256 from_hex(std::string_view hex) {
         if (ch >= 'A' && ch <= 'F') {
             return static_cast<std::uint8_t>(10 + ch - 'A');
         }
-        assert(false && "invalid hex digit");
+        CHECK(false && "invalid hex digit");
         return 0;
     };
 
@@ -53,7 +53,7 @@ void expect_invalid_difficulty(std::string_view difficulty) {
     } catch (const std::out_of_range&) {
         threw = true;
     }
-    assert(threw);
+    CHECK(threw);
 }
 
 }  // namespace
@@ -65,41 +65,35 @@ int main() {
     using zano_p2pool::hash_meets_difficulty;
     using zano_p2pool::hash_meets_target;
 
-    // Zano consensus: floor((2^256 - 1) / difficulty).
-    assert(difficulty_to_target("1").hex() == std::string(64, 'f'));
-    assert(difficulty_to_target("2").hex() ==
-           "7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
+    CHECK(difficulty_to_target("1").hex() == std::string(64, 'f'));
+    CHECK(difficulty_to_target("2").hex() ==
+          "7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
 
-    // Captured from the live Zano testnet template at height 164895.
     const DifficultyTarget live_target = difficulty_to_target("1179735");
-    assert(live_target.hex() ==
-           "00000e389ed1e3ed15e9a44f9eb80f149aaaa2aad1549a754e573e3de163222f");
+    CHECK(live_target.hex() ==
+          "00000e389ed1e3ed15e9a44f9eb80f149aaaa2aad1549a754e573e3de163222f");
 
-    // Exact target is accepted; target + 1 is rejected.
-    assert(hash_meets_target(live_target.big_endian, live_target));
-    assert(!hash_meets_target(increment(live_target.big_endian), live_target));
+    CHECK(hash_meets_target(live_target.big_endian, live_target));
+    CHECK(!hash_meets_target(increment(live_target.big_endian), live_target));
 
     Hash256 zero_hash{};
     Hash256 max_hash{};
     max_hash.fill(0xff);
 
-    assert(hash_meets_difficulty(zero_hash, "1179735"));
-    assert(hash_meets_difficulty(max_hash, "1"));
-    assert(!hash_meets_difficulty(max_hash, "2"));
+    CHECK(hash_meets_difficulty(zero_hash, "1179735"));
+    CHECK(hash_meets_difficulty(max_hash, "1"));
+    CHECK(!hash_meets_difficulty(max_hash, "2"));
 
-    // Additional deterministic boundary vector, adapted from the intent of
-    // Zano's tests/hash-target.cpp: boundary passes, next integer fails.
     const auto diff_255_target = difficulty_to_target("255");
-    assert(hash_meets_target(diff_255_target.big_endian, diff_255_target));
-    assert(!hash_meets_target(increment(diff_255_target.big_endian), diff_255_target));
+    CHECK(hash_meets_target(diff_255_target.big_endian, diff_255_target));
+    CHECK(!hash_meets_target(increment(diff_255_target.big_endian), diff_255_target));
 
-    // Verify canonical big-endian hash interpretation explicitly.
     const auto half = from_hex(
         "7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
     const auto half_plus_one = from_hex(
         "8000000000000000000000000000000000000000000000000000000000000000");
-    assert(hash_meets_difficulty(half, "2"));
-    assert(!hash_meets_difficulty(half_plus_one, "2"));
+    CHECK(hash_meets_difficulty(half, "2"));
+    CHECK(!hash_meets_difficulty(half_plus_one, "2"));
 
     expect_invalid_difficulty("");
     expect_invalid_difficulty("0");
