@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <iostream>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -102,7 +103,8 @@ int main() {
     std::vector<std::uint8_t> synthetic_block = header_bytes;
     synthetic_block.insert(
         synthetic_block.end(), miner_prefix_bytes.begin(), miner_prefix_bytes.end());
-    const auto empty_suffix = make_current_coinbase_suffix({});
+    const auto empty_suffix =
+        make_current_coinbase_suffix(std::span<const Hash256>{});
     synthetic_block.insert(
         synthetic_block.end(), empty_suffix.begin(), empty_suffix.end());
 
