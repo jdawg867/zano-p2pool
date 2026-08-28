@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <map>
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace zano_p2pool {
@@ -50,6 +51,10 @@ struct ConnectedShare {
     ChainWork cumulative_work{};
 };
 
+// In-memory structural share-chain core. At this checkpoint add_share() enforces
+// canonical identity, parent/height rules, duplicate/orphan handling and checked
+// cumulative work. The next Milestone 0.3 checkpoint adds mandatory ProgPoWZ
+// admission so unverified claimed difficulty cannot contribute chain work.
 class ShareChain {
 public:
     [[nodiscard]] AddShareResult add_share(const Share& share);
