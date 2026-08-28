@@ -20,6 +20,8 @@ pkg_check_modules(JSONC REQUIRED IMPORTED_TARGET json-c)
 
 add_library(zano_p2pool_core
     src/block_template.cpp
+    src/crypto_hash.cpp
+    src/mining_header.cpp
     src/pow_target.cpp
     src/progpowz.cpp
     src/rpc_client.cpp
@@ -112,4 +114,8 @@ if(ZANO_P2POOL_BUILD_TESTS)
     add_executable(progpowz_test tests/progpowz_test.cpp)
     target_link_libraries(progpowz_test PRIVATE zano_p2pool_core)
     add_test(NAME progpowz_test COMMAND progpowz_test)
+
+    add_executable(mining_header_test tests/mining_header_test.cpp)
+    target_link_libraries(mining_header_test PRIVATE zano_p2pool_core)
+    add_test(NAME mining_header_test COMMAND mining_header_test)
 endif()
