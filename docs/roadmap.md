@@ -8,7 +8,8 @@
 - [x] template response parser
 - [x] `submitblock` request
 - [x] parser unit test
-- [ ] live integration test against a synced `zanod`
+- [x] live integration test against a synced Zano **testnet** `zanod`
+- [x] sanitized live testnet metadata fixture and regression test
 - [ ] robust RPC error/status handling
 - [ ] daemon reconnect/backoff
 
