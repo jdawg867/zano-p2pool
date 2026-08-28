@@ -25,6 +25,7 @@ add_library(zano_p2pool_core
     src/pow_target.cpp
     src/progpowz.cpp
     src/rpc_client.cpp
+    src/share.cpp
     src/share_validation.cpp
 )
 
@@ -121,4 +122,8 @@ if(ZANO_P2POOL_BUILD_TESTS)
     add_executable(mining_header_test tests/mining_header_test.cpp)
     target_link_libraries(mining_header_test PRIVATE zano_p2pool_core)
     add_test(NAME mining_header_test COMMAND mining_header_test)
+
+    add_executable(share_test tests/share_test.cpp)
+    target_link_libraries(share_test PRIVATE zano_p2pool_core)
+    add_test(NAME share_test COMMAND share_test)
 endif()
