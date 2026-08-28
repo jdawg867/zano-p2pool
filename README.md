@@ -53,7 +53,11 @@ Current work builds the local P2Pool share chain:
 - orphan retention and deterministic promotion;
 - stale-fork tracking and cumulative-work reorgs;
 - deterministic best-tip tie breaking;
-- next: timestamp rules and mandatory local ProgPoWZ verification before a share can contribute work.
+- next: timestamp rules and mandatory local ProgPoWZ verification before a share can contribute production-safe work.
+
+The current `ShareChain::add_share()` checkpoint is structural only. It is intentionally
+not yet a production admission API because claimed share difficulty has not been gated
+by the local ProgPoWZ verifier inside the chain path.
 
 ## Requirements
 
