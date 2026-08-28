@@ -18,6 +18,7 @@ pkg_check_modules(JSONC REQUIRED IMPORTED_TARGET json-c)
 
 add_library(zano_p2pool_core
     src/block_template.cpp
+    src/pow_target.cpp
     src/rpc_client.cpp
 )
 
@@ -54,4 +55,8 @@ if(ZANO_P2POOL_BUILD_TESTS)
         ZANO_P2POOL_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
     )
     add_test(NAME testnet_fixture_test COMMAND testnet_fixture_test)
+
+    add_executable(pow_target_test tests/pow_target_test.cpp)
+    target_link_libraries(pow_target_test PRIVATE zano_p2pool_core)
+    add_test(NAME pow_target_test COMMAND pow_target_test)
 endif()

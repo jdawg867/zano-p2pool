@@ -18,7 +18,7 @@ Build a native Zano P2Pool network where:
 
 ## Milestone 0.1
 
-The first milestone intentionally covers only Zano daemon integration:
+The first milestone covers Zano daemon integration:
 
 - connect to `zanod` JSON-RPC;
 - call `getblocktemplate`;
@@ -27,6 +27,18 @@ The first milestone intentionally covers only Zano daemon integration:
 - provide a `submitblock` RPC method;
 - unit-test block-template parsing;
 - validate against Zano testnet first.
+
+Milestone 0.1 was validated against live Zano testnet and merged to `main`.
+
+## Milestone 0.2
+
+Current work adds the consensus-critical PoW validation layer:
+
+- parse Zano's decimal `uint128` difficulty;
+- compute the full 256-bit target as `floor((2^256 - 1) / difficulty)`;
+- compare 32-byte hashes using Zano-compatible byte ordering;
+- add exact boundary tests, including a target vector from live testnet;
+- next: integrate the canonical ProgPoWZ hashing path.
 
 ## Requirements
 
@@ -37,6 +49,7 @@ sudo apt update
 sudo apt install -y \
   build-essential \
   cmake \
+  libboost-dev \
   libcurl4-openssl-dev \
   libjson-c-dev \
   pkg-config
@@ -105,11 +118,13 @@ From the current Zano source:
 
 Zano testnet itself is a testnet build (`cmake -D TESTNET=TRUE ..`).
 
-## Current Zano RPC references
+## Current Zano references
 
 - `getblocktemplate`: https://docs.zano.org/docs/build/rpc-api/daemon-rpc-api/getblocktemplate/
 - `submitblock`: https://docs.zano.org/docs/build/rpc-api/daemon-rpc-api/submitblock/
 - Zano source: https://github.com/hyle-team/zano
+- Zano difficulty implementation: https://github.com/hyle-team/zano/blob/master/src/currency_core/difficulty.cpp
+- Zano target tests: https://github.com/hyle-team/zano/blob/master/tests/hash-target.cpp
 - Zano ProgPoWZ miner reference: https://github.com/hyle-team/progminer
 
 ## Development roadmap
