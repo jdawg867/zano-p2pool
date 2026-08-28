@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <iostream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -74,9 +75,14 @@ int main() {
         nonce,
         ProgPowZContextMode::Light);
 
-    CHECK(to_hex(result.mix_hash) ==
+    const auto mix_hex = to_hex(result.mix_hash);
+    const auto final_hex = to_hex(result.final_hash);
+    std::cerr << "ProgPoWZ vector mix=" << mix_hex << '\n';
+    std::cerr << "ProgPoWZ vector final=" << final_hex << '\n';
+
+    CHECK(mix_hex ==
           "c2e883b6876ec4cc514b9cea269f343095619faf9f2edcafb3fcf6928fa58141");
-    CHECK(to_hex(result.final_hash) ==
+    CHECK(final_hex ==
           "fa70fbf9979f80ec3db2c3f118a5e683fcf5f54ea7edc41b0b5d336508694cb8");
 
     const auto share = validate_candidate(
