@@ -1,4 +1,5 @@
 #include "zano_p2pool/progpowz.hpp"
+#include "zano_p2pool/share_validation.hpp"
 
 #include <cassert>
 #include <cstddef>
@@ -47,11 +48,13 @@ std::string to_hex(const zano_p2pool::Hash256& bytes) {
 }  // namespace
 
 int main() {
+    using zano_p2pool::CandidateClassification;
     using zano_p2pool::ProgPowZContextMode;
     using zano_p2pool::progpowz_available;
     using zano_p2pool::progpowz_epoch;
     using zano_p2pool::progpowz_hash;
     using zano_p2pool::progpowz_revision;
+    using zano_p2pool::validate_candidate;
 
     assert(progpowz_epoch(0) == 0);
     assert(progpowz_epoch(29999) == 0);
@@ -67,16 +70,54 @@ int main() {
     // practical on CI and developer machines.
     const auto header = from_hex(
         "ffeeddccbbaa9988776655443322110000112233445566778899aabbccddeeff");
+    constexpr auto nonce = UINT64_C(0x123456789abcdef0);
     const auto result = progpowz_hash(
         0,
         header,
-        UINT64_C(0x123456789abcdef0),
+        nonce,
         ProgPowZContextMode::Light);
 
     assert(to_hex(result.mix_hash) ==
            "c2e883b6876ec4cc514b9cea269f343095619faf9f2edcafb3fcf6928fa58141");
     assert(to_hex(result.final_hash) ==
            "fa70fbf9979f80ec3db2c3f118a5e683fcf5f54ea7edc41b0b5d336508694cb8");
+
+    // Difficulty 1 accepts every 256-bit hash. This vector is above the
+    // difficulty-2 target, which makes it a convenient deterministic example
+    // of a P2Pool share that is not a full network solution.
+    const auto share = validate_candidate(
+        0,
+        header,
+        nonce,
+        "1",
+        "2",
+        ProgPowZContextMode::Light);
+    assert(share.pow.final_hash == result.final_hash);
+    assert(share.meets_share_difficulty);
+    assert(!share.meets_network_difficulty);
+    assert(share.classification == CandidateClassification::Share);
+
+    const auto invalid = validate_candidate(
+        0,
+        header,
+        nonce,
+        "2",
+        "3",
+        ProgPowZContextMode::Light);
+    assert(!invalid.meets_share_difficulty);
+    assert(!invalid.meets_network_difficulty);
+    assert(invalid.classification == CandidateClassification::Invalid);
+
+    const auto block = validate_candidate(
+        0,
+        header,
+        nonce,
+        "1",
+        "1",
+        ProgPowZContextMode::Light);
+    assert(block.meets_share_difficulty);
+    assert(block.meets_network_difficulty);
+    assert(block.classification == CandidateClassification::Block);
 #else
     assert(!progpowz_available());
     assert(std::string(progpowz_revision()) == "unavailable");
