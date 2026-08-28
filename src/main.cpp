@@ -1,3 +1,5 @@
+#include "zano_p2pool/crypto_hash.hpp"
+#include "zano_p2pool/mining_header.hpp"
 #include "zano_p2pool/pow_target.hpp"
 #include "zano_p2pool/progpowz.hpp"
 #include "zano_p2pool/rpc_client.hpp"
@@ -134,6 +136,10 @@ int main(int argc, char** argv) {
             "zano-p2pool/0.1.0-dev");
         const auto target =
             zano_p2pool::difficulty_to_target(block.difficulty);
+        const auto block_blob =
+            zano_p2pool::hex_to_bytes(block.blocktemplate_blob);
+        const auto mining_work =
+            zano_p2pool::derive_mining_header_work(block_blob);
 
         std::cout << "Template status: " << block.status << '\n';
         std::cout << "Height:          " << block.height << '\n';
@@ -145,6 +151,11 @@ int main(int argc, char** argv) {
         std::cout << "Block reward:    " << block.block_reward << '\n';
         std::cout << "ProgPoWZ seed:   " << block.seed << '\n';
         std::cout << "Blob bytes:      " << block.blob_bytes() << '\n';
+        std::cout << "Regular txs:     " << mining_work.tx_hashes.hashes.size() << '\n';
+        std::cout << "Mining blob:     " << mining_work.hashing_blob.size()
+                  << " bytes\n";
+        std::cout << "Mining header:   "
+                  << zano_p2pool::hash_to_hex(mining_work.header_hash) << '\n';
 
         return 0;
     } catch (const std::exception& e) {
