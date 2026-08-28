@@ -23,6 +23,7 @@ add_library(zano_p2pool_core
     src/pow_target.cpp
     src/progpowz.cpp
     src/rpc_client.cpp
+    src/share_validation.cpp
 )
 
 target_include_directories(zano_p2pool_core
@@ -103,6 +104,10 @@ if(ZANO_P2POOL_BUILD_TESTS)
     add_executable(pow_target_test tests/pow_target_test.cpp)
     target_link_libraries(pow_target_test PRIVATE zano_p2pool_core)
     add_test(NAME pow_target_test COMMAND pow_target_test)
+
+    add_executable(share_validation_test tests/share_validation_test.cpp)
+    target_link_libraries(share_validation_test PRIVATE zano_p2pool_core)
+    add_test(NAME share_validation_test COMMAND share_validation_test)
 
     add_executable(progpowz_test tests/progpowz_test.cpp)
     target_link_libraries(progpowz_test PRIVATE zano_p2pool_core)
