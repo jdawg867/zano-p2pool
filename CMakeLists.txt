@@ -46,6 +46,12 @@ if(ZANO_P2POOL_BUILD_TESTS)
 
     add_executable(block_template_test tests/block_template_test.cpp)
     target_link_libraries(block_template_test PRIVATE zano_p2pool_core)
-
     add_test(NAME block_template_test COMMAND block_template_test)
+
+    add_executable(testnet_fixture_test tests/testnet_fixture_test.cpp)
+    target_link_libraries(testnet_fixture_test PRIVATE zano_p2pool_core)
+    target_compile_definitions(testnet_fixture_test PRIVATE
+        ZANO_P2POOL_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+    )
+    add_test(NAME testnet_fixture_test COMMAND testnet_fixture_test)
 endif()
