@@ -1,5 +1,6 @@
 #include "currency_core/currency_format_utils.h"
 #include "currency_core/currency_format_utils_blocks.h"
+#include "currency_core/currency_format_utils_transactions.h"
 #include "crypto/hash.h"
 #include "string_tools.h"
 
@@ -25,6 +26,12 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    const auto header_blob =
+        t_serializable_object_to_blob(static_cast<currency::block_header>(block));
+    const crypto::hash miner_tx_hash =
+        currency::get_transaction_hash(block.miner_tx);
+    const crypto::hash tree_root = currency::get_tx_tree_hash(block);
+
     auto hashing_blob = currency::get_block_hashing_blob(block);
     if (hashing_blob.size() < 9) {
         std::cerr << "error: hashing blob is unexpectedly short\n";
@@ -40,7 +47,18 @@ int main(int argc, char** argv) {
     const crypto::hash header_hash =
         crypto::cn_fast_hash(hashing_blob.data(), hashing_blob.size());
 
+    std::cout << "block_blob_bytes=" << block_blob.size() << '\n';
+    std::cout << "block_header_bytes=" << header_blob.size() << '\n';
+    std::cout << "block_header_hex="
+              << epee::string_tools::buff_to_hex_nodelimer(header_blob) << '\n';
+    std::cout << "miner_tx_hash="
+              << epee::string_tools::pod_to_hex(miner_tx_hash) << '\n';
+    std::cout << "tx_hashes_count=" << block.tx_hashes.size() << '\n';
+    std::cout << "tx_tree_root="
+              << epee::string_tools::pod_to_hex(tree_root) << '\n';
     std::cout << "hashing_blob_bytes=" << hashing_blob.size() << '\n';
+    std::cout << "hashing_blob_hex="
+              << epee::string_tools::buff_to_hex_nodelimer(hashing_blob) << '\n';
     std::cout << "header_hash="
               << epee::string_tools::pod_to_hex(header_hash) << '\n';
     return 0;
