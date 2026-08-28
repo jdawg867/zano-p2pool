@@ -1,8 +1,8 @@
 #include "zano_p2pool/block_template.hpp"
+#include "test_check.hpp"
 
 #include <json-c/json.h>
 
-#include <cassert>
 #include <cstdint>
 #include <fstream>
 #include <iterator>
@@ -102,17 +102,17 @@ int main() {
 
     const auto block = zano_p2pool::parse_block_template_json(parser_json);
 
-    assert(block.height == 164895ULL);
-    assert(block.difficulty == "1179735");
-    assert(block.block_reward == 1000000000000ULL);
-    assert(block.block_reward_without_fee == 1000000000000ULL);
-    assert(block.txs_fee == 0ULL);
-    assert(block.prev_hash ==
-           "db88f5755e69f8c86cf4a279e2b2998fe52d295d937ad44b593753fae695ec41");
-    assert(block.seed ==
-           "f2e59013a0a379837166b59f871b20a8a0d101d1c355ea85d35329360e69c000");
-    assert(block.blob_bytes() == 1388ULL);
-    assert(block.status == "OK");
+    CHECK(block.height == 164895ULL);
+    CHECK(block.difficulty == "1179735");
+    CHECK(block.block_reward == 1000000000000ULL);
+    CHECK(block.block_reward_without_fee == 1000000000000ULL);
+    CHECK(block.txs_fee == 0ULL);
+    CHECK(block.prev_hash ==
+          "db88f5755e69f8c86cf4a279e2b2998fe52d295d937ad44b593753fae695ec41");
+    CHECK(block.seed ==
+          "f2e59013a0a379837166b59f871b20a8a0d101d1c355ea85d35329360e69c000");
+    CHECK(block.blob_bytes() == 1388ULL);
+    CHECK(block.status == "OK");
 
     json_object_put(parser_input);
     json_object_put(fixture);

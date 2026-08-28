@@ -15,12 +15,14 @@
 
 ## Phase 2 — ProgPoWZ verification
 
-- [ ] identify canonical Zano ProgPoWZ hashing entry points/test vectors
-- [ ] integrate or clean-room-wrap ProgPoWZ verifier
-- [ ] calculate network target from Zano difficulty
-- [ ] verify nonce/result against a block template
-- [ ] distinguish share target vs. full network target
-- [ ] deterministic PoW test vectors
+- [x] identify canonical Zano ProgPoWZ hashing entry points and pin exact-Zano compatibility vectors
+- [x] integrate the exact ProgPoWZ implementation embedded in audited Zano source
+- [x] calculate network target from Zano difficulty
+- [x] derive the canonical mining header from RPC `blocktemplate_blob`
+- [x] verify nonce/result locally against a block template
+- [x] distinguish share target vs. full network target
+- [x] deterministic PoW and target-boundary tests
+- [x] live same-blob testnet equivalence against Zano's own serialization/hashing path
 
 ## Phase 3 — local share chain
 
