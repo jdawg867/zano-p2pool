@@ -72,18 +72,22 @@ When enabled, `progpowz_hash()` supports two context modes:
 
 The normal build remains available without a Zano checkout. In that configuration the ProgPoWZ API exists but reports the backend unavailable and hashing calls fail explicitly rather than silently using a different algorithm.
 
-## Compatibility vector
+## Exact-Zano compatibility vector
 
-The exact-source build tests the standard ProgPoW 0.9.2 block-0 vector:
+The compatibility test pins the output of the exact ProgPoWZ implementation embedded in the audited Zano source commit above. We intentionally use Zano's own output as the consensus reference instead of assuming that a vector copied from another ProgPoW implementation has identical parameterization or semantics.
+
+For block number `0`:
 
 ```text
 header     ffeeddccbbaa9988776655443322110000112233445566778899aabbccddeeff
 nonce      123456789abcdef0
-mix hash   c2e883b6876ec4cc514b9cea269f343095619faf9f2edcafb3fcf6928fa58141
-final hash fa70fbf9979f80ec3db2c3f118a5e683fcf5f54ea7edc41b0b5d336508694cb8
+mix hash   1476a46ba81f00a5acd854e603c79a219fcb128db00b1809718855128471eb71
+final hash 4feba8deef1ac892ee334cf258d029cc8651f037215f1767b8ce5c704a4fd68b
 ```
 
-GitHub CI also checks out only `contrib/ethereum/libethash` from the audited Zano commit above and runs this vector. This prevents an upstream change from silently changing consensus behavior in our build.
+That final hash meets Zano difficulty `3` and fails difficulty `4`, which also makes it a deterministic boundary vector for local Share / Invalid / Block classification tests.
+
+GitHub CI checks out only `contrib/ethereum/libethash` from the audited Zano commit and runs this exact vector with always-on test checks. If the pinned consensus dependency or our wrapper changes the output, CI fails explicitly even in Release builds.
 
 ## Licensing policy
 
