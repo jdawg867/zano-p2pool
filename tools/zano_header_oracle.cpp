@@ -7,6 +7,23 @@
 #include <iostream>
 #include <string>
 
+template <typename Container>
+void dump_variant_collection(const char* name, const Container& values) {
+    std::cout << name << "_count=" << values.size() << '\n';
+    std::size_t index = 0;
+    for (const auto& value : values) {
+        const auto blob = t_serializable_object_to_blob(value);
+        std::cout << name << '_' << index << "_bytes=" << blob.size() << '\n';
+        if (!blob.empty()) {
+            std::cout << name << '_' << index << "_tag="
+                      << static_cast<unsigned>(
+                             static_cast<unsigned char>(blob.front()))
+                      << '\n';
+        }
+        ++index;
+    }
+}
+
 int main(int argc, char** argv) {
     if (argc != 2) {
         std::cerr << "usage: zano_header_oracle BLOCK_TEMPLATE_HEX\n";
@@ -31,6 +48,7 @@ int main(int argc, char** argv) {
     const auto miner_prefix_blob =
         t_serializable_object_to_blob(
             static_cast<currency::transaction_prefix>(block.miner_tx));
+    const auto miner_tx_blob = currency::tx_to_blob(block.miner_tx);
     const crypto::hash miner_tx_hash =
         currency::get_transaction_hash(block.miner_tx);
     const crypto::hash tree_root = currency::get_tx_tree_hash(block);
@@ -64,6 +82,12 @@ int main(int argc, char** argv) {
     std::cout << "miner_tx_prefix_hex="
               << epee::string_tools::buff_to_hex_nodelimer(miner_prefix_blob)
               << '\n';
+    std::cout << "miner_tx_blob_bytes=" << miner_tx_blob.size() << '\n';
+    std::cout << "miner_tx_suffix_bytes="
+              << (miner_tx_blob.size() - miner_prefix_blob.size()) << '\n';
+    dump_variant_collection("miner_tx_attachment", block.miner_tx.attachment);
+    dump_variant_collection("miner_tx_signature", block.miner_tx.signatures);
+    dump_variant_collection("miner_tx_proof", block.miner_tx.proofs);
     std::cout << "miner_tx_hash="
               << epee::string_tools::pod_to_hex(miner_tx_hash) << '\n';
     std::cout << "tx_hashes_count=" << block.tx_hashes.size() << '\n';
