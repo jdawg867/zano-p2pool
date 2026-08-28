@@ -89,6 +89,9 @@ endif()
 add_executable(zano-p2pool src/main.cpp)
 target_link_libraries(zano-p2pool PRIVATE zano_p2pool_core)
 
+add_executable(zano-p2pool-header src/header_check.cpp)
+target_link_libraries(zano-p2pool-header PRIVATE zano_p2pool_core)
+
 if(ZANO_P2POOL_BUILD_TESTS)
     enable_testing()
 
