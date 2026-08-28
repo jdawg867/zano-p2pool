@@ -61,7 +61,8 @@ fi
 CXX_BIN="${LINK_ARGS[0]}"
 
 # Locate the output marker in the original link command. Everything after the
-# connectivity_tool output is Zano's already-resolved library/linker tail.
+# connectivity_tool output is Zano's library/linker tail. Some of those paths
+# are deliberately relative to the target's original CMake working directory.
 OUTPUT_INDEX=-1
 for ((i = 1; i + 1 < ${#LINK_ARGS[@]}; ++i)); do
     if [[ "${LINK_ARGS[i]}" == "-o" && "${LINK_ARGS[i + 1]}" == *"connectivity_tool" ]]; then
@@ -78,6 +79,12 @@ fi
 
 LINK_TAIL=("${LINK_ARGS[@]:OUTPUT_INDEX+2}")
 
+# link.txt lives at:
+#   <target-workdir>/CMakeFiles/connectivity_tool.dir/link.txt
+# CMake executes the command from <target-workdir>. Replaying it elsewhere
+# breaks relative paths such as libcurrency_core.a and ../contrib/... .
+LINK_WORKDIR="$(dirname "$(dirname "$(dirname "$LINK_FILE")")")"
+
 SRC="$P2POOL_SOURCE/tools/zano_header_oracle.cpp"
 OBJ="$OUT_DIR/zano_header_oracle.o"
 BIN="$OUT_DIR/zano-header-oracle"
@@ -86,6 +93,9 @@ BIN="$OUT_DIR/zano-header-oracle"
     -I"$ZANO_SOURCE/src" \
     -c "$SRC" -o "$OBJ"
 
-"$CXX_BIN" "$OBJ" -o "$BIN" "${LINK_TAIL[@]}"
+(
+    cd "$LINK_WORKDIR"
+    "$CXX_BIN" "$OBJ" -o "$BIN" "${LINK_TAIL[@]}"
+)
 
 printf 'Built: %s\n' "$BIN"
