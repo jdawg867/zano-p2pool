@@ -1,3 +1,4 @@
+#include "zano_p2pool/pow_target.hpp"
 #include "zano_p2pool/rpc_client.hpp"
 
 #include <cstdlib>
@@ -125,11 +126,14 @@ int main(int argc, char** argv) {
         const auto block = rpc.get_block_template(
             options.wallet,
             "zano-p2pool/0.1.0-dev");
+        const auto target =
+            zano_p2pool::difficulty_to_target(block.difficulty);
 
         std::cout << "Template status: " << block.status << '\n';
         std::cout << "Height:          " << block.height << '\n';
         std::cout << "Previous hash:   " << block.prev_hash << '\n';
         std::cout << "Difficulty:      " << block.difficulty << '\n';
+        std::cout << "Target:          " << target.hex() << '\n';
         std::cout << "Block reward:    " << block.block_reward << '\n';
         std::cout << "ProgPoWZ seed:   " << block.seed << '\n';
         std::cout << "Blob bytes:      " << block.blob_bytes() << '\n';
