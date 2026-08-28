@@ -35,6 +35,10 @@
 - [x] share-chain structural tests
 - [ ] gate share-chain admission on local ProgPoWZ verification
 
+Checkpoint 2 is structurally complete and CI-green. Until the next checkpoint lands,
+`ShareChain::add_share()` is deliberately documented as a structural admission path;
+unverified claimed share difficulty must not yet be treated as production-safe work.
+
 ## Phase 4 — Stratum
 
 - [ ] Stratum TCP listener
