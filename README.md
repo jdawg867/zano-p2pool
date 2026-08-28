@@ -32,13 +32,19 @@ Milestone 0.1 was validated against live Zano testnet and merged to `main`.
 
 ## Milestone 0.2
 
-Current work adds the consensus-critical PoW validation layer:
+The second milestone implements the consensus-critical local PoW verification layer:
 
 - parse Zano's decimal `uint128` difficulty;
 - compute the full 256-bit target as `floor((2^256 - 1) / difficulty)`;
 - compare 32-byte hashes using Zano-compatible byte ordering;
-- add exact boundary tests, including a target vector from live testnet;
-- next: integrate the canonical ProgPoWZ hashing path.
+- derive Zano's canonical mining header directly from RPC `blocktemplate_blob`;
+- implement CryptoNote fast hash and transaction tree hashing needed by the mining blob;
+- wrap the exact ProgPoWZ implementation embedded in audited Zano source;
+- distinguish P2Pool share difficulty from full network difficulty;
+- classify local candidates as `Invalid`, `Share`, or `Block` without submitting them;
+- validate the standalone header derivation byte-for-byte against Zano on live testnet.
+
+Milestone 0.2 is complete on `feature/progpowz-verification` and is being merged through PR #4.
 
 ## Requirements
 
@@ -91,20 +97,26 @@ You can also select mainnet explicitly:
 
 or override the RPC endpoint directly with `--rpc-url`.
 
-Expected output:
+Expected output now includes the independently derived mining header:
 
 ```text
 zano-p2pool v0.1.0-dev
 Network: testnet
 RPC: http://127.0.0.1:12111/json_rpc
+ProgPoWZ backend: ...
 
 Template status: OK
 Height:          ...
+ProgPoWZ epoch:  ...
 Previous hash:   ...
 Difficulty:      ...
+Target:          ...
 Block reward:    ...
 ProgPoWZ seed:   ...
 Blob bytes:      ...
+Regular txs:     ...
+Mining blob:     ... bytes
+Mining header:   ...
 ```
 
 ## Current Zano network defaults
