@@ -39,14 +39,16 @@ int main() {
     using zano_p2pool::candidate_classification_name;
     using zano_p2pool::classify_pow_hash;
 
-    const auto official_pow = from_hex(
-        "fa70fbf9979f80ec3db2c3f118a5e683fcf5f54ea7edc41b0b5d336508694cb8");
+    // Final hash from the deterministic exact-Zano ProgPoWZ vector pinned by
+    // progpowz_test. Numerically it meets difficulty 3 but not difficulty 4.
+    const auto zano_pow = from_hex(
+        "4feba8deef1ac892ee334cf258d029cc8651f037215f1767b8ce5c704a4fd68b");
 
-    CHECK(classify_pow_hash(official_pow, "1", "2") ==
+    CHECK(classify_pow_hash(zano_pow, "3", "4") ==
           CandidateClassification::Share);
-    CHECK(classify_pow_hash(official_pow, "2", "3") ==
+    CHECK(classify_pow_hash(zano_pow, "4", "5") ==
           CandidateClassification::Invalid);
-    CHECK(classify_pow_hash(official_pow, "1", "1") ==
+    CHECK(classify_pow_hash(zano_pow, "3", "3") ==
           CandidateClassification::Block);
 
     zano_p2pool::Hash256 zero_hash{};
