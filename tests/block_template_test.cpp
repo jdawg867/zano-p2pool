@@ -1,6 +1,6 @@
 #include "zano_p2pool/block_template.hpp"
+#include "test_check.hpp"
 
-#include <cassert>
 #include <iostream>
 #include <string_view>
 
@@ -19,13 +19,13 @@ int main() {
 
     const auto block = zano_p2pool::parse_block_template_json(sample);
 
-    assert(block.height == 2555002ULL);
-    assert(block.difficulty == "12936195379842");
-    assert(block.block_reward == 1000000000000ULL);
-    assert(block.blob_bytes() == 4);
-    assert(block.prev_hash.size() == 64);
-    assert(block.seed.size() == 64);
-    assert(block.status == "OK");
+    CHECK(block.height == 2555002ULL);
+    CHECK(block.difficulty == "12936195379842");
+    CHECK(block.block_reward == 1000000000000ULL);
+    CHECK(block.blob_bytes() == 4);
+    CHECK(block.prev_hash.size() == 64);
+    CHECK(block.seed.size() == 64);
+    CHECK(block.status == "OK");
 
     std::cout << "block_template_test: PASS\n";
     return 0;
