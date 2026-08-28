@@ -25,7 +25,8 @@ The first milestone intentionally covers only Zano daemon integration:
 - parse the live PoW template;
 - expose height, previous hash, difficulty, reward, seed, and blob;
 - provide a `submitblock` RPC method;
-- unit-test block-template parsing.
+- unit-test block-template parsing;
+- validate against Zano testnet first.
 
 ## Requirements
 
@@ -41,7 +42,6 @@ sudo apt install -y \
   pkg-config
 ```
 
-
 ## Build
 
 ```bash
@@ -54,17 +54,36 @@ ctest --test-dir build --output-on-failure
 
 `getblocktemplate` needs a Zano payout address.
 
+Testnet is the development default:
+
 ```bash
 ./build/zano-p2pool \
-  --rpc-url http://127.0.0.1:11211/json_rpc \
+  --network testnet \
+  --wallet YOUR_TESTNET_ZANO_ADDRESS
+```
+
+This resolves to:
+
+```text
+http://127.0.0.1:12111/json_rpc
+```
+
+You can also select mainnet explicitly:
+
+```bash
+./build/zano-p2pool \
+  --network mainnet \
   --wallet YOUR_ZANO_ADDRESS
 ```
+
+or override the RPC endpoint directly with `--rpc-url`.
 
 Expected output:
 
 ```text
 zano-p2pool v0.1.0-dev
-RPC: http://127.0.0.1:11211/json_rpc
+Network: testnet
+RPC: http://127.0.0.1:12111/json_rpc
 
 Template status: OK
 Height:          ...
@@ -74,6 +93,17 @@ Block reward:    ...
 ProgPoWZ seed:   ...
 Blob bytes:      ...
 ```
+
+## Current Zano network defaults
+
+From the current Zano source:
+
+| Network | Daemon RPC | Zano P2P | Zano Stratum |
+|---|---:|---:|---:|
+| mainnet | 11211 | 11121 | 11777 |
+| testnet | 12111 | 11314 | 11888 |
+
+Zano testnet itself is a testnet build (`cmake -D TESTNET=TRUE ..`).
 
 ## Current Zano RPC references
 

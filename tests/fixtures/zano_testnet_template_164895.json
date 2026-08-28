@@ -1,0 +1,12 @@
+{
+  "_fixture_note": "Sanitized metadata captured from a live Zano testnet getblocktemplate response; the wallet-linked block blob is intentionally omitted.",
+  "height": 164895,
+  "difficulty": "1179735",
+  "block_reward": 1000000000000,
+  "block_reward_without_fee": 1000000000000,
+  "txs_fee": 0,
+  "prev_hash": "db88f5755e69f8c86cf4a279e2b2998fe52d295d937ad44b593753fae695ec41",
+  "seed": "f2e59013a0a379837166b59f871b20a8a0d101d1c355ea85d35329360e69c000",
+  "blob_bytes": 1388,
+  "status": "OK"
+}
