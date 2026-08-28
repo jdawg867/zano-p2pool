@@ -18,33 +18,42 @@ Build a native Zano P2Pool network where:
 
 ## Milestone 0.1
 
-The first milestone covers Zano daemon integration:
+The first milestone established Zano daemon integration:
 
 - connect to `zanod` JSON-RPC;
 - call `getblocktemplate`;
 - parse the live PoW template;
 - expose height, previous hash, difficulty, reward, seed, and blob;
 - provide a `submitblock` RPC method;
-- unit-test block-template parsing;
 - validate against Zano testnet first.
 
 Milestone 0.1 was validated against live Zano testnet and merged to `main`.
 
 ## Milestone 0.2
 
-The second milestone implements the consensus-critical local PoW verification layer:
+The second milestone established the consensus-critical local PoW path:
 
-- parse Zano's decimal `uint128` difficulty;
-- compute the full 256-bit target as `floor((2^256 - 1) / difficulty)`;
-- compare 32-byte hashes using Zano-compatible byte ordering;
-- derive Zano's canonical mining header directly from RPC `blocktemplate_blob`;
-- implement CryptoNote fast hash and transaction tree hashing needed by the mining blob;
-- wrap the exact ProgPoWZ implementation embedded in audited Zano source;
-- distinguish P2Pool share difficulty from full network difficulty;
-- classify local candidates as `Invalid`, `Share`, or `Block` without submitting them;
-- validate the standalone header derivation byte-for-byte against Zano on live testnet.
+- Zano-compatible uint128 difficulty and 256-bit target handling;
+- exact Zano ProgPoWZ backend integration;
+- canonical mining-header derivation from RPC `blocktemplate_blob`;
+- local share-vs-network difficulty classification;
+- deterministic exact-Zano compatibility vectors;
+- always-on consensus test checks in Release builds.
 
-Milestone 0.2 is complete on `feature/progpowz-verification` and is being merged through PR #4.
+Milestone 0.2 was validated against live Zano testnet and merged to `main`.
+
+## Milestone 0.3
+
+Current work builds the local P2Pool share chain:
+
+- versioned canonical share serialization and deterministic share IDs;
+- parent linkage with zero-parent roots;
+- fixed-width share/network difficulty commitments;
+- checked 256-bit cumulative share work;
+- orphan retention and deterministic promotion;
+- stale-fork tracking and cumulative-work reorgs;
+- deterministic best-tip tie breaking;
+- next: timestamp rules and mandatory local ProgPoWZ verification before a share can contribute work.
 
 ## Requirements
 
@@ -97,28 +106,6 @@ You can also select mainnet explicitly:
 
 or override the RPC endpoint directly with `--rpc-url`.
 
-Expected output now includes the independently derived mining header:
-
-```text
-zano-p2pool v0.1.0-dev
-Network: testnet
-RPC: http://127.0.0.1:12111/json_rpc
-ProgPoWZ backend: ...
-
-Template status: OK
-Height:          ...
-ProgPoWZ epoch:  ...
-Previous hash:   ...
-Difficulty:      ...
-Target:          ...
-Block reward:    ...
-ProgPoWZ seed:   ...
-Blob bytes:      ...
-Regular txs:     ...
-Mining blob:     ... bytes
-Mining header:   ...
-```
-
 ## Current Zano network defaults
 
 From the current Zano source:
@@ -146,5 +133,6 @@ See [`docs/roadmap.md`](docs/roadmap.md).
 ## Safety
 
 This repository is experimental consensus/mining software. Until share validation,
-difficulty calculations, block serialization, and payout rules have extensive test
-coverage, it should only be used for development and controlled testing.
+difficulty calculations, block serialization, share-chain consensus, and payout rules
+have extensive test coverage, it should only be used for development and controlled
+testing.
