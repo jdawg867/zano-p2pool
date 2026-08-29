@@ -97,17 +97,30 @@ void BlockCandidateSubmitter::remember_template(
     }
 }
 
-bool BlockCandidateSubmitter::enqueue(
+BlockCandidateQueueStatus BlockCandidateSubmitter::enqueue(
     const BlockCandidate& candidate) noexcept {
     {
         std::lock_guard lock(mutex_);
-        if (!running_ || stop_requested_ || queue_.size() >= max_queue_) {
-            return false;
+        if (!running_ || stop_requested_) {
+            return BlockCandidateQueueStatus::Stopped;
         }
-        queue_.push_back(candidate);
+
+        const auto template_it = templates_.find(candidate.mining_header_hash);
+        if (template_it == templates_.end()) {
+            return BlockCandidateQueueStatus::StaleTemplate;
+        }
+
+        if (queue_.size() >= max_queue_) {
+            return BlockCandidateQueueStatus::QueueFull;
+        }
+
+        queue_.push_back(QueuedCandidate{
+            candidate,
+            template_it->second,
+        });
     }
     cv_.notify_one();
-    return true;
+    return BlockCandidateQueueStatus::Queued;
 }
 
 bool BlockCandidateSubmitter::running() const noexcept {
@@ -127,59 +140,49 @@ std::size_t BlockCandidateSubmitter::template_count() const noexcept {
 
 void BlockCandidateSubmitter::worker_loop() noexcept {
     while (true) {
-        BlockCandidate candidate;
-        std::string block_blob;
+        QueuedCandidate queued;
         {
             std::unique_lock lock(mutex_);
             cv_.wait(lock, [&] { return stop_requested_ || !queue_.empty(); });
             if (stop_requested_) {
                 break;
             }
-            candidate = queue_.front();
+            queued = std::move(queue_.front());
             queue_.pop_front();
-
-            const auto it = templates_.find(candidate.mining_header_hash);
-            if (it != templates_.end()) {
-                block_blob = it->second;
-            }
-        }
-
-        if (block_blob.empty()) {
-            emit(BlockSubmitEvent{
-                BlockSubmitStatus::TemplateMissing,
-                candidate,
-                "exact block template is no longer cached",
-            });
-            continue;
         }
 
         try {
-            submit_(block_blob_with_nonce(block_blob, candidate.nonce));
+            submit_(block_blob_with_nonce(
+                queued.block_blob_hex,
+                queued.candidate.nonce));
 
             {
                 std::lock_guard lock(mutex_);
-                std::erase_if(queue_, [&](const BlockCandidate& queued) {
-                    return queued.mining_header_hash == candidate.mining_header_hash;
+                std::erase_if(queue_, [&](const QueuedCandidate& sibling) {
+                    return sibling.candidate.mining_header_hash ==
+                           queued.candidate.mining_header_hash;
                 });
-                templates_.erase(candidate.mining_header_hash);
-                std::erase(template_order_, candidate.mining_header_hash);
+                templates_.erase(queued.candidate.mining_header_hash);
+                std::erase(
+                    template_order_,
+                    queued.candidate.mining_header_hash);
             }
 
             emit(BlockSubmitEvent{
                 BlockSubmitStatus::Submitted,
-                candidate,
+                queued.candidate,
                 {},
             });
         } catch (const std::exception& e) {
             emit(BlockSubmitEvent{
                 BlockSubmitStatus::SubmissionFailed,
-                candidate,
+                queued.candidate,
                 e.what(),
             });
         } catch (...) {
             emit(BlockSubmitEvent{
                 BlockSubmitStatus::SubmissionFailed,
-                candidate,
+                queued.candidate,
                 "unknown block submission failure",
             });
         }
@@ -200,12 +203,25 @@ const char* block_submit_status_name(BlockSubmitStatus status) noexcept {
     switch (status) {
     case BlockSubmitStatus::Submitted:
         return "submitted";
-    case BlockSubmitStatus::TemplateMissing:
-        return "template-missing";
     case BlockSubmitStatus::SubmissionFailed:
         return "submission-failed";
     }
     return "submission-failed";
+}
+
+const char* block_candidate_queue_status_name(
+    BlockCandidateQueueStatus status) noexcept {
+    switch (status) {
+    case BlockCandidateQueueStatus::Queued:
+        return "queued";
+    case BlockCandidateQueueStatus::StaleTemplate:
+        return "stale-template";
+    case BlockCandidateQueueStatus::QueueFull:
+        return "queue-full";
+    case BlockCandidateQueueStatus::Stopped:
+        return "stopped";
+    }
+    return "stopped";
 }
 
 }  // namespace zano_p2pool
