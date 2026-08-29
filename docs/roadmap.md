@@ -30,27 +30,35 @@
 - [x] share timestamp rules
 - [x] cumulative work
 - [x] stale/orphan handling
+- [ ] local persistence
 - [x] deterministic best-tip/reorg rules
 - [x] share-chain structural tests
-- [x] gate production share-chain admission on local ProgPoWZ verification
-- [x] bind verified admission to locally trusted Zano work context
-- [x] record full-network block-candidate status on verified shares
-- [ ] local persistence/recovery follow-up
+- [x] gate share-chain admission on local ProgPoWZ verification
 
-Milestone 0.3 local consensus scope is complete: canonical shares, cumulative-work fork
-choice, orphan/stale handling, timestamp policy, trusted-template binding, and exact
-ProgPoWZ admission are covered by deterministic Release tests. Persistence remains a
-separate follow-up after in-memory consensus behavior is stable.
+Milestone 0.3 is complete and merged to `main`. Production-facing
+`ShareChain::submit_share()` binds locally trusted Zano work context and performs
+exact ProgPoWZ verification before claimed share difficulty contributes chain work.
 
 ## Phase 4 — Stratum
 
+- [x] Zano-compatible JSON-RPC request/response codec
+- [x] deterministic worker/session state
+- [x] versioned local work registry
+- [x] per-session difficulty and target generation
+- [x] current/stale/unknown work-header classification
+- [ ] route `eth_submitWork` into share-chain admission
+- [ ] duplicate nonce/share rejection
+- [ ] distinguish accepted share vs. full-network block candidate
 - [ ] Stratum TCP listener
-- [ ] miner login / wallet parsing
-- [ ] job generation
-- [ ] per-miner difficulty
-- [ ] share submission
-- [ ] duplicate/stale share detection
+- [ ] bind to loopback by default with configurable port
+- [ ] local socket integration test
 - [ ] test with ProgPoWZ-capable miners
+
+Checkpoint 2 is CI-green. Session IDs and work-template versions are monotonic and
+deterministic; unchanged template publication is idempotent. Per-session share
+difficulty is clamped to configured policy and capped at current network difficulty,
+and a prior header becomes stale only after replacement work is actually issued to
+that session.
 
 ## Phase 5 — P2P network
 
