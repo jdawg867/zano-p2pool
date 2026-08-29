@@ -15,12 +15,20 @@ struct ParsedBlockHeader {
     std::vector<std::uint8_t> serialized;
 };
 
+struct ParsedZarcanumOutput {
+    Hash256 stealth_address{};
+    Hash256 concealing_point{};
+    Hash256 amount_commitment{};
+    Hash256 blinded_asset_id{};
+};
+
 struct ParsedMinerTxPrefix {
     std::uint64_t version{};
     std::uint8_t hardfork_id{};
     std::size_t vin_count{};
     std::size_t extra_count{};
     std::size_t vout_count{};
+    std::vector<ParsedZarcanumOutput> outputs;
     std::size_t serialized_size{};
     std::vector<std::uint8_t> serialized;
     Hash256 hash{};
@@ -50,7 +58,8 @@ struct MiningHeaderWork {
 // Parses the current HF6 PoW coinbase transaction prefix. The input must begin
 // at the miner transaction (immediately after the serialized block header).
 // This deliberately stops at transaction_prefix; signatures/proofs are outside
-// the miner transaction hash used by get_tx_tree_hash().
+// the miner transaction hash used by get_tx_tree_hash(). Current Zarcanum
+// output commitment fields are retained for local payout validation.
 [[nodiscard]] ParsedMinerTxPrefix parse_hf6_miner_tx_prefix(
     std::span<const std::uint8_t> miner_tx_blob);
 
