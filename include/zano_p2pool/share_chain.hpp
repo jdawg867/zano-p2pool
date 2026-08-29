@@ -1,9 +1,11 @@
 #pragma once
 
 #include "zano_p2pool/share.hpp"
+#include "zano_p2pool/share_validation.hpp"
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <map>
 #include <optional>
 #include <string>
@@ -13,12 +15,24 @@ namespace zano_p2pool {
 
 using ChainWork = std::array<std::uint8_t, 32>;
 
+inline constexpr std::uint64_t kShareMaxFutureSeconds = 60;
+inline constexpr std::uint64_t kShareMaxParentBackstepSeconds = 60;
+
 [[nodiscard]] ChainWork share_work(const Difficulty128& difficulty);
 [[nodiscard]] std::string chain_work_hex(const ChainWork& work);
 [[nodiscard]] bool add_chain_work_checked(
     const ChainWork& left,
     const ChainWork& right,
     ChainWork& result) noexcept;
+
+// Locally trusted Zano work context. Production admission requires the share's
+// committed mining fields to match this context before its ProgPoWZ result can
+// contribute sidechain work.
+struct ShareWorkContext {
+    std::uint64_t zano_height{0};
+    Hash256 mining_header_hash{};
+    Difficulty128 network_difficulty{};
+};
 
 enum class ShareDisposition {
     Connected,
@@ -34,6 +48,13 @@ enum class ShareRejectReason {
     InvalidRootHeight,
     InvalidNonRootHeight,
     ParentHeightMismatch,
+    TimestampTooFarFuture,
+    TimestampBeforeParentTolerance,
+    ZanoHeightMismatch,
+    MiningHeaderMismatch,
+    NetworkDifficultyMismatch,
+    PowBackendUnavailable,
+    InvalidPow,
     CumulativeWorkOverflow,
 };
 
@@ -49,15 +70,23 @@ struct ConnectedShare {
     Share share{};
     ShareId id{};
     ChainWork cumulative_work{};
+    std::optional<CandidateValidation> pow_validation;
 };
 
-// In-memory structural share-chain core. At this checkpoint add_share() enforces
-// canonical identity, parent/height rules, duplicate/orphan handling and checked
-// cumulative work. The next Milestone 0.3 checkpoint adds mandatory ProgPoWZ
-// admission so unverified claimed difficulty cannot contribute chain work.
+// In-memory share-chain core. submit_share() is the production-facing admission
+// path: it enforces trusted Zano work context, timestamp policy and exact local
+// ProgPoWZ verification before claimed difficulty can contribute chain work.
+// add_share_unchecked() exists only for deterministic structural tests/internal
+// construction and MUST NOT be used for untrusted miner or peer shares.
 class ShareChain {
 public:
-    [[nodiscard]] AddShareResult add_share(const Share& share);
+    [[nodiscard]] AddShareResult submit_share(
+        const Share& share,
+        const ShareWorkContext& trusted_context,
+        std::uint64_t now,
+        ProgPowZContextMode mode = ProgPowZContextMode::Light);
+
+    [[nodiscard]] AddShareResult add_share_unchecked(const Share& share);
 
     [[nodiscard]] const ConnectedShare* find(const ShareId& id) const noexcept;
     [[nodiscard]] const ConnectedShare* best_tip() const noexcept;
@@ -74,6 +103,7 @@ private:
     struct OrphanShare {
         Share share{};
         ShareId id{};
+        std::optional<CandidateValidation> pow_validation;
     };
 
     [[nodiscard]] bool better_tip(
@@ -81,14 +111,27 @@ private:
         const ConnectedShare& current) const noexcept;
     [[nodiscard]] ShareRejectReason structural_reject_reason(
         const Share& share) const noexcept;
+    [[nodiscard]] ShareRejectReason trusted_context_reject_reason(
+        const Share& share,
+        const ShareWorkContext& trusted_context) const noexcept;
+    [[nodiscard]] ShareRejectReason absolute_timestamp_reject_reason(
+        const Share& share,
+        std::uint64_t now) const noexcept;
+    [[nodiscard]] ShareRejectReason parent_timestamp_reject_reason(
+        const Share& share,
+        const Share& parent) const noexcept;
     [[nodiscard]] ShareRejectReason connect_share(
         const Share& share,
         const ShareId& id,
+        std::optional<CandidateValidation> pow_validation,
         bool& best_tip_changed);
     void promote_children(
         const ShareId& parent_id,
         std::size_t& promoted_orphans,
         bool& best_tip_changed);
+    [[nodiscard]] AddShareResult add_prevalidated_share(
+        const Share& share,
+        std::optional<CandidateValidation> pow_validation);
 
     std::map<ShareId, ConnectedShare> connected_;
     std::map<ShareId, OrphanShare> orphans_;
