@@ -3,6 +3,7 @@
 #include "zano_p2pool/crypto_hash.hpp"
 #include "zano_p2pool/p2p_miner_tx_proofs.hpp"
 #include "zano_p2pool/p2p_mining_context.hpp"
+#include "zano_p2pool/p2p_share.hpp"
 #include "zano_p2pool/zano_curve.hpp"
 
 #include <algorithm>
