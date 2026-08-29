@@ -83,6 +83,8 @@ payload length), enforce a 64 KiB payload cap, and fail closed on malformed,
 truncated, trailing, unsupported-version/type/flag data. The handshake carries
 network, non-zero public 32-byte node ID, capability bits, advertised listen port,
 and a best-share sync hint. Best-share hints are not trusted consensus data.
+Normal and exact-Zano CI are green on the checkpoint code head; `p2p_protocol_test`
+brings the suite to 14 tests.
 
 ## Phase 6 — PPLNS and payouts
 
