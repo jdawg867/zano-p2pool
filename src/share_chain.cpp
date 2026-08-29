@@ -3,8 +3,8 @@
 #include "zano_p2pool/progpowz.hpp"
 
 #include <algorithm>
-#include <limits>
 #include <stdexcept>
+#include <utility>
 
 namespace zano_p2pool {
 
@@ -53,6 +53,9 @@ ShareRejectReason ShareChain::structural_reject_reason(
     }
     if (difficulty128_is_zero(share.network_difficulty)) {
         return ShareRejectReason::ZeroNetworkDifficulty;
+    }
+    if (share.share_difficulty > share.network_difficulty) {
+        return ShareRejectReason::ShareDifficultyAboveNetwork;
     }
 
     if (is_zero_share_id(share.parent_id)) {
@@ -298,6 +301,13 @@ AddShareResult ShareChain::submit_share(
     if (!is_zero_share_id(share.parent_id)) {
         const auto parent_it = connected_.find(share.parent_id);
         if (parent_it != connected_.end()) {
+            if (parent_it->second.share.share_height == UINT64_MAX ||
+                share.share_height != parent_it->second.share.share_height + 1) {
+                rejected.reject_reason = ShareRejectReason::ParentHeightMismatch;
+                rejected.disposition = ShareDisposition::Rejected;
+                return rejected;
+            }
+
             rejected.reject_reason =
                 parent_timestamp_reject_reason(share, parent_it->second.share);
             if (rejected.reject_reason != ShareRejectReason::None) {
@@ -399,6 +409,8 @@ const char* share_reject_reason_name(ShareRejectReason reason) noexcept {
         return "zero-share-difficulty";
     case ShareRejectReason::ZeroNetworkDifficulty:
         return "zero-network-difficulty";
+    case ShareRejectReason::ShareDifficultyAboveNetwork:
+        return "share-difficulty-above-network";
     case ShareRejectReason::InvalidRootHeight:
         return "invalid-root-height";
     case ShareRejectReason::InvalidNonRootHeight:
