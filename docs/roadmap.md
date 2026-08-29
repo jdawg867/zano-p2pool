@@ -27,17 +27,20 @@
 
 - [x] define versioned share serialization
 - [x] share IDs and parent linkage
-- [ ] share timestamp rules
+- [x] share timestamp rules
 - [x] cumulative work
 - [x] stale/orphan handling
-- [ ] local persistence
 - [x] deterministic best-tip/reorg rules
 - [x] share-chain structural tests
-- [ ] gate share-chain admission on local ProgPoWZ verification
+- [x] gate production share-chain admission on local ProgPoWZ verification
+- [x] bind verified admission to locally trusted Zano work context
+- [x] record full-network block-candidate status on verified shares
+- [ ] local persistence/recovery follow-up
 
-Checkpoint 2 is structurally complete and CI-green. Until the next checkpoint lands,
-`ShareChain::add_share()` is deliberately documented as a structural admission path;
-unverified claimed share difficulty must not yet be treated as production-safe work.
+Milestone 0.3 local consensus scope is complete: canonical shares, cumulative-work fork
+choice, orphan/stale handling, timestamp policy, trusted-template binding, and exact
+ProgPoWZ admission are covered by deterministic Release tests. Persistence remains a
+separate follow-up after in-memory consensus behavior is stable.
 
 ## Phase 4 — Stratum
 
