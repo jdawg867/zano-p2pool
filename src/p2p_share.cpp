@@ -21,7 +21,8 @@ Share parse_p2p_share_announce_envelope(const P2pEnvelope& envelope) {
     if (envelope.flags != 0) {
         throw std::runtime_error("unsupported P2P envelope flags");
     }
-    if (envelope.payload.size() != kShareV1SerializedSize) {
+    if (envelope.payload.size() != kShareV1SerializedSize &&
+        envelope.payload.size() != kShareV2SerializedSize) {
         throw std::runtime_error("invalid P2P share announcement payload size");
     }
     return deserialize_share(envelope.payload);
@@ -87,8 +88,6 @@ P2pShareReceiveResult P2pShareReceiver::receive_share(
         return result;
     }
 
-    // Suppress already connected/orphaned shares before trusted-context lookup
-    // or expensive ProgPoWZ verification.
     if (chain_.contains(result.chain_result.id) ||
         chain_.is_orphan(result.chain_result.id)) {
         result.status = P2pShareReceiveStatus::Duplicate;
