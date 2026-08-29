@@ -466,8 +466,7 @@ int main(int argc, char** argv) {
             handshake.best_share_id = tip.share_id;
             handshake.best_share_height = tip.share_height;
 
-            zano_p2pool::P2pRuntime* runtime_ptr = nullptr;
-            auto runtime = std::make_unique<zano_p2pool::P2pRuntime>(
+            p2p_runtime = std::make_unique<zano_p2pool::P2pRuntime>(
                 zano_p2pool::P2pRuntimeConfig{
                     zano_p2pool::P2pEndpoint{
                         options.p2p_bind,
@@ -477,12 +476,12 @@ int main(int argc, char** argv) {
                 },
                 [&](const zano_p2pool::P2pHandshake& peer,
                     const zano_p2pool::P2pEnvelope& envelope) {
-                    if (runtime_ptr == nullptr) {
+                    if (!p2p_runtime) {
                         return;
                     }
                     try {
                         const auto result = p2p_protocol.handle(
-                            *runtime_ptr,
+                            *p2p_runtime,
                             peer,
                             envelope,
                             unix_time_seconds(),
@@ -497,8 +496,6 @@ int main(int argc, char** argv) {
                         std::cerr << "P2P message rejected: " << e.what() << '\n';
                     }
                 });
-            runtime_ptr = runtime.get();
-            p2p_runtime = std::move(runtime);
             p2p_runtime->start();
 
             std::cout << "\nP2P listening: "
