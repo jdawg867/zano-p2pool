@@ -33,6 +33,7 @@ add_library(zano_p2pool_core
     src/stratum_server.cpp
     src/stratum_session.cpp
     src/stratum_submission.cpp
+    src/template_refresh.cpp
 )
 
 target_include_directories(zano_p2pool_core
@@ -150,4 +151,8 @@ if(ZANO_P2POOL_BUILD_TESTS)
     add_executable(stratum_server_test tests/stratum_server_test.cpp)
     target_link_libraries(stratum_server_test PRIVATE zano_p2pool_core)
     add_test(NAME stratum_server_test COMMAND stratum_server_test)
+
+    add_executable(template_refresh_test tests/template_refresh_test.cpp)
+    target_link_libraries(template_refresh_test PRIVATE zano_p2pool_core)
+    add_test(NAME template_refresh_test COMMAND template_refresh_test)
 endif()
