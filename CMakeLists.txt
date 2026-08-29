@@ -30,6 +30,7 @@ add_library(zano_p2pool_core
     src/share_validation.cpp
     src/stratum_protocol.cpp
     src/stratum_session.cpp
+    src/stratum_submission.cpp
 )
 
 target_include_directories(zano_p2pool_core
@@ -73,8 +74,6 @@ if(ZANO_P2POOL_ZANO_SOURCE_DIR)
         EXCLUDE_FROM_ALL
     )
 
-    # Zano's libethash CMake target relies on include paths supplied by the
-    # parent Zano build. Supply the same root explicitly when embedded here.
     target_include_directories(ethash PUBLIC "${_zano_libethash_dir}")
     target_link_libraries(ethash PUBLIC Threads::Threads)
 
@@ -141,4 +140,8 @@ if(ZANO_P2POOL_BUILD_TESTS)
     add_executable(stratum_session_test tests/stratum_session_test.cpp)
     target_link_libraries(stratum_session_test PRIVATE zano_p2pool_core)
     add_test(NAME stratum_session_test COMMAND stratum_session_test)
+
+    add_executable(stratum_submission_test tests/stratum_submission_test.cpp)
+    target_link_libraries(stratum_submission_test PRIVATE zano_p2pool_core)
+    add_test(NAME stratum_submission_test COMMAND stratum_submission_test)
 endif()
