@@ -39,7 +39,7 @@ jobs:
       - name: Checkout zano-p2pool
         uses: actions/checkout@v4
 
-      - name: Checkout audited Zano libethash
+      - name: Checkout audited Zano consensus sources
         uses: actions/checkout@v4
         with:
           repository: hyle-team/zano
@@ -47,6 +47,9 @@ jobs:
           path: zano-src
           sparse-checkout: |
             contrib/ethereum/libethash
+            src/crypto
+            src/common
+            src/warnings.h
           sparse-checkout-cone-mode: false
 
       - name: Install dependencies
@@ -60,14 +63,14 @@ jobs:
             libjson-c-dev \
             pkg-config
 
-      - name: Configure with exact Zano ProgPoWZ
+      - name: Configure with exact Zano consensus backends
         run: |
           cmake -S . -B build-zano \
             -DCMAKE_BUILD_TYPE=Release \
             -DZANO_P2POOL_ZANO_SOURCE_DIR="$GITHUB_WORKSPACE/zano-src"
 
-      - name: Build with exact Zano ProgPoWZ
+      - name: Build with exact Zano consensus backends
         run: cmake --build build-zano -j2
 
-      - name: Test ProgPoWZ compatibility
+      - name: Test exact Zano compatibility
         run: ctest --test-dir build-zano --output-on-failure
