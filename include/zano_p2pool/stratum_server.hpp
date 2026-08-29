@@ -7,6 +7,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <set>
 #include <string>
@@ -29,7 +30,13 @@ struct StratumServerConfig {
 // handled concurrently, keeping consensus-facing mutations deterministic.
 class StratumTcpServer {
 public:
-    explicit StratumTcpServer(StratumServerConfig config = {});
+    // When shared_chain is null the server preserves the standalone behavior
+    // and owns an internal chain. A full P2Pool node supplies its node-wide
+    // ShareChain here so Stratum and P2P operate on exactly the same verified
+    // consensus state.
+    explicit StratumTcpServer(
+        StratumServerConfig config = {},
+        ShareChain* shared_chain = nullptr);
     ~StratumTcpServer();
 
     StratumTcpServer(const StratumTcpServer&) = delete;
@@ -72,7 +79,8 @@ private:
     StratumServerConfig config_{};
     mutable std::mutex state_mutex_;
     StratumSessionRegistry sessions_;
-    ShareChain share_chain_;
+    std::unique_ptr<ShareChain> owned_share_chain_;
+    ShareChain* share_chain_{nullptr};
     StratumSubmissionRouter submissions_;
 
     std::atomic<bool> running_{false};
