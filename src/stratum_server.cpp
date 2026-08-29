@@ -74,19 +74,25 @@ bool send_all(int fd, std::string_view data) noexcept {
 
 StratumTcpServer::StratumTcpServer(
     StratumServerConfig config,
-    ShareChain* shared_chain)
+    ShareChain* shared_chain,
+    std::mutex* shared_chain_mutex)
     : config_(std::move(config)),
       sessions_(config_.sessions),
       owned_share_chain_(
           shared_chain == nullptr ? std::make_unique<ShareChain>() : nullptr),
       share_chain_(
           shared_chain != nullptr ? shared_chain : owned_share_chain_.get()),
+      shared_chain_mutex_(shared_chain_mutex),
       submissions_(sessions_, *share_chain_) {
     if (config_.bind_address.empty()) {
         throw std::runtime_error("Stratum bind address must not be empty");
     }
     if (config_.max_line_bytes == 0) {
         throw std::runtime_error("Stratum max line size must be nonzero");
+    }
+    if ((shared_chain == nullptr) != (shared_chain_mutex == nullptr)) {
+        throw std::runtime_error(
+            "shared Stratum chain and mutex must be supplied together");
     }
 }
 
@@ -189,6 +195,11 @@ std::uint64_t StratumTcpServer::publish_template(
 }
 
 std::size_t StratumTcpServer::connected_share_count() const noexcept {
+    if (shared_chain_mutex_ != nullptr) {
+        std::lock_guard lock(*shared_chain_mutex_);
+        return share_chain_->connected_size();
+    }
+
     std::lock_guard lock(state_mutex_);
     return share_chain_->connected_size();
 }
@@ -344,6 +355,10 @@ std::string StratumTcpServer::handle_request(
         }
         case StratumMethod::SubmitWork: {
             const StratumSubmission submission = parse_stratum_submission(request);
+            std::unique_lock<std::mutex> chain_lock;
+            if (shared_chain_mutex_ != nullptr) {
+                chain_lock = std::unique_lock<std::mutex>(*shared_chain_mutex_);
+            }
             const StratumSubmissionResult result = submissions_.submit(
                 session_id,
                 submission,
