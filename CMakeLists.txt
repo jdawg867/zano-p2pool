@@ -24,6 +24,7 @@ add_library(zano_p2pool_core
     src/crypto_hash.cpp
     src/mining_header.cpp
     src/p2p_miner_tx_binding.cpp
+    src/p2p_payout_policy.cpp
     src/p2p_mining_context.cpp
     src/p2p_protocol.cpp
     src/p2p_share.cpp
@@ -222,4 +223,8 @@ if(ZANO_P2POOL_BUILD_TESTS)
     add_executable(p2p_miner_tx_binding_test tests/p2p_miner_tx_binding_test.cpp)
     target_link_libraries(p2p_miner_tx_binding_test PRIVATE zano_p2pool_core)
     add_test(NAME p2p_miner_tx_binding_test COMMAND p2p_miner_tx_binding_test)
+
+    add_executable(p2p_payout_policy_test tests/p2p_payout_policy_test.cpp)
+    target_link_libraries(p2p_payout_policy_test PRIVATE zano_p2pool_core)
+    add_test(NAME p2p_payout_policy_test COMMAND p2p_payout_policy_test)
 endif()
