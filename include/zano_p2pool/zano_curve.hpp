@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 
 namespace zano_p2pool {
 
@@ -34,5 +35,16 @@ using ZanoCurveKey = std::array<std::uint8_t, 32>;
     const ZanoCurveKey& amount_blinding_mask,
     const ZanoCurveKey& blinded_asset_id,
     const ZanoCurveKey& amount_commitment) noexcept;
+
+// Verifies the current HF6 PoW miner-transaction balance proof using Zano's
+// exact G,G double-Schnorr verifier. amount_commitments are the serialized
+// tx_out_zarcanum commitments (each premultiplied by 1/8); serialized_proof is
+// the 96-byte generic_double_schnorr_sig payload after proof variant tag 48.
+[[nodiscard]] bool zano_verify_hf6_miner_balance_proof(
+    const ZanoCurveKey& tx_id,
+    std::uint64_t block_reward,
+    const ZanoCurveKey& tx_public_key,
+    std::span<const ZanoCurveKey> amount_commitments,
+    std::span<const std::uint8_t> serialized_proof) noexcept;
 
 }  // namespace zano_p2pool
