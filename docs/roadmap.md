@@ -73,7 +73,7 @@ shares through the verified Stratum path.
 - [x] duplicate peer-share suppression
 - [x] missing-parent request/response synchronization
 - [x] exact-Zano orphan promotion after parent synchronization
-- [ ] best-tip sync hints
+- [x] best-tip handshake and `TipAnnounce` sync hints
 - [ ] shared/reconstructable mining-context synchronization
 - [ ] outbound reconnect/backoff
 - [ ] peer scoring/bans
@@ -101,8 +101,16 @@ exact `ShareId`. Found responses bind the requested ID to the returned canonical
 share; not-found responses are explicit. In exact-Zano CI, receiving a valid child
 first creates a verified orphan, requesting/receiving its parent locally rehashes
 the parent, and the child is deterministically promoted. `p2p_sync_test` brings the
-suite to 17 tests. Normal and exact-Zano CI are green; local exact-Zano confirmation
-is the remaining checkpoint gate.
+suite to 17 tests, with local exact-Zano confirmation complete.
+
+Checkpoint 5 adds deterministic best-tip synchronization hints to both the initial
+handshake and later 40-byte `TipAnnounce` messages (`ShareId + height`). No peer
+cumulative-work value is transmitted or trusted. Unknown tip IDs are fetched by
+exact ID; known tips with inconsistent advertised heights are flagged. If a known
+tip is already an orphan, the planner requests its missing parent. Local verified
+cumulative work remains the only best-tip selection input. `p2p_tip_test` brings
+the suite to 18 tests; normal and exact-Zano CI are green and local confirmation is
+pending.
 
 Important remaining constraint: independent `zanod getblocktemplate` calls can
 produce different mining headers at the same Zano height. A true multi-node P2Pool
