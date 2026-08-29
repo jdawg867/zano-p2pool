@@ -1,5 +1,6 @@
 #pragma once
 
+#include "zano_p2pool/p2p_mining_context_trust.hpp"
 #include "zano_p2pool/p2p_runtime.hpp"
 #include "zano_p2pool/p2p_share.hpp"
 #include "zano_p2pool/p2p_sync.hpp"
@@ -7,6 +8,7 @@
 
 #include <cstdint>
 #include <mutex>
+#include <optional>
 
 namespace zano_p2pool {
 
@@ -15,6 +17,7 @@ enum class P2pNodeMessageStatus : std::uint8_t {
     ShareRequestAnswered,
     ShareResponseProcessed,
     TipProcessed,
+    MiningContextProcessed,
     MiningContextDeferred,
     UnexpectedHandshake,
 };
@@ -24,15 +27,16 @@ struct P2pNodeMessageResult {
     P2pShareReceiveStatus share_status{P2pShareReceiveStatus::Rejected};
     P2pShareSyncReceiveStatus sync_status{P2pShareSyncReceiveStatus::NotFound};
     P2pTipSyncStatus tip_status{P2pTipSyncStatus::NoRemoteTip};
+    P2pMiningContextTrustStatus mining_context_status{
+        P2pMiningContextTrustStatus::ProofsRejected};
+    bool mining_context_registry_inserted{false};
     bool sent_followup{false};
 };
 
-// Runtime protocol dispatcher for share-chain synchronization. ShareChain and
-// P2pTrustedWorkRegistry are protected by the same node-wide mutex so Stratum,
-// P2P gossip and sync cannot mutate/read consensus-facing state concurrently.
-// MiningContextAnnounce is deliberately deferred to the separate 6B.4 trust
-// gate because it additionally requires a current local daemon anchor and
-// expected payout identity.
+// Runtime protocol dispatcher for share-chain synchronization. ShareChain,
+// P2pTrustedWorkRegistry and the current local mining anchor are protected by
+// the same node-wide mutex so Stratum, P2P gossip, sync and checkpoint-6B.4
+// trust promotion share one serialized consensus boundary.
 class P2pNodeProtocol {
 public:
     P2pNodeProtocol(
@@ -48,15 +52,21 @@ public:
         ProgPowZContextMode mode = ProgPowZContextMode::Light);
 
     void remember_trusted_work(const ShareWorkContext& context);
+    void set_local_mining_anchor(const P2pMiningAnchor& anchor);
+    void set_expected_payout(const P2pPayoutAddress& payout);
+    void clear_expected_payout() noexcept;
 
     [[nodiscard]] std::size_t trusted_work_count() const noexcept;
     [[nodiscard]] std::size_t connected_share_count() const noexcept;
     [[nodiscard]] P2pTipHint local_tip() const noexcept;
+    [[nodiscard]] bool mining_context_trust_ready() const noexcept;
 
 private:
     ShareChain& chain_;
     P2pTrustedWorkRegistry& trusted_work_;
     std::mutex& state_mutex_;
+    std::optional<P2pMiningAnchor> local_mining_anchor_;
+    std::optional<P2pPayoutAddress> expected_payout_;
 };
 
 [[nodiscard]] const char* p2p_node_message_status_name(
