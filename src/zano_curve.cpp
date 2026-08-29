@@ -5,6 +5,7 @@
 #ifdef ZANO_P2POOL_HAVE_ZANO_CURVE
 #include "crypto/crypto-sugar.h"
 #include "crypto/crypto.h"
+#include "crypto/zarcanum.h"
 #endif
 
 namespace zano_p2pool {
@@ -134,6 +135,66 @@ bool zano_amount_commitment_matches(
     static_cast<void>(amount_blinding_mask);
     static_cast<void>(blinded_asset_id);
     static_cast<void>(amount_commitment);
+    return false;
+#endif
+}
+
+bool zano_verify_hf6_miner_balance_proof(
+    const ZanoCurveKey& tx_id,
+    std::uint64_t block_reward,
+    const ZanoCurveKey& tx_public_key,
+    std::span<const ZanoCurveKey> amount_commitments,
+    std::span<const std::uint8_t> serialized_proof) noexcept {
+#ifdef ZANO_P2POOL_HAVE_ZANO_CURVE
+    try {
+        static_assert(sizeof(crypto::hash) == ZanoCurveKey{}.size());
+        static_assert(sizeof(crypto::public_key) == ZanoCurveKey{}.size());
+        static_assert(sizeof(crypto::generic_double_schnorr_sig) == 96);
+
+        if (block_reward == 0 || amount_commitments.empty() ||
+            serialized_proof.size() != sizeof(crypto::generic_double_schnorr_sig)) {
+            return false;
+        }
+
+        crypto::hash message_hash{};
+        crypto::public_key tx_public{};
+        crypto::generic_double_schnorr_sig proof{};
+        std::memcpy(&message_hash, tx_id.data(), tx_id.size());
+        std::memcpy(&tx_public, tx_public_key.data(), tx_public_key.size());
+        std::memcpy(&proof, serialized_proof.data(), serialized_proof.size());
+
+        crypto::point_t outputs_sum = crypto::c_point_0;
+        for (const auto& serialized_commitment : amount_commitments) {
+            crypto::public_key commitment_public{};
+            std::memcpy(
+                &commitment_public,
+                serialized_commitment.data(),
+                serialized_commitment.size());
+            outputs_sum += crypto::point_t(commitment_public);
+        }
+        outputs_sum.modify_mul8();
+
+        // Exact current-HF6 PoW coinbase balance equation from Zano:
+        // generated native reward * H - sum(output amount commitments) = lin(G).
+        const crypto::point_t commitment_to_zero =
+            crypto::scalar_t(block_reward) * crypto::c_point_H - outputs_sum;
+
+        return crypto::verify_double_schnorr_sig<
+            crypto::gt_G,
+            crypto::gt_G>(
+                message_hash,
+                commitment_to_zero,
+                tx_public,
+                proof);
+    } catch (...) {
+        return false;
+    }
+#else
+    static_cast<void>(tx_id);
+    static_cast<void>(block_reward);
+    static_cast<void>(tx_public_key);
+    static_cast<void>(amount_commitments);
+    static_cast<void>(serialized_proof);
     return false;
 #endif
 }
