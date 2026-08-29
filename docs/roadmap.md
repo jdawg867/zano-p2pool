@@ -53,16 +53,13 @@ exact ProgPoWZ verification before claimed share difficulty contributes chain wo
 - [x] bind to loopback by default with configurable port
 - [x] local socket integration test
 - [x] wire live daemon-derived templates into executable Stratum mode
-- [ ] test with ProgPoWZ-capable miners
+- [x] test with a real ProgPoWZ-capable miner
 
-Checkpoint 4 was confirmed locally with an exact-Zano Release build passing 12/12
-tests, including the real loopback socket integration test. The executable now has
-an explicit `--stratum` mode that publishes locally derived daemon work, refreshes
-it periodically, exposes configurable bind/port/default share difficulty, and
-shuts down cleanly on SIGINT/SIGTERM.
-
-The remaining Milestone 0.4 validation is a real ProgPoWZ miner connecting to the
-loopback server and receiving/submitting live testnet work.
+Milestone 0.4 is complete on the feature branch. Validation includes a local
+exact-Zano Release build passing all 13 tests, live testnet template refresh on
+`127.0.0.1:3333`, stable suppression of randomized same-tip templates, and a real
+SRBMiner-MULTI `progpow_zano` session submitting repeatedly accepted shares through
+the locally verified Stratum path.
 
 ## Phase 5 — P2P network
 
