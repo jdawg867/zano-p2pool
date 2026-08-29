@@ -44,6 +44,9 @@ struct StratumSession {
     bool logged_in{false};
     std::string username;
     std::string worker;
+    // Present when username is a classic standard Zx address. These are public
+    // account keys only and are copied into payout-capable share v2 records.
+    std::optional<PayoutPublicKeys> payout;
     std::uint64_t configured_share_difficulty{0};
     std::optional<StratumIssuedWork> current_work;
     std::optional<StratumIssuedWork> previous_work;
@@ -56,24 +59,17 @@ public:
     [[nodiscard]] std::uint64_t create_session();
     void remove_session(std::uint64_t session_id) noexcept;
 
-    // Applies the parsed Zano-compatible login. A missing/zero requested
-    // difficulty selects the configured default; non-zero requests are clamped
-    // to the configured Stratum range. Wallet/address validation is a later
-    // server-policy layer and is intentionally not performed here.
+    // Applies the parsed Zano-compatible login. Classic standard Zx usernames
+    // are decoded to public payout keys. Non-address usernames remain accepted
+    // as development v1 identities until payout-capable login becomes mandatory.
     void login(std::uint64_t session_id, const StratumLogin& login);
 
-    // Publishes locally trusted template data. The version increments only when
-    // the actual template context changes, making repeated publication
-    // deterministic and idempotent.
     [[nodiscard]] std::uint64_t publish_template(
         const Hash256& header_hash,
         const Hash256& seed_hash,
         std::uint64_t height,
         const Difficulty128& network_difficulty);
 
-    // Issues current work for a logged-in session. The effective P2Pool share
-    // difficulty is capped at network difficulty so it can never be harder than
-    // a full Zano block under the Milestone 0.3 admission rules.
     [[nodiscard]] StratumIssuedWork issue_work(std::uint64_t session_id);
 
     [[nodiscard]] StratumWorkMatch match_submission(
