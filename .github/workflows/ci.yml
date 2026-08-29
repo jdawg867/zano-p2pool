@@ -47,7 +47,7 @@ jobs:
           path: zano-src
           sparse-checkout: |
             contrib/ethereum/libethash
-            contrib/epee/include/warnings.h
+            contrib/epee/include
             src/crypto
             src/common
           sparse-checkout-cone-mode: false
