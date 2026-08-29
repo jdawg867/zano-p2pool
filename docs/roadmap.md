@@ -46,19 +46,19 @@ exact ProgPoWZ verification before claimed share difficulty contributes chain wo
 - [x] versioned local work registry
 - [x] per-session difficulty and target generation
 - [x] current/stale/unknown work-header classification
-- [ ] route `eth_submitWork` into share-chain admission
-- [ ] duplicate nonce/share rejection
-- [ ] distinguish accepted share vs. full-network block candidate
+- [x] route `eth_submitWork` into verified share-chain admission
+- [x] duplicate `(job_version, nonce)` rejection
+- [x] distinguish accepted share vs. full-network block candidate
 - [ ] Stratum TCP listener
 - [ ] bind to loopback by default with configurable port
 - [ ] local socket integration test
 - [ ] test with ProgPoWZ-capable miners
 
-Checkpoint 2 is CI-green. Session IDs and work-template versions are monotonic and
-deterministic; unchanged template publication is idempotent. Per-session share
-difficulty is clamped to configured policy and capped at current network difficulty,
-and a prior header becomes stale only after replacement work is actually issued to
-that session.
+Checkpoint 3 is CI-green. Current work is resolved against the job actually issued
+to the session, duplicate nonces are suppressed before expensive hashing, and
+accepted shares/block candidates both pass through the same exact local ProgPoWZ
+and `ShareChain::submit_share()` verification path. Ordinary shares are never sent
+to `zanod`, and block candidates are surfaced without automatic submission.
 
 ## Phase 5 — P2P network
 
