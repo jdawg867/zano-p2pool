@@ -97,6 +97,26 @@ void P2pRuntime::connect_peer(const P2pEndpoint& endpoint) {
     add_peer(std::move(connection));
 }
 
+bool P2pRuntime::send_to(
+    const NodeId& peer_node_id,
+    const P2pEnvelope& envelope) noexcept {
+    std::vector<std::shared_ptr<Peer>> peers;
+    {
+        std::lock_guard lock(peers_mutex_);
+        peers = peers_;
+    }
+
+    bool sent = false;
+    for (const auto& peer : peers) {
+        if (!peer->alive.load() ||
+            peer->connection.peer_handshake().node_id != peer_node_id) {
+            continue;
+        }
+        sent = send_peer(peer, envelope) || sent;
+    }
+    return sent;
+}
+
 void P2pRuntime::broadcast(const P2pEnvelope& envelope) noexcept {
     std::vector<std::shared_ptr<Peer>> peers;
     {
@@ -105,19 +125,8 @@ void P2pRuntime::broadcast(const P2pEnvelope& envelope) noexcept {
     }
 
     for (const auto& peer : peers) {
-        if (!peer->alive.load()) {
-            continue;
-        }
-
-        try {
-            std::lock_guard send_lock(peer->send_mutex);
-            if (!peer->alive.load()) {
-                continue;
-            }
-            peer->connection.send_envelope(envelope);
-        } catch (...) {
-            peer->alive.store(false);
-            peer->connection.shutdown();
+        if (peer->alive.load()) {
+            static_cast<void>(send_peer(peer, envelope));
         }
     }
 }
@@ -191,6 +200,23 @@ void P2pRuntime::peer_loop(const std::shared_ptr<Peer>& peer) noexcept {
 
     peer->alive.store(false);
     peer->connection.shutdown();
+}
+
+bool P2pRuntime::send_peer(
+    const std::shared_ptr<Peer>& peer,
+    const P2pEnvelope& envelope) noexcept {
+    try {
+        std::lock_guard send_lock(peer->send_mutex);
+        if (!peer->alive.load()) {
+            return false;
+        }
+        peer->connection.send_envelope(envelope);
+        return true;
+    } catch (...) {
+        peer->alive.store(false);
+        peer->connection.shutdown();
+        return false;
+    }
 }
 
 }  // namespace zano_p2pool
