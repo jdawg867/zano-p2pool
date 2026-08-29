@@ -78,6 +78,8 @@ Current work adds the local miner-facing Stratum foundation:
 - `eth_submitWork` routing through exact local ProgPoWZ and `ShareChain::submit_share()`;
 - accepted-share vs. full-network block-candidate classification without automatic daemon submission.
 
+Checkpoint 2 was confirmed locally with an exact-Zano Release build passing 10/10 tests. Checkpoint 3 is CI-green and awaits local confirmation.
+
 Next, the protocol/session/submission layers will be placed behind a loopback TCP listener with line-delimited JSON-RPC framing and socket integration tests.
 
 ## Requirements
