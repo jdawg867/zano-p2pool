@@ -110,6 +110,7 @@ if(ZANO_P2POOL_ZANO_SOURCE_DIR)
         target_include_directories(zano_p2pool_zano_curve
             PUBLIC
                 "${_zano_source_dir}/src"
+                "${_zano_source_dir}/contrib/epee/include"
         )
         target_compile_definitions(zano_p2pool_zano_curve PRIVATE STATICLIB=1)
         target_link_libraries(zano_p2pool_zano_curve PUBLIC Threads::Threads)
