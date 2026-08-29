@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <map>
-#include <numeric>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -39,6 +38,27 @@ ChainWork int_to_work(cpp_int value) {
     return work;
 }
 
+struct CreditedWork {
+    cpp_int work{};
+    std::optional<PayoutPublicKeys> payout;
+};
+
+void merge_payout_identity(
+    CreditedWork& credited,
+    const Share& share) {
+    if (!share.payout.has_value()) {
+        return;
+    }
+    if (share.version != kShareVersion2 ||
+        share.miner_id != miner_id_from_payout(*share.payout)) {
+        throw std::logic_error("PPLNS encountered invalid v2 payout binding");
+    }
+    if (credited.payout.has_value() && credited.payout != share.payout) {
+        throw std::logic_error("PPLNS MinerId has conflicting payout identities");
+    }
+    credited.payout = share.payout;
+}
+
 }  // namespace
 
 PplnsWindow build_pplns_window(
@@ -50,7 +70,7 @@ PplnsWindow build_pplns_window(
     }
 
     cpp_int remaining = requested;
-    std::map<MinerId, cpp_int> credited;
+    std::map<MinerId, CreditedWork> credited;
 
     const ConnectedShare* current = chain.best_tip();
     while (current != nullptr && remaining != 0) {
@@ -61,7 +81,9 @@ PplnsWindow build_pplns_window(
         }
 
         const cpp_int included = std::min(current_work, remaining);
-        credited[current->share.miner_id] += included;
+        CreditedWork& miner = credited[current->share.miner_id];
+        miner.work += included;
+        merge_payout_identity(miner, current->share);
         remaining -= included;
 
         if (remaining == 0 || is_zero_share_id(current->share.parent_id)) {
@@ -80,13 +102,14 @@ PplnsWindow build_pplns_window(
     result.covered_work = int_to_work(requested - remaining);
     result.complete = remaining == 0;
     result.miners.reserve(credited.size());
-    for (const auto& [miner_id, work] : credited) {
-        if (work == 0) {
+    for (const auto& [miner_id, row] : credited) {
+        if (row.work == 0) {
             continue;
         }
         result.miners.push_back(PplnsMinerWork{
             miner_id,
-            int_to_work(work),
+            int_to_work(row.work),
+            row.payout,
         });
     }
     return result;
@@ -95,11 +118,23 @@ PplnsWindow build_pplns_window(
 std::vector<PplnsPayout> allocate_pplns_reward(
     const PplnsWindow& window,
     std::uint64_t reward_atomic) {
-    std::map<MinerId, cpp_int> credited;
+    std::map<MinerId, CreditedWork> credited;
     for (const auto& row : window.miners) {
         const cpp_int work = work_to_int(row.work);
-        if (work != 0) {
-            credited[row.miner_id] += work;
+        if (work == 0) {
+            continue;
+        }
+        CreditedWork& aggregate = credited[row.miner_id];
+        aggregate.work += work;
+        if (row.payout.has_value()) {
+            if (row.miner_id != miner_id_from_payout(*row.payout)) {
+                throw std::logic_error("PPLNS row has invalid payout binding");
+            }
+            if (aggregate.payout.has_value() && aggregate.payout != row.payout) {
+                throw std::logic_error(
+                    "PPLNS payout rows conflict for one MinerId");
+            }
+            aggregate.payout = row.payout;
         }
     }
 
@@ -108,9 +143,9 @@ std::vector<PplnsPayout> allocate_pplns_reward(
     }
 
     cpp_int total_work = 0;
-    for (const auto& [miner_id, work] : credited) {
+    for (const auto& [miner_id, row] : credited) {
         static_cast<void>(miner_id);
-        total_work += work;
+        total_work += row.work;
     }
     if (total_work == 0) {
         throw std::logic_error("PPLNS payout has no credited work");
@@ -129,8 +164,8 @@ std::vector<PplnsPayout> allocate_pplns_reward(
 
     std::uint64_t allocated = 0;
     const cpp_int reward = reward_atomic;
-    for (const auto& [miner_id, work] : credited) {
-        const cpp_int numerator = reward * work;
+    for (const auto& [miner_id, row] : credited) {
+        const cpp_int numerator = reward * row.work;
         const cpp_int quotient = numerator / total_work;
         const cpp_int remainder = numerator % total_work;
         const std::uint64_t amount = quotient.convert_to<std::uint64_t>();
@@ -143,8 +178,9 @@ std::vector<PplnsPayout> allocate_pplns_reward(
         const std::size_t index = payouts.size();
         payouts.push_back(PplnsPayout{
             miner_id,
-            int_to_work(work),
+            int_to_work(row.work),
             amount,
+            row.payout,
         });
         fractional.push_back(FractionalRow{
             miner_id,
