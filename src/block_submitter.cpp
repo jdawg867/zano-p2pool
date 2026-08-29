@@ -78,8 +78,6 @@ void BlockCandidateSubmitter::stop() noexcept {
 void BlockCandidateSubmitter::remember_template(
     const Hash256& mining_header_hash,
     std::string block_blob_hex) {
-    // Validate/normalize the hex eagerly so candidate submission cannot discover
-    // a malformed template only after the miner has found a block.
     static_cast<void>(block_blob_with_nonce(block_blob_hex, 0));
 
     std::lock_guard lock(mutex_);
@@ -157,6 +155,16 @@ void BlockCandidateSubmitter::worker_loop() noexcept {
 
         try {
             submit_(block_blob_with_nonce(block_blob, candidate.nonce));
+
+            {
+                std::lock_guard lock(mutex_);
+                std::erase_if(queue_, [&](const BlockCandidate& queued) {
+                    return queued.mining_header_hash == candidate.mining_header_hash;
+                });
+                templates_.erase(candidate.mining_header_hash);
+                std::erase(template_order_, candidate.mining_header_hash);
+            }
+
             emit(BlockSubmitEvent{
                 BlockSubmitStatus::Submitted,
                 candidate,
@@ -185,7 +193,6 @@ void BlockCandidateSubmitter::emit(BlockSubmitEvent event) noexcept {
     try {
         handler_(event);
     } catch (...) {
-        // Observability must never terminate the submission worker.
     }
 }
 
