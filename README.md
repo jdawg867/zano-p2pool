@@ -81,7 +81,21 @@ The fourth milestone adds the local miner-facing Stratum foundation:
 - persistent executable Stratum mode with live daemon template refresh;
 - deterministic suppression of randomized same-tip `getblocktemplate` churn.
 
-Milestone 0.4 was validated with a local exact-Zano Release build passing all 13 tests, live Zano testnet template refresh on `127.0.0.1:3333`, and a real SRBMiner-MULTI `progpow_zano` session submitting repeatedly accepted shares through the verified Stratum path.
+Milestone 0.4 was validated with a local exact-Zano Release build passing all 13 tests, live Zano testnet template refresh on `127.0.0.1:3333`, and a real SRBMiner-MULTI `progpow_zano` session submitting repeatedly accepted shares through the verified Stratum path. It is merged to `main`.
+
+## Milestone 0.5
+
+Current work builds the node-to-node P2P foundation. Checkpoint 1 defines a deterministic v1 binary envelope and handshake before any sockets are added:
+
+- `ZP2P` frame magic, protocol version, message type, reserved flags, and big-endian payload length;
+- strict 64 KiB payload bound and exact-frame parsing;
+- testnet/mainnet identity in the handshake;
+- non-zero public 32-byte node identifier;
+- capability bits for share gossip and missing-parent synchronization;
+- advertised listen port and best-share synchronization hint;
+- deterministic rejection of wrong networks, self-connections, unsupported versions/types/flags, malformed sizes, truncation, and trailing bytes.
+
+Best-share hints are only synchronization hints. Peer-claimed chain work, PoW results, and network difficulty are never trusted without local verification.
 
 ## Requirements
 
