@@ -48,8 +48,7 @@ jobs:
           sparse-checkout: |
             contrib/ethereum/libethash
             contrib/epee/include
-            src/crypto
-            src/common
+            src
           sparse-checkout-cone-mode: false
 
       - name: Install dependencies
