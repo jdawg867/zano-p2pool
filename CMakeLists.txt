@@ -36,6 +36,7 @@ add_library(zano_p2pool_core
     src/p2p_sync.cpp
     src/p2p_tip.cpp
     src/p2p_transport.cpp
+    src/plns.cpp
     src/pow_target.cpp
     src/progpowz.cpp
     src/rpc_client.cpp
@@ -168,6 +169,10 @@ if(ZANO_P2POOL_BUILD_TESTS)
     add_executable(pow_target_test tests/pow_target_test.cpp)
     target_link_libraries(pow_target_test PRIVATE zano_p2pool_core)
     add_test(NAME pow_target_test COMMAND pow_target_test)
+
+    add_executable(pplns_test tests/pplns_test.cpp)
+    target_link_libraries(pplns_test PRIVATE zano_p2pool_core)
+    add_test(NAME pplns_test COMMAND pplns_test)
 
     add_executable(share_validation_test tests/share_validation_test.cpp)
     target_link_libraries(share_validation_test PRIVATE zano_p2pool_core)
