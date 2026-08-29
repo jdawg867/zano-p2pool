@@ -25,6 +25,7 @@ add_library(zano_p2pool_core
     src/mining_header.cpp
     src/p2p_protocol.cpp
     src/p2p_share.cpp
+    src/p2p_sync.cpp
     src/p2p_transport.cpp
     src/pow_target.cpp
     src/progpowz.cpp
@@ -170,4 +171,8 @@ if(ZANO_P2POOL_BUILD_TESTS)
     add_executable(p2p_share_test tests/p2p_share_test.cpp)
     target_link_libraries(p2p_share_test PRIVATE zano_p2pool_core)
     add_test(NAME p2p_share_test COMMAND p2p_share_test)
+
+    add_executable(p2p_sync_test tests/p2p_sync_test.cpp)
+    target_link_libraries(p2p_sync_test PRIVATE zano_p2pool_core)
+    add_test(NAME p2p_sync_test COMMAND p2p_sync_test)
 endif()
