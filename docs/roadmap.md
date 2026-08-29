@@ -68,7 +68,7 @@ shares through the verified Stratum path.
 - [x] wrong-network / unsupported-version rejection
 - [x] TCP listener/client transport
 - [x] bounded stream framing
-- [ ] share gossip
+- [x] share gossip
 - [ ] missing-parent synchronization
 - [ ] best-tip sync hints
 - [ ] outbound reconnect/backoff
@@ -83,13 +83,27 @@ payload length), enforce a 64 KiB payload cap, and fail closed on malformed,
 truncated, trailing, unsupported-version/type/flag data. The handshake carries
 network, non-zero public 32-byte node ID, capability bits, advertised listen port,
 and a best-share sync hint. Best-share hints are not trusted consensus data.
+Normal and exact-Zano CI are green on the checkpoint code head; `p2p_protocol_test`
+brings the suite to 14 tests.
 
-Checkpoint 2 adds `P2pTcpListener`, outbound `connect_p2p_peer()`, and move-only
-live peer connections over TCP. The stream reader validates the bounded frame
-header before allocating/reading payload bytes. The loopback integration test
-covers bidirectional handshakes, continued post-handshake framing, wrong-network
-and self-connection rejection, oversized payload claims, and unsupported versions.
-Normal and exact-Zano CI are green; `p2p_transport_test` brings the suite to 15 tests.
+Checkpoint 2 adds real TCP transport. Two independent loopback components exchange
+and validate the v1 handshake over bounded stream framing, reject wrong-network,
+self, oversized, and unsupported-version peers, and retain the established socket
+for subsequent protocol messages. `p2p_transport_test` brings the suite to 15 tests.
+
+Checkpoint 3 adds `ShareAnnounce` using the existing canonical 165-byte `Share`
+encoding. Received shares are admitted only when their Zano height/mining-header
+pair matches a locally remembered trusted work context; peer-supplied headers are
+never promoted to trusted consensus context. Already connected/orphaned share IDs
+are suppressed before context lookup or ProgPoWZ. The exact-Zano socket test sends
+a real `ShareAnnounce` across an established peer session, locally rehashes it,
+and connects it through `ShareChain::submit_share()`. Lightweight builds fail
+closed without the exact backend. `p2p_share_test` brings the suite to 16 tests.
+
+A remaining design requirement for true multi-node mining is a shared or
+reconstructable mining-context mechanism. Independent daemon `getblocktemplate`
+responses can produce different mining headers even at the same Zano height, so
+P2P must not simply trust a peer's arbitrary header.
 
 ## Phase 6 — PPLNS and payouts
 
