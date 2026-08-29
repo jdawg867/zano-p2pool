@@ -48,6 +48,7 @@ jobs:
           sparse-checkout: |
             contrib/ethereum/libethash
             contrib/epee/include
+            contrib/eos_portable_archive
             src
           sparse-checkout-cone-mode: false
 
