@@ -90,7 +90,8 @@ bool p2p_message_type_supported(std::uint8_t value) noexcept {
     return value == static_cast<std::uint8_t>(P2pMessageType::Handshake) ||
            value == static_cast<std::uint8_t>(P2pMessageType::ShareAnnounce) ||
            value == static_cast<std::uint8_t>(P2pMessageType::ShareRequest) ||
-           value == static_cast<std::uint8_t>(P2pMessageType::ShareResponse);
+           value == static_cast<std::uint8_t>(P2pMessageType::ShareResponse) ||
+           value == static_cast<std::uint8_t>(P2pMessageType::TipAnnounce);
 }
 
 bool is_zero_node_id(const NodeId& node_id) noexcept {
