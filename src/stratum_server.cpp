@@ -188,11 +188,16 @@ std::size_t StratumTcpServer::connected_share_count() const noexcept {
 }
 
 void StratumTcpServer::accept_loop() {
+    // start() publishes the descriptor before launching this thread. Keep a
+    // private copy so stop() can reset the member after close without racing a
+    // member read in the blocking accept call.
+    const int listen_fd = listen_fd_;
+
     while (running_.load()) {
         sockaddr_in peer{};
         socklen_t peer_size = sizeof(peer);
         const int client_fd = ::accept(
-            listen_fd_, reinterpret_cast<sockaddr*>(&peer), &peer_size);
+            listen_fd, reinterpret_cast<sockaddr*>(&peer), &peer_size);
         if (client_fd < 0) {
             if (!running_.load()) {
                 break;
