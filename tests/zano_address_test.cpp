@@ -2,6 +2,7 @@
 #include "zano_p2pool/zano_address.hpp"
 #include "test_check.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <string>
