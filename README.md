@@ -12,7 +12,7 @@ Build a native Zano P2Pool network where:
 - P2Pool nodes exchange and validate shares peer-to-peer;
 - each node maintains/verifies the share chain itself;
 - ProgPoWZ shares are independently verified;
-- full-difficulty solutions are submitted directly to `zanod`;
+- full-difficulty solutions are surfaced as block candidates for controlled submission;
 - payout accounting is derived deterministically from the share chain;
 - a later protocol phase investigates direct non-custodial miner payouts.
 
@@ -73,9 +73,12 @@ Current work adds the local miner-facing Stratum foundation:
 - monotonic versioned work-template registry;
 - per-session requested-difficulty clamping and target calculation;
 - share difficulty capped at current Zano network difficulty;
-- current/stale/unknown header classification per session.
+- current/stale/unknown header classification per session;
+- per-session `(job_version, nonce)` duplicate suppression;
+- `eth_submitWork` routing through exact local ProgPoWZ and `ShareChain::submit_share()`;
+- accepted-share vs. full-network block-candidate classification without automatic daemon submission.
 
-Next, `eth_submitWork` will be routed through the existing verified share-chain admission path before TCP transport is enabled.
+Next, the protocol/session/submission layers will be placed behind a loopback TCP listener with line-delimited JSON-RPC framing and socket integration tests.
 
 ## Requirements
 
