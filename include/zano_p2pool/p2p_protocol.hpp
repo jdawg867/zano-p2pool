@@ -21,6 +21,7 @@ enum class P2pMessageType : std::uint8_t {
     ShareAnnounce = 2,
     ShareRequest = 3,
     ShareResponse = 4,
+    TipAnnounce = 5,
 };
 
 enum class P2pNetwork : std::uint8_t {
