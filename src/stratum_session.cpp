@@ -1,6 +1,7 @@
 #include "zano_p2pool/stratum_session.hpp"
 
 #include "zano_p2pool/pow_target.hpp"
+#include "zano_p2pool/zano_address.hpp"
 
 #include <algorithm>
 #include <stdexcept>
@@ -82,6 +83,17 @@ void StratumSessionRegistry::login(
     session.worker = login_request.worker.empty()
         ? std::to_string(session.id)
         : login_request.worker;
+    session.payout.reset();
+
+    const ZanoAddressDecodeResult decoded =
+        decode_zano_standard_address(login_request.username);
+    if (decoded.status == ZanoAddressDecodeStatus::Valid) {
+        session.payout = PayoutPublicKeys{
+            decoded.payout.spend_public_key,
+            decoded.payout.view_public_key,
+        };
+    }
+
     session.configured_share_difficulty = clamp_requested_difficulty(
         config_, login_request.requested_difficulty);
     session.logged_in = true;
