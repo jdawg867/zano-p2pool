@@ -44,7 +44,25 @@ The second milestone implements the consensus-critical local PoW verification la
 - classify local candidates as `Invalid`, `Share`, or `Block` without submitting them;
 - validate the standalone header derivation byte-for-byte against Zano on live testnet.
 
-Milestone 0.2 is complete on `feature/progpowz-verification` and is being merged through PR #4.
+Milestone 0.2 was validated against live Zano testnet and merged through PR #4.
+
+## Milestone 0.3
+
+The third milestone adds the deterministic local P2Pool share-chain foundation:
+
+- versioned canonical share serialization and deterministic share IDs;
+- explicit parent linkage with a zero-parent root convention;
+- fixed-width share and network difficulty commitments;
+- deterministic per-share work and checked 256-bit cumulative work;
+- orphan retention/promotion and stale-fork tracking;
+- deterministic best-tip selection and cumulative-work reorgs;
+- explicit timestamp policy with bounded future skew and parent-relative backward tolerance;
+- production-facing share admission bound to locally trusted Zano height, mining-header hash, and network difficulty;
+- exact local ProgPoWZ verification before any claimed share difficulty contributes chain work;
+- recording of whether an accepted share also meets full Zano network difficulty;
+- fail-closed behavior when the exact ProgPoWZ backend is unavailable.
+
+Milestone 0.3 was validated in both lightweight and exact-Zano CI modes, plus a local exact-Zano Release build with all 8 tests passing.
 
 ## Requirements
 
@@ -67,6 +85,16 @@ sudo apt install -y \
 cmake -S . -B build
 cmake --build build -j"$(nproc)"
 ctest --test-dir build --output-on-failure
+```
+
+To enable the exact ProgPoWZ backend from a local Zano source tree:
+
+```bash
+cmake -S . -B build-zano \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DZANO_P2POOL_ZANO_SOURCE_DIR=/path/to/zano
+cmake --build build-zano -j"$(nproc)"
+ctest --test-dir build-zano --output-on-failure
 ```
 
 ## Run
@@ -97,7 +125,7 @@ You can also select mainnet explicitly:
 
 or override the RPC endpoint directly with `--rpc-url`.
 
-Expected output now includes the independently derived mining header:
+Expected output includes the independently derived mining header:
 
 ```text
 zano-p2pool v0.1.0-dev
@@ -146,5 +174,6 @@ See [`docs/roadmap.md`](docs/roadmap.md).
 ## Safety
 
 This repository is experimental consensus/mining software. Until share validation,
-difficulty calculations, block serialization, and payout rules have extensive test
-coverage, it should only be used for development and controlled testing.
+difficulty calculations, block serialization, share-chain consensus, networking, and
+payout rules have extensive test coverage, it should only be used for development and
+controlled testing.

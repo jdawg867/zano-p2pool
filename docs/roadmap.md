@@ -15,25 +15,32 @@
 
 ## Phase 2 — ProgPoWZ verification
 
-- [x] identify canonical Zano ProgPoWZ hashing entry points and pin exact-Zano compatibility vectors
-- [x] integrate the exact ProgPoWZ implementation embedded in audited Zano source
+- [x] identify canonical Zano ProgPoWZ hashing entry points
+- [x] integrate an exact-Zano ProgPoWZ verifier backend
 - [x] calculate network target from Zano difficulty
-- [x] derive the canonical mining header from RPC `blocktemplate_blob`
-- [x] verify nonce/result locally against a block template
+- [x] derive the canonical mining header from an RPC block template
+- [x] verify nonce/result against a block template locally
 - [x] distinguish share target vs. full network target
-- [x] deterministic PoW and target-boundary tests
-- [x] live same-blob testnet equivalence against Zano's own serialization/hashing path
+- [x] pin deterministic exact-Zano PoW compatibility vectors
 
 ## Phase 3 — local share chain
 
-- [ ] define versioned share serialization
-- [ ] share IDs and parent linkage
-- [ ] share timestamp rules
-- [ ] cumulative work
-- [ ] stale/orphan handling
-- [ ] local persistence
-- [ ] reorg rules
-- [ ] share-chain tests
+- [x] define versioned share serialization
+- [x] share IDs and parent linkage
+- [x] share timestamp rules
+- [x] cumulative work
+- [x] stale/orphan handling
+- [x] deterministic best-tip/reorg rules
+- [x] share-chain structural tests
+- [x] gate production share-chain admission on local ProgPoWZ verification
+- [x] bind verified admission to locally trusted Zano work context
+- [x] record full-network block-candidate status on verified shares
+- [ ] local persistence/recovery follow-up
+
+Milestone 0.3 local consensus scope is complete: canonical shares, cumulative-work fork
+choice, orphan/stale handling, timestamp policy, trusted-template binding, and exact
+ProgPoWZ admission are covered by deterministic Release tests. Persistence remains a
+separate follow-up after in-memory consensus behavior is stable.
 
 ## Phase 4 — Stratum
 
