@@ -28,6 +28,7 @@ add_library(zano_p2pool_core
     src/share.cpp
     src/share_chain.cpp
     src/share_validation.cpp
+    src/stratum_protocol.cpp
 )
 
 target_include_directories(zano_p2pool_core
@@ -131,4 +132,8 @@ if(ZANO_P2POOL_BUILD_TESTS)
     add_executable(share_chain_test tests/share_chain_test.cpp)
     target_link_libraries(share_chain_test PRIVATE zano_p2pool_core)
     add_test(NAME share_chain_test COMMAND share_chain_test)
+
+    add_executable(stratum_protocol_test tests/stratum_protocol_test.cpp)
+    target_link_libraries(stratum_protocol_test PRIVATE zano_p2pool_core)
+    add_test(NAME stratum_protocol_test COMMAND stratum_protocol_test)
 endif()
