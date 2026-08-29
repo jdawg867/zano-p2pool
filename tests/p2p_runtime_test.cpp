@@ -115,13 +115,21 @@ int main() {
     P2pTipHint tip_b;
     tip_b.share_id[31] = 0xb2;
     tip_b.share_height = 42;
-    node_b.broadcast(make_p2p_tip_announce_envelope(tip_b));
+    CHECK(node_b.send_to(
+        node_a.local_handshake().node_id,
+        make_p2p_tip_announce_envelope(tip_b)));
     CHECK(inbox_a.wait_for_count(1));
     {
         std::lock_guard lock(inbox_a.mutex);
         CHECK(inbox_a.messages.size() == 1);
         CHECK(parse_p2p_tip_announce_envelope(inbox_a.messages[0]) == tip_b);
     }
+
+    NodeId unknown{};
+    unknown[31] = 0xee;
+    CHECK(!node_b.send_to(
+        unknown,
+        make_p2p_tip_announce_envelope(tip_b)));
 
     // stop() must interrupt the reader threads currently blocked waiting for
     // another frame and complete without requiring the peer to send anything.
