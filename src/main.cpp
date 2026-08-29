@@ -11,6 +11,7 @@
 #include "zano_p2pool/share.hpp"
 #include "zano_p2pool/stratum_server.hpp"
 #include "zano_p2pool/template_refresh.hpp"
+#include "zano_p2pool/zano_address.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -455,6 +456,22 @@ int main(int argc, char** argv) {
         zano_p2pool::P2pNodeProtocol p2p_protocol(
             node_chain, trusted_work, node_state_mutex);
         p2p_protocol.remember_trusted_work(trusted_context_from_live(live));
+        p2p_protocol.set_local_mining_anchor(
+            zano_p2pool::p2p_mining_anchor_from_template(live.block));
+
+        const zano_p2pool::ZanoAddressDecodeResult payout_address =
+            zano_p2pool::decode_zano_standard_address(options.wallet);
+        if (payout_address.status == zano_p2pool::ZanoAddressDecodeStatus::Valid) {
+            p2p_protocol.set_expected_payout(payout_address.payout);
+        } else if (options.p2p) {
+            std::cerr
+                << "WARNING: P2P mining-context trust disabled for this wallet "
+                << "address ("
+                << zano_p2pool::zano_address_decode_status_name(
+                       payout_address.status)
+                << "). Only classic standard Zx addresses are supported by the "
+                   "current public-key decoder.\n";
+        }
 
         std::unique_ptr<zano_p2pool::P2pRuntime> p2p_runtime;
         if (options.p2p) {
@@ -487,10 +504,20 @@ int main(int argc, char** argv) {
                             unix_time_seconds(),
                             zano_p2pool::ProgPowZContextMode::Light);
                         if (result.status ==
-                            zano_p2pool::P2pNodeMessageStatus::MiningContextDeferred) {
+                            zano_p2pool::P2pNodeMessageStatus::MiningContextProcessed) {
+                            std::cout
+                                << "P2P mining context: "
+                                << zano_p2pool::p2p_mining_context_trust_status_name(
+                                       result.mining_context_status)
+                                << (result.mining_context_registry_inserted
+                                        ? " (trusted work inserted)"
+                                        : "")
+                                << '\n';
+                        } else if (result.status ==
+                                   zano_p2pool::P2pNodeMessageStatus::MiningContextDeferred) {
                             std::cerr
-                                << "P2P mining context received but trust promotion "
-                                   "is not wired into the executable yet\n";
+                                << "P2P mining context deferred: expected payout "
+                                   "identity is not available\n";
                         }
                     } catch (const std::exception& e) {
                         std::cerr << "P2P message rejected: " << e.what() << '\n';
@@ -503,6 +530,11 @@ int main(int argc, char** argv) {
             std::cout << "P2P node id:    "
                       << zano_p2pool::hash_to_hex(
                              p2p_runtime->local_handshake().node_id)
+                      << '\n';
+            std::cout << "Mining-context trust: "
+                      << (p2p_protocol.mining_context_trust_ready()
+                              ? "ready"
+                              : "deferred")
                       << '\n';
 
             for (const auto& peer : options.p2p_peers) {
@@ -517,9 +549,6 @@ int main(int argc, char** argv) {
                 }
             }
 
-            // Exercise the mining-context wire path now. Receivers still defer
-            // peer-derived trust until the executable has an independently
-            // decoded expected payout identity for checkpoint 6B.4.
             p2p_runtime->broadcast(
                 zano_p2pool::make_p2p_mining_context_envelope(
                     zano_p2pool::p2p_mining_context_proposal_from_template(
@@ -602,6 +631,8 @@ int main(int argc, char** argv) {
 
                 p2p_protocol.remember_trusted_work(
                     trusted_context_from_live(next));
+                p2p_protocol.set_local_mining_anchor(
+                    zano_p2pool::p2p_mining_anchor_from_template(next.block));
 
                 if (server) {
                     const std::uint64_t next_version = server->publish_template(
