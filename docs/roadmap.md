@@ -66,8 +66,8 @@ shares through the verified Stratum path.
 - [x] handshake/version/network identity codec
 - [x] capability bits and public node identifier semantics
 - [x] wrong-network / unsupported-version rejection
-- [ ] TCP listener/client transport
-- [ ] bounded stream framing
+- [x] TCP listener/client transport
+- [x] bounded stream framing
 - [ ] share gossip
 - [ ] missing-parent synchronization
 - [ ] best-tip sync hints
@@ -83,8 +83,13 @@ payload length), enforce a 64 KiB payload cap, and fail closed on malformed,
 truncated, trailing, unsupported-version/type/flag data. The handshake carries
 network, non-zero public 32-byte node ID, capability bits, advertised listen port,
 and a best-share sync hint. Best-share hints are not trusted consensus data.
-Normal and exact-Zano CI are green on the checkpoint code head; `p2p_protocol_test`
-brings the suite to 14 tests.
+
+Checkpoint 2 adds `P2pTcpListener`, outbound `connect_p2p_peer()`, and move-only
+live peer connections over TCP. The stream reader validates the bounded frame
+header before allocating/reading payload bytes. The loopback integration test
+covers bidirectional handshakes, continued post-handshake framing, wrong-network
+and self-connection rejection, oversized payload claims, and unsupported versions.
+Normal and exact-Zano CI are green; `p2p_transport_test` brings the suite to 15 tests.
 
 ## Phase 6 — PPLNS and payouts
 
