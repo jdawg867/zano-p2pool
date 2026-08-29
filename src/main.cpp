@@ -411,6 +411,14 @@ zano_p2pool::ShareWorkContext trusted_context_from_live(
     };
 }
 
+void set_local_p2p_context(
+    zano_p2pool::P2pNodeProtocol& protocol,
+    const LiveTemplate& live) {
+    protocol.set_local_mining_context(
+        zano_p2pool::p2p_mining_anchor_from_template(live.block),
+        zano_p2pool::p2p_mining_context_proposal_from_template(live.block));
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -456,8 +464,7 @@ int main(int argc, char** argv) {
         zano_p2pool::P2pNodeProtocol p2p_protocol(
             node_chain, trusted_work, node_state_mutex);
         p2p_protocol.remember_trusted_work(trusted_context_from_live(live));
-        p2p_protocol.set_local_mining_anchor(
-            zano_p2pool::p2p_mining_anchor_from_template(live.block));
+        set_local_p2p_context(p2p_protocol, live);
 
         const zano_p2pool::ZanoAddressDecodeResult payout_address =
             zano_p2pool::decode_zano_standard_address(options.wallet);
@@ -513,6 +520,21 @@ int main(int argc, char** argv) {
                                         ? " (trusted work inserted)"
                                         : "")
                                 << '\n';
+
+                            // A newly inserted peer context proves this is the
+                            // first successful exchange for that exact header.
+                            // Reply with our current context once; if the peer
+                            // replies again, idempotent trust returns inserted=false
+                            // and the exchange terminates without an echo loop.
+                            if (result.mining_context_registry_inserted) {
+                                if (const auto local =
+                                        p2p_protocol.local_mining_context_envelope();
+                                    local.has_value()) {
+                                    static_cast<void>(p2p_runtime->send_to(
+                                        peer.node_id,
+                                        *local));
+                                }
+                            }
                         } else if (result.status ==
                                    zano_p2pool::P2pNodeMessageStatus::MiningContextDeferred) {
                             std::cerr
@@ -549,10 +571,10 @@ int main(int argc, char** argv) {
                 }
             }
 
-            p2p_runtime->broadcast(
-                zano_p2pool::make_p2p_mining_context_envelope(
-                    zano_p2pool::p2p_mining_context_proposal_from_template(
-                        live.block)));
+            if (const auto local = p2p_protocol.local_mining_context_envelope();
+                local.has_value()) {
+                p2p_runtime->broadcast(*local);
+            }
         }
 
         std::unique_ptr<zano_p2pool::StratumTcpServer> server;
@@ -631,8 +653,7 @@ int main(int argc, char** argv) {
 
                 p2p_protocol.remember_trusted_work(
                     trusted_context_from_live(next));
-                p2p_protocol.set_local_mining_anchor(
-                    zano_p2pool::p2p_mining_anchor_from_template(next.block));
+                set_local_p2p_context(p2p_protocol, next);
 
                 if (server) {
                     const std::uint64_t next_version = server->publish_template(
@@ -653,10 +674,11 @@ int main(int argc, char** argv) {
                 }
 
                 if (p2p_runtime) {
-                    p2p_runtime->broadcast(
-                        zano_p2pool::make_p2p_mining_context_envelope(
-                            zano_p2pool::p2p_mining_context_proposal_from_template(
-                                next.block)));
+                    if (const auto local =
+                            p2p_protocol.local_mining_context_envelope();
+                        local.has_value()) {
+                        p2p_runtime->broadcast(*local);
+                    }
                 }
                 live = std::move(next);
             } catch (const std::exception& e) {
