@@ -85,17 +85,19 @@ Milestone 0.4 was validated with a local exact-Zano Release build passing all 13
 
 ## Milestone 0.5
 
-Current work builds the node-to-node P2P foundation. Checkpoint 1 defines a deterministic v1 binary envelope and handshake before any sockets are added:
+Current work builds the node-to-node P2P foundation. The first three checkpoints now provide:
 
-- `ZP2P` frame magic, protocol version, message type, reserved flags, and big-endian payload length;
-- strict 64 KiB payload bound and exact-frame parsing;
-- testnet/mainnet identity in the handshake;
-- non-zero public 32-byte node identifier;
+- `ZP2P` versioned binary framing with a strict 64 KiB payload bound;
+- testnet/mainnet handshakes with non-zero public 32-byte node identifiers;
 - capability bits for share gossip and missing-parent synchronization;
-- advertised listen port and best-share synchronization hint;
-- deterministic rejection of wrong networks, self-connections, unsupported versions/types/flags, malformed sizes, truncation, and trailing bytes.
+- configurable TCP listener/client transport with wrong-network, self-connection, oversized-frame, and unsupported-version rejection;
+- established peer sessions that remain open after the handshake;
+- canonical `ShareAnnounce` messages that carry the existing 165-byte `Share` encoding without introducing a second serialization format;
+- duplicate connected/orphaned share suppression before expensive verification;
+- received peer shares routed through `ShareChain::submit_share()` only when the share's Zano height/mining-header pair is already present in a **locally trusted** work-context registry;
+- exact-Zano socket tests that locally rehash an announced share before allowing it to affect cumulative work.
 
-Best-share hints are only synchronization hints. Peer-claimed chain work, PoW results, and network difficulty are never trusted without local verification.
+Peer-claimed chain work, PoW results, network difficulty, and mining headers are never trusted automatically. Independent daemon `getblocktemplate` calls can produce different mining headers at the same Zano height, so true multi-node mining still needs a shared or reconstructable mining-context mechanism. That design must be solved without weakening the existing trusted-context rule.
 
 ## Requirements
 
