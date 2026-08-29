@@ -72,10 +72,16 @@ bool send_all(int fd, std::string_view data) noexcept {
 
 }  // namespace
 
-StratumTcpServer::StratumTcpServer(StratumServerConfig config)
+StratumTcpServer::StratumTcpServer(
+    StratumServerConfig config,
+    ShareChain* shared_chain)
     : config_(std::move(config)),
       sessions_(config_.sessions),
-      submissions_(sessions_, share_chain_) {
+      owned_share_chain_(
+          shared_chain == nullptr ? std::make_unique<ShareChain>() : nullptr),
+      share_chain_(
+          shared_chain != nullptr ? shared_chain : owned_share_chain_.get()),
+      submissions_(sessions_, *share_chain_) {
     if (config_.bind_address.empty()) {
         throw std::runtime_error("Stratum bind address must not be empty");
     }
@@ -184,7 +190,7 @@ std::uint64_t StratumTcpServer::publish_template(
 
 std::size_t StratumTcpServer::connected_share_count() const noexcept {
     std::lock_guard lock(state_mutex_);
-    return share_chain_.connected_size();
+    return share_chain_->connected_size();
 }
 
 void StratumTcpServer::accept_loop() {
