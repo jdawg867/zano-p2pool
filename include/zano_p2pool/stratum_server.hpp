@@ -32,11 +32,12 @@ class StratumTcpServer {
 public:
     // When shared_chain is null the server preserves the standalone behavior
     // and owns an internal chain. A full P2Pool node supplies its node-wide
-    // ShareChain here so Stratum and P2P operate on exactly the same verified
-    // consensus state.
+    // ShareChain and the mutex protecting that chain so Stratum and P2P operate
+    // on exactly the same verified, serialized consensus state.
     explicit StratumTcpServer(
         StratumServerConfig config = {},
-        ShareChain* shared_chain = nullptr);
+        ShareChain* shared_chain = nullptr,
+        std::mutex* shared_chain_mutex = nullptr);
     ~StratumTcpServer();
 
     StratumTcpServer(const StratumTcpServer&) = delete;
@@ -81,6 +82,7 @@ private:
     StratumSessionRegistry sessions_;
     std::unique_ptr<ShareChain> owned_share_chain_;
     ShareChain* share_chain_{nullptr};
+    std::mutex* shared_chain_mutex_{nullptr};
     StratumSubmissionRouter submissions_;
 
     std::atomic<bool> running_{false};
