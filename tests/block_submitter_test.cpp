@@ -85,12 +85,18 @@ int main() {
     submitter.start();
     CHECK(submitter.running());
 
-    CHECK(submitter.enqueue(BlockCandidate{100, header_a, 1}));
-    CHECK(submitter.enqueue(BlockCandidate{100, header_a, 2}));
-    CHECK(submitter.enqueue(BlockCandidate{100, header_a, 3}));
+    CHECK(submitter.enqueue(BlockCandidate{100, header_a, 1}) ==
+          BlockCandidateQueueStatus::Queued);
+    CHECK(submitter.enqueue(BlockCandidate{100, header_a, 2}) ==
+          BlockCandidateQueueStatus::Queued);
+    CHECK(submitter.enqueue(BlockCandidate{100, header_a, 3}) ==
+          BlockCandidateQueueStatus::Queued);
     CHECK(events.wait_for(1));
 
-    // First success for header A purges all queued siblings for that template.
+    // First success for header A purges all queued siblings and retires the
+    // exact template. Already-in-flight Stratum submissions for that solved
+    // header must now fail admission synchronously instead of reaching the
+    // worker and generating a template-missing log storm.
     {
         std::lock_guard lock(submitted_mutex);
         CHECK(submitted.size() == 1);
@@ -98,20 +104,22 @@ int main() {
     }
     {
         std::lock_guard lock(events.mutex);
+        CHECK(events.values.size() == 1);
         CHECK(events.values.front().status == BlockSubmitStatus::Submitted);
         CHECK(events.values.front().candidate.nonce == 1);
     }
 
-    CHECK(submitter.enqueue(BlockCandidate{101, header_missing, 7}));
-    CHECK(events.wait_for(2));
-    {
-        std::lock_guard lock(events.mutex);
-        CHECK(events.values[1].status == BlockSubmitStatus::TemplateMissing);
-    }
+    CHECK(submitter.enqueue(BlockCandidate{100, header_a, 4}) ==
+          BlockCandidateQueueStatus::StaleTemplate);
+    CHECK(submitter.enqueue(BlockCandidate{101, header_missing, 7}) ==
+          BlockCandidateQueueStatus::StaleTemplate);
+    CHECK(submitter.queued() == 0);
 
     // A submission failure is surfaced but leaves the worker alive.
     submitter.stop();
     CHECK(!submitter.running());
+    CHECK(submitter.enqueue(BlockCandidate{101, header_b, 8}) ==
+          BlockCandidateQueueStatus::Stopped);
 
     Events failing_events;
     BlockCandidateSubmitter failing(
@@ -123,7 +131,8 @@ int main() {
         });
     failing.remember_template(header_b, base);
     failing.start();
-    CHECK(failing.enqueue(BlockCandidate{102, header_b, 9}));
+    CHECK(failing.enqueue(BlockCandidate{102, header_b, 9}) ==
+          BlockCandidateQueueStatus::Queued);
     CHECK(failing_events.wait_for(1));
     {
         std::lock_guard lock(failing_events.mutex);
@@ -134,5 +143,8 @@ int main() {
 
     CHECK(std::string(block_submit_status_name(BlockSubmitStatus::Submitted)) ==
           "submitted");
+    CHECK(std::string(block_candidate_queue_status_name(
+              BlockCandidateQueueStatus::StaleTemplate)) ==
+          "stale-template");
     return 0;
 }
