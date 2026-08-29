@@ -27,6 +27,17 @@ std::string required_string(json_object* object, const char* name) {
     return json_object_get_string(value);
 }
 
+std::string optional_object_json(json_object* object, const char* name) {
+    json_object* value = nullptr;
+    if (!json_object_object_get_ex(object, name, &value) || value == nullptr) {
+        return {};
+    }
+    if (json_object_get_type(value) != json_type_object) {
+        throw std::runtime_error(std::string("JSON field is not an object: ") + name);
+    }
+    return json_object_to_json_string_ext(value, JSON_C_TO_STRING_PLAIN);
+}
+
 std::string required_integer_string(json_object* object, const char* name) {
     auto* value = required_field(object, name);
     const auto type = json_object_get_type(value);
@@ -98,6 +109,7 @@ BlockTemplate parse_block_template_json(std::string_view json_text) {
     out.blocktemplate_blob = required_string(root.get(), "blocktemplate_blob");
     out.difficulty = required_integer_string(root.get(), "difficulty");
     out.height = required_u64(root.get(), "height");
+    out.miner_tx_tgc_json = optional_object_json(root.get(), "miner_tx_tgc");
     out.prev_hash = required_string(root.get(), "prev_hash");
     out.seed = required_string(root.get(), "seed");
     out.status = required_string(root.get(), "status");
