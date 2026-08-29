@@ -30,27 +30,36 @@
 - [x] share timestamp rules
 - [x] cumulative work
 - [x] stale/orphan handling
+- [ ] local persistence
 - [x] deterministic best-tip/reorg rules
 - [x] share-chain structural tests
-- [x] gate production share-chain admission on local ProgPoWZ verification
-- [x] bind verified admission to locally trusted Zano work context
-- [x] record full-network block-candidate status on verified shares
-- [ ] local persistence/recovery follow-up
+- [x] gate share-chain admission on local ProgPoWZ verification
 
-Milestone 0.3 local consensus scope is complete: canonical shares, cumulative-work fork
-choice, orphan/stale handling, timestamp policy, trusted-template binding, and exact
-ProgPoWZ admission are covered by deterministic Release tests. Persistence remains a
-separate follow-up after in-memory consensus behavior is stable.
+Milestone 0.3 is complete and merged to `main`. Production-facing
+`ShareChain::submit_share()` binds locally trusted Zano work context and performs
+exact ProgPoWZ verification before claimed share difficulty contributes chain work.
 
 ## Phase 4 — Stratum
 
-- [ ] Stratum TCP listener
-- [ ] miner login / wallet parsing
-- [ ] job generation
-- [ ] per-miner difficulty
-- [ ] share submission
-- [ ] duplicate/stale share detection
-- [ ] test with ProgPoWZ-capable miners
+- [x] Zano-compatible JSON-RPC request/response codec
+- [x] deterministic worker/session state
+- [x] versioned local work registry
+- [x] per-session difficulty and target generation
+- [x] current/stale/unknown work-header classification
+- [x] route `eth_submitWork` into verified share-chain admission
+- [x] duplicate `(job_version, nonce)` rejection
+- [x] distinguish accepted share vs. full-network block candidate
+- [x] Stratum TCP listener
+- [x] bind to loopback by default with configurable port
+- [x] local socket integration test
+- [x] wire live daemon-derived templates into executable Stratum mode
+- [x] test with a real ProgPoWZ-capable miner
+
+Milestone 0.4 is complete on the feature branch. Validation includes a local
+exact-Zano Release build passing all 13 tests, live testnet template refresh on
+`127.0.0.1:3333`, stable suppression of randomized same-tip templates, and a real
+SRBMiner-MULTI `progpow_zano` session submitting repeatedly accepted shares through
+the locally verified Stratum path.
 
 ## Phase 5 — P2P network
 

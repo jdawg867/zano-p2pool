@@ -12,7 +12,7 @@ Build a native Zano P2Pool network where:
 - P2Pool nodes exchange and validate shares peer-to-peer;
 - each node maintains/verifies the share chain itself;
 - ProgPoWZ shares are independently verified;
-- full-difficulty solutions are submitted directly to `zanod`;
+- full-difficulty solutions are surfaced as block candidates for controlled submission;
 - payout accounting is derived deterministically from the share chain;
 - a later protocol phase investigates direct non-custodial miner payouts.
 
@@ -44,25 +44,44 @@ The second milestone implements the consensus-critical local PoW verification la
 - classify local candidates as `Invalid`, `Share`, or `Block` without submitting them;
 - validate the standalone header derivation byte-for-byte against Zano on live testnet.
 
-Milestone 0.2 was validated against live Zano testnet and merged through PR #4.
+Milestone 0.2 was validated against live Zano testnet and merged to `main`.
 
 ## Milestone 0.3
 
-The third milestone adds the deterministic local P2Pool share-chain foundation:
+The third milestone establishes the deterministic in-memory P2Pool share chain:
 
-- versioned canonical share serialization and deterministic share IDs;
-- explicit parent linkage with a zero-parent root convention;
-- fixed-width share and network difficulty commitments;
-- deterministic per-share work and checked 256-bit cumulative work;
+- canonical versioned share serialization and deterministic IDs;
+- parent linkage and root rules;
+- fixed-width share/network difficulty commitments;
+- checked cumulative 256-bit share work;
 - orphan retention/promotion and stale-fork tracking;
 - deterministic best-tip selection and cumulative-work reorgs;
-- explicit timestamp policy with bounded future skew and parent-relative backward tolerance;
-- production-facing share admission bound to locally trusted Zano height, mining-header hash, and network difficulty;
-- exact local ProgPoWZ verification before any claimed share difficulty contributes chain work;
-- recording of whether an accepted share also meets full Zano network difficulty;
-- fail-closed behavior when the exact ProgPoWZ backend is unavailable.
+- trusted Zano work-context matching;
+- explicit timestamp rules;
+- mandatory exact local ProgPoWZ verification before production-admitted work contributes to the chain;
+- explicit share vs. full-network block-candidate classification.
 
-Milestone 0.3 was validated in both lightweight and exact-Zano CI modes, plus a local exact-Zano Release build with all 8 tests passing.
+Milestone 0.3 passed local exact-Zano Release tests and CI and was merged to `main`.
+
+## Milestone 0.4
+
+The fourth milestone adds the local miner-facing Stratum foundation:
+
+- Zano-compatible JSON-RPC 2.0 codec for `eth_submitLogin`, `eth_getWork`, `eth_submitHashrate`, and `eth_submitWork`;
+- exact `[header, seed, target, height]` work formatting;
+- deterministic worker/session state;
+- monotonic versioned work-template registry;
+- per-session requested-difficulty clamping and target calculation;
+- share difficulty capped at current Zano network difficulty;
+- current/stale/unknown header classification per session;
+- per-session `(job_version, nonce)` duplicate suppression;
+- `eth_submitWork` routing through exact local ProgPoWZ and `ShareChain::submit_share()`;
+- accepted-share vs. full-network block-candidate classification without automatic daemon submission;
+- loopback TCP listener with line-delimited JSON-RPC framing;
+- persistent executable Stratum mode with live daemon template refresh;
+- deterministic suppression of randomized same-tip `getblocktemplate` churn.
+
+Milestone 0.4 was validated with a local exact-Zano Release build passing all 13 tests, live Zano testnet template refresh on `127.0.0.1:3333`, and a real SRBMiner-MULTI `progpow_zano` session submitting repeatedly accepted shares through the verified Stratum path.
 
 ## Requirements
 
@@ -81,13 +100,15 @@ sudo apt install -y \
 
 ## Build
 
+Lightweight build:
+
 ```bash
 cmake -S . -B build
 cmake --build build -j"$(nproc)"
 ctest --test-dir build --output-on-failure
 ```
 
-To enable the exact ProgPoWZ backend from a local Zano source tree:
+For Stratum and exact ProgPoWZ verification, configure against an audited Zano source tree:
 
 ```bash
 cmake -S . -B build-zano \
@@ -104,7 +125,7 @@ ctest --test-dir build-zano --output-on-failure
 Testnet is the development default:
 
 ```bash
-./build/zano-p2pool \
+./build-zano/zano-p2pool \
   --network testnet \
   --wallet YOUR_TESTNET_ZANO_ADDRESS
 ```
@@ -118,34 +139,27 @@ http://127.0.0.1:12111/json_rpc
 You can also select mainnet explicitly:
 
 ```bash
-./build/zano-p2pool \
+./build-zano/zano-p2pool \
   --network mainnet \
   --wallet YOUR_ZANO_ADDRESS
 ```
 
 or override the RPC endpoint directly with `--rpc-url`.
 
-Expected output includes the independently derived mining header:
+Stratum development mode is opt-in and defaults to loopback:
 
-```text
-zano-p2pool v0.1.0-dev
-Network: testnet
-RPC: http://127.0.0.1:12111/json_rpc
-ProgPoWZ backend: ...
-
-Template status: OK
-Height:          ...
-ProgPoWZ epoch:  ...
-Previous hash:   ...
-Difficulty:      ...
-Target:          ...
-Block reward:    ...
-ProgPoWZ seed:   ...
-Blob bytes:      ...
-Regular txs:     ...
-Mining blob:     ... bytes
-Mining header:   ...
+```bash
+./build-zano/zano-p2pool \
+  --network testnet \
+  --wallet YOUR_TESTNET_ZANO_ADDRESS \
+  --stratum \
+  --stratum-bind 127.0.0.1 \
+  --stratum-port 3333 \
+  --stratum-difficulty 100000 \
+  --template-refresh-seconds 5
 ```
+
+Expected startup output includes the independently derived mining header and the local Stratum listener.
 
 ## Current Zano network defaults
 
@@ -174,6 +188,6 @@ See [`docs/roadmap.md`](docs/roadmap.md).
 ## Safety
 
 This repository is experimental consensus/mining software. Until share validation,
-difficulty calculations, block serialization, share-chain consensus, networking, and
-payout rules have extensive test coverage, it should only be used for development and
-controlled testing.
+difficulty calculations, block serialization, share-chain consensus, Stratum, P2P,
+and payout rules have extensive test coverage, it should only be used for development
+and controlled testing.

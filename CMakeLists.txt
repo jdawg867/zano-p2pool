@@ -15,6 +15,7 @@ set(ZANO_P2POOL_ZANO_SOURCE_DIR "" CACHE PATH
     "Path to a Zano source tree used to enable exact ProgPoWZ support")
 
 find_package(PkgConfig REQUIRED)
+find_package(Threads REQUIRED)
 pkg_check_modules(CURL REQUIRED IMPORTED_TARGET libcurl)
 pkg_check_modules(JSONC REQUIRED IMPORTED_TARGET json-c)
 
@@ -28,6 +29,11 @@ add_library(zano_p2pool_core
     src/share.cpp
     src/share_chain.cpp
     src/share_validation.cpp
+    src/stratum_protocol.cpp
+    src/stratum_server.cpp
+    src/stratum_session.cpp
+    src/stratum_submission.cpp
+    src/template_refresh.cpp
 )
 
 target_include_directories(zano_p2pool_core
@@ -39,6 +45,7 @@ target_link_libraries(zano_p2pool_core
     PUBLIC
         PkgConfig::CURL
         PkgConfig::JSONC
+        Threads::Threads
 )
 
 target_compile_options(zano_p2pool_core PRIVATE
@@ -63,7 +70,6 @@ if(ZANO_P2POOL_ZANO_SOURCE_DIR)
     endif()
 
     enable_language(C)
-    find_package(Threads REQUIRED)
 
     add_subdirectory(
         "${_zano_libethash_dir}"
@@ -71,8 +77,6 @@ if(ZANO_P2POOL_ZANO_SOURCE_DIR)
         EXCLUDE_FROM_ALL
     )
 
-    # Zano's libethash CMake target relies on include paths supplied by the
-    # parent Zano build. Supply the same root explicitly when embedded here.
     target_include_directories(ethash PUBLIC "${_zano_libethash_dir}")
     target_link_libraries(ethash PUBLIC Threads::Threads)
 
@@ -131,4 +135,24 @@ if(ZANO_P2POOL_BUILD_TESTS)
     add_executable(share_chain_test tests/share_chain_test.cpp)
     target_link_libraries(share_chain_test PRIVATE zano_p2pool_core)
     add_test(NAME share_chain_test COMMAND share_chain_test)
+
+    add_executable(stratum_protocol_test tests/stratum_protocol_test.cpp)
+    target_link_libraries(stratum_protocol_test PRIVATE zano_p2pool_core)
+    add_test(NAME stratum_protocol_test COMMAND stratum_protocol_test)
+
+    add_executable(stratum_session_test tests/stratum_session_test.cpp)
+    target_link_libraries(stratum_session_test PRIVATE zano_p2pool_core)
+    add_test(NAME stratum_session_test COMMAND stratum_session_test)
+
+    add_executable(stratum_submission_test tests/stratum_submission_test.cpp)
+    target_link_libraries(stratum_submission_test PRIVATE zano_p2pool_core)
+    add_test(NAME stratum_submission_test COMMAND stratum_submission_test)
+
+    add_executable(stratum_server_test tests/stratum_server_test.cpp)
+    target_link_libraries(stratum_server_test PRIVATE zano_p2pool_core)
+    add_test(NAME stratum_server_test COMMAND stratum_server_test)
+
+    add_executable(template_refresh_test tests/template_refresh_test.cpp)
+    target_link_libraries(template_refresh_test PRIVATE zano_p2pool_core)
+    add_test(NAME template_refresh_test COMMAND template_refresh_test)
 endif()
