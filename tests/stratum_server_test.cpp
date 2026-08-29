@@ -107,7 +107,8 @@ int main() {
     Hash256 seed{};
     seed[31] = 1;
 
-    StratumTcpServer server(config);
+    ShareChain shared_chain;
+    StratumTcpServer server(config, &shared_chain);
     CHECK(server.publish_template(
               header,
               seed,
@@ -166,10 +167,12 @@ int main() {
     CHECK(submit_response ==
           R"({"jsonrpc":"2.0","id":4,"result":true})");
     CHECK(server.connected_share_count() == 1);
+    CHECK(shared_chain.connected_size() == 1);
 #else
     CHECK(submit_response.find(R"("id":4)") != std::string::npos);
     CHECK(submit_response.find("pow-backend-unavailable") != std::string::npos);
     CHECK(server.connected_share_count() == 0);
+    CHECK(shared_chain.connected_size() == 0);
 #endif
 
     send_all(client, submit);
