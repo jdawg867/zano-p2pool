@@ -46,6 +46,7 @@ add_library(zano_p2pool_core
     src/stratum_session.cpp
     src/stratum_submission.cpp
     src/template_refresh.cpp
+    src/zano_address.cpp
     src/zano_curve.cpp
 )
 
@@ -250,4 +251,8 @@ if(ZANO_P2POOL_BUILD_TESTS)
     add_executable(p2p_mining_context_trust_test tests/p2p_mining_context_trust_test.cpp)
     target_link_libraries(p2p_mining_context_trust_test PRIVATE zano_p2pool_core)
     add_test(NAME p2p_mining_context_trust_test COMMAND p2p_mining_context_trust_test)
+
+    add_executable(zano_address_test tests/zano_address_test.cpp)
+    target_link_libraries(zano_address_test PRIVATE zano_p2pool_core)
+    add_test(NAME zano_address_test COMMAND zano_address_test)
 endif()
