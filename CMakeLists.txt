@@ -36,7 +36,7 @@ add_library(zano_p2pool_core
     src/p2p_sync.cpp
     src/p2p_tip.cpp
     src/p2p_transport.cpp
-    src/plns.cpp
+    src/pplns.cpp
     src/pow_target.cpp
     src/progpowz.cpp
     src/rpc_client.cpp
