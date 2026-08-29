@@ -47,9 +47,9 @@ jobs:
           path: zano-src
           sparse-checkout: |
             contrib/ethereum/libethash
+            contrib/epee/include/warnings.h
             src/crypto
             src/common
-            src/warnings.h
           sparse-checkout-cone-mode: false
 
       - name: Install dependencies
