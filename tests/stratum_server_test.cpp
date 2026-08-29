@@ -13,6 +13,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -108,7 +109,8 @@ int main() {
     seed[31] = 1;
 
     ShareChain shared_chain;
-    StratumTcpServer server(config, &shared_chain);
+    std::mutex shared_chain_mutex;
+    StratumTcpServer server(config, &shared_chain, &shared_chain_mutex);
     CHECK(server.publish_template(
               header,
               seed,
@@ -167,12 +169,18 @@ int main() {
     CHECK(submit_response ==
           R"({"jsonrpc":"2.0","id":4,"result":true})");
     CHECK(server.connected_share_count() == 1);
-    CHECK(shared_chain.connected_size() == 1);
+    {
+        std::lock_guard lock(shared_chain_mutex);
+        CHECK(shared_chain.connected_size() == 1);
+    }
 #else
     CHECK(submit_response.find(R"("id":4)") != std::string::npos);
     CHECK(submit_response.find("pow-backend-unavailable") != std::string::npos);
     CHECK(server.connected_share_count() == 0);
-    CHECK(shared_chain.connected_size() == 0);
+    {
+        std::lock_guard lock(shared_chain_mutex);
+        CHECK(shared_chain.connected_size() == 0);
+    }
 #endif
 
     send_all(client, submit);
