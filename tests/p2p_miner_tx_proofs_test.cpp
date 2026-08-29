@@ -95,13 +95,15 @@ void append_key(std::vector<std::uint8_t>& out, const ZanoCurveKey& key) {
 
     crypto::generic_double_schnorr_sig proof{};
     const crypto::point_t balance = crypto::c_point_0;
-    CHECK(crypto::generate_double_schnorr_sig<crypto::gt_G, crypto::gt_G>(
-        tx_id,
-        balance,
-        crypto::scalar_t(0),
-        crypto::point_t(tx_public),
-        crypto::scalar_t(tx_secret),
-        proof));
+    const bool generated =
+        crypto::generate_double_schnorr_sig<crypto::gt_G, crypto::gt_G>(
+            tx_id,
+            balance,
+            crypto::scalar_t(0),
+            crypto::point_t(tx_public),
+            crypto::scalar_t(tx_secret),
+            proof);
+    CHECK(generated);
     static_assert(sizeof(proof) == 96);
     std::memcpy(serialized.data(), &proof, serialized.size());
 #else
