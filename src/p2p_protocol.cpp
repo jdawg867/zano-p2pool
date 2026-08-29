@@ -10,7 +10,8 @@ namespace zano_p2pool {
 namespace {
 
 [[nodiscard]] bool is_supported_message_type(std::uint8_t value) noexcept {
-    return value == static_cast<std::uint8_t>(P2pMessageType::Handshake);
+    return value == static_cast<std::uint8_t>(P2pMessageType::Handshake) ||
+           value == static_cast<std::uint8_t>(P2pMessageType::ShareAnnounce);
 }
 
 [[nodiscard]] bool is_supported_network(std::uint8_t value) noexcept {
