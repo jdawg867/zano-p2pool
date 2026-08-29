@@ -54,6 +54,7 @@ exact ProgPoWZ verification before claimed share difficulty contributes chain wo
 - [ ] local socket integration test
 - [ ] test with ProgPoWZ-capable miners
 
+Checkpoint 2 was confirmed locally with an exact-Zano Release build passing 10/10 tests.
 Checkpoint 3 is CI-green. Current work is resolved against the job actually issued
 to the session, duplicate nonces are suppressed before expensive hashing, and
 accepted shares/block candidates both pass through the same exact local ProgPoWZ
