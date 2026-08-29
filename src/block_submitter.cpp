@@ -97,21 +97,21 @@ void BlockCandidateSubmitter::remember_template(
     }
 }
 
-BlockCandidateQueueStatus BlockCandidateSubmitter::enqueue(
+BlockCandidateQueueResult BlockCandidateSubmitter::enqueue(
     const BlockCandidate& candidate) noexcept {
     {
         std::lock_guard lock(mutex_);
         if (!running_ || stop_requested_) {
-            return BlockCandidateQueueStatus::Stopped;
+            return {BlockCandidateQueueStatus::Stopped};
         }
 
         const auto template_it = templates_.find(candidate.mining_header_hash);
         if (template_it == templates_.end()) {
-            return BlockCandidateQueueStatus::StaleTemplate;
+            return {BlockCandidateQueueStatus::StaleTemplate};
         }
 
         if (queue_.size() >= max_queue_) {
-            return BlockCandidateQueueStatus::QueueFull;
+            return {BlockCandidateQueueStatus::QueueFull};
         }
 
         queue_.push_back(QueuedCandidate{
@@ -120,7 +120,7 @@ BlockCandidateQueueStatus BlockCandidateSubmitter::enqueue(
         });
     }
     cv_.notify_one();
-    return BlockCandidateQueueStatus::Queued;
+    return {BlockCandidateQueueStatus::Queued};
 }
 
 bool BlockCandidateSubmitter::running() const noexcept {
