@@ -45,6 +45,7 @@ enum class ShareRejectReason {
     None,
     ZeroShareDifficulty,
     ZeroNetworkDifficulty,
+    ShareDifficultyAboveNetwork,
     InvalidRootHeight,
     InvalidNonRootHeight,
     ParentHeightMismatch,
