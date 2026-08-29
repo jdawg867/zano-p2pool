@@ -23,6 +23,7 @@ add_library(zano_p2pool_core
     src/block_template.cpp
     src/crypto_hash.cpp
     src/mining_header.cpp
+    src/p2p_protocol.cpp
     src/pow_target.cpp
     src/progpowz.cpp
     src/rpc_client.cpp
@@ -155,4 +156,8 @@ if(ZANO_P2POOL_BUILD_TESTS)
     add_executable(template_refresh_test tests/template_refresh_test.cpp)
     target_link_libraries(template_refresh_test PRIVATE zano_p2pool_core)
     add_test(NAME template_refresh_test COMMAND template_refresh_test)
+
+    add_executable(p2p_protocol_test tests/p2p_protocol_test.cpp)
+    target_link_libraries(p2p_protocol_test PRIVATE zano_p2pool_core)
+    add_test(NAME p2p_protocol_test COMMAND p2p_protocol_test)
 endif()
