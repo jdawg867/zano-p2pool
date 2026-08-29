@@ -10,6 +10,7 @@
 #include <mutex>
 #include <set>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -17,7 +18,7 @@ namespace zano_p2pool {
 
 struct StratumServerConfig {
     std::string bind_address{"127.0.0.1"};
-    std::uint16_t port{0};
+    std::uint16_t port{3333};
     std::size_t max_line_bytes{64 * 1024};
     StratumSessionConfig sessions{};
 };
@@ -53,7 +54,6 @@ public:
         const Difficulty128& network_difficulty);
 
     [[nodiscard]] std::size_t connected_share_count() const noexcept;
-    [[nodiscard]] const ConnectedShare* best_tip() const noexcept;
 
 private:
     void accept_loop();
