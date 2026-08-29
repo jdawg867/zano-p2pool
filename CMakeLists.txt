@@ -100,6 +100,7 @@ if(ZANO_P2POOL_ZANO_SOURCE_DIR)
 
     set(_zano_curve_sources
         "${_zano_source_dir}/src/crypto/crypto.cpp"
+        "${_zano_source_dir}/src/crypto/crypto-sugar.cpp"
         "${_zano_source_dir}/src/crypto/crypto-ops.c"
         "${_zano_source_dir}/src/crypto/crypto-ops-data.c"
         "${_zano_source_dir}/src/crypto/random.c"
