@@ -51,6 +51,7 @@ add_library(zano_p2pool_core
     src/template_refresh.cpp
     src/zano_address.cpp
     src/zano_curve.cpp
+    src/zano_miner_tx.cpp
 )
 
 target_include_directories(zano_p2pool_core
@@ -134,6 +135,40 @@ if(ZANO_P2POOL_ZANO_SOURCE_DIR)
 
         message(STATUS
             "Exact Zano curve backend enabled from: ${_zano_source_dir}/src/crypto")
+
+        # Pull only the canonical miner-transaction constructor object from
+        # currency_format_utils.cpp. Function/data sections plus linker GC keep
+        # unrelated daemon/database code out of P2Pool while preserving the
+        # exact HF6 output/range/balance-proof implementation reached by
+        # construct_miner_tx().
+        add_library(zano_p2pool_zano_miner_tx STATIC
+            "${_zano_source_dir}/src/currency_core/currency_format_utils.cpp"
+        )
+        target_include_directories(zano_p2pool_zano_miner_tx
+            PUBLIC
+                "${_zano_source_dir}/src"
+                "${_zano_source_dir}/contrib"
+                "${_zano_source_dir}/contrib/epee/include"
+        )
+        target_compile_definitions(zano_p2pool_zano_miner_tx PRIVATE STATICLIB=1)
+        target_compile_options(zano_p2pool_zano_miner_tx PRIVATE
+            -ffunction-sections
+            -fdata-sections
+        )
+        target_link_libraries(zano_p2pool_zano_miner_tx
+            PUBLIC
+                zano_p2pool_zano_curve
+                Threads::Threads
+        )
+
+        target_compile_definitions(zano_p2pool_core PUBLIC
+            ZANO_P2POOL_HAVE_ZANO_MINER_TX=1
+        )
+        target_link_libraries(zano_p2pool_core PUBLIC zano_p2pool_zano_miner_tx)
+        target_link_options(zano_p2pool_core INTERFACE -Wl,--gc-sections)
+
+        message(STATUS
+            "Exact Zano miner-tx constructor enabled from: ${_zano_source_dir}/src/currency_core/currency_format_utils.cpp")
     else()
         message(STATUS
             "Exact Zano curve backend disabled: src/crypto not present in Zano source tree")
@@ -270,4 +305,8 @@ if(ZANO_P2POOL_BUILD_TESTS)
     add_executable(zano_address_test tests/zano_address_test.cpp)
     target_link_libraries(zano_address_test PRIVATE zano_p2pool_core)
     add_test(NAME zano_address_test COMMAND zano_address_test)
+
+    add_executable(zano_miner_tx_test tests/zano_miner_tx_test.cpp)
+    target_link_libraries(zano_miner_tx_test PRIVATE zano_p2pool_core)
+    add_test(NAME zano_miner_tx_test COMMAND zano_miner_tx_test)
 endif()
