@@ -93,7 +93,7 @@ void recv_exact(int fd, std::uint8_t* data, std::size_t size) {
     if (header[4] != kP2pProtocolVersion) {
         throw std::runtime_error("unsupported P2P protocol version");
     }
-    if (header[5] != static_cast<std::uint8_t>(P2pMessageType::Handshake)) {
+    if (!p2p_message_type_supported(header[5])) {
         throw std::runtime_error("unsupported P2P message type");
     }
     if (read_u16_be(header, 6) != 0) {
