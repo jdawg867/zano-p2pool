@@ -39,6 +39,25 @@ enum class BlockCandidateQueueStatus : std::uint8_t {
     Stopped,
 };
 
+struct BlockCandidateQueueResult {
+    BlockCandidateQueueStatus status{BlockCandidateQueueStatus::Stopped};
+
+    // Existing callers historically treated enqueue() as a bool. A candidate
+    // for a retired template is intentionally considered handled: it must be
+    // discarded silently rather than producing a warning for every old-header
+    // submission already in flight after a block win.
+    [[nodiscard]] operator bool() const noexcept {
+        return status == BlockCandidateQueueStatus::Queued ||
+               status == BlockCandidateQueueStatus::StaleTemplate;
+    }
+
+    friend bool operator==(
+        const BlockCandidateQueueResult& left,
+        BlockCandidateQueueStatus right) noexcept {
+        return left.status == right;
+    }
+};
+
 using BlockSubmitFunction = std::function<void(const std::string& block_blob_hex)>;
 using BlockSubmitEventHandler = std::function<void(const BlockSubmitEvent&)>;
 
@@ -76,7 +95,7 @@ public:
     // StaleTemplate before it can reach the worker. This is important on fast
     // testnets where miners may have many old-header submissions already in
     // flight when the first sibling block is accepted.
-    [[nodiscard]] BlockCandidateQueueStatus enqueue(
+    [[nodiscard]] BlockCandidateQueueResult enqueue(
         const BlockCandidate& candidate) noexcept;
 
     [[nodiscard]] bool running() const noexcept;
