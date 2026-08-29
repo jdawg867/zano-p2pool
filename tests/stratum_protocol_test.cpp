@@ -3,9 +3,11 @@
 #include "zano_p2pool/stratum_protocol.hpp"
 #include "test_check.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
 namespace {
 
@@ -104,7 +106,7 @@ int main() {
               StratumId{std::string{"req-7"}},
               kStratumErrorMethodNotFound,
               "unknown method") ==
-          "{\"jsonrpc\":\"2.0\",\"id\":\"req-7\",\"error\":{""
+          "{\"jsonrpc\":\"2.0\",\"id\":\"req-7\",\"error\":{"
           "\"code\":-32601,\"message\":\"unknown method\"}}\n");
 
     const auto unknown = parse_stratum_request(
