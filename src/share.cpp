@@ -5,8 +5,10 @@
 #include <boost/multiprecision/cpp_int.hpp>
 
 #include <algorithm>
+#include <array>
 #include <limits>
 #include <stdexcept>
+#include <vector>
 
 namespace zano_p2pool {
 namespace {
@@ -15,6 +17,7 @@ using boost::multiprecision::uint128_t;
 using boost::multiprecision::uint256_t;
 
 constexpr std::array<std::uint8_t, 4> kShareMagic{'Z', 'P', '2', 'S'};
+constexpr std::array<std::uint8_t, 5> kPayoutMinerDomain{'Z', 'P', '2', 'P', 0};
 
 uint128_t parse_uint128_decimal(std::string_view text) {
     if (text.empty()) {
@@ -120,13 +123,39 @@ bool is_zero_share_id(const ShareId& id) noexcept {
     });
 }
 
+MinerId miner_id_from_payout(const PayoutPublicKeys& payout) {
+    std::vector<std::uint8_t> bytes;
+    bytes.reserve(kPayoutMinerDomain.size() + 64);
+    bytes.insert(bytes.end(), kPayoutMinerDomain.begin(), kPayoutMinerDomain.end());
+    bytes.insert(
+        bytes.end(), payout.spend_public_key.begin(), payout.spend_public_key.end());
+    bytes.insert(
+        bytes.end(), payout.view_public_key.begin(), payout.view_public_key.end());
+    return cn_fast_hash(bytes);
+}
+
 std::vector<std::uint8_t> serialize_share(const Share& share) {
-    if (share.version != kShareVersion1) {
+    if (share.version != kShareVersion1 && share.version != kShareVersion2) {
         throw std::invalid_argument("unsupported share version");
     }
+    if (share.version == kShareVersion1 && share.payout.has_value()) {
+        throw std::invalid_argument("share v1 cannot carry payout public keys");
+    }
+    if (share.version == kShareVersion2) {
+        if (!share.payout.has_value()) {
+            throw std::invalid_argument("share v2 requires payout public keys");
+        }
+        if (share.miner_id != miner_id_from_payout(*share.payout)) {
+            throw std::invalid_argument(
+                "share v2 miner id does not match payout public keys");
+        }
+    }
 
+    const std::size_t expected_size = share.version == kShareVersion1
+        ? kShareV1SerializedSize
+        : kShareV2SerializedSize;
     std::vector<std::uint8_t> bytes;
-    bytes.reserve(kShareV1SerializedSize);
+    bytes.reserve(expected_size);
     append_array(bytes, kShareMagic);
     bytes.push_back(share.version);
     append_array(bytes, share.parent_id);
@@ -139,15 +168,20 @@ std::vector<std::uint8_t> serialize_share(const Share& share) {
     append_array(bytes, share.network_difficulty);
     append_array(bytes, share.miner_id);
 
-    if (bytes.size() != kShareV1SerializedSize) {
-        throw std::logic_error("share v1 serialized-size invariant failed");
+    if (share.version == kShareVersion2) {
+        append_array(bytes, share.payout->spend_public_key);
+        append_array(bytes, share.payout->view_public_key);
+    }
+
+    if (bytes.size() != expected_size) {
+        throw std::logic_error("share serialized-size invariant failed");
     }
     return bytes;
 }
 
 Share deserialize_share(std::span<const std::uint8_t> bytes) {
-    if (bytes.size() != kShareV1SerializedSize) {
-        throw std::runtime_error("share v1 has invalid serialized size");
+    if (bytes.size() < 5) {
+        throw std::runtime_error("truncated share encoding");
     }
 
     std::size_t offset = 0;
@@ -158,8 +192,16 @@ Share deserialize_share(std::span<const std::uint8_t> bytes) {
 
     Share share;
     share.version = bytes[offset++];
-    if (share.version != kShareVersion1) {
+    const std::size_t expected_size = share.version == kShareVersion1
+        ? kShareV1SerializedSize
+        : share.version == kShareVersion2
+            ? kShareV2SerializedSize
+            : 0;
+    if (expected_size == 0) {
         throw std::runtime_error("unsupported share version");
+    }
+    if (bytes.size() != expected_size) {
+        throw std::runtime_error("share has invalid serialized size");
     }
 
     share.parent_id = read_array<32>(bytes, offset);
@@ -171,6 +213,17 @@ Share deserialize_share(std::span<const std::uint8_t> bytes) {
     share.share_difficulty = read_array<16>(bytes, offset);
     share.network_difficulty = read_array<16>(bytes, offset);
     share.miner_id = read_array<32>(bytes, offset);
+
+    if (share.version == kShareVersion2) {
+        PayoutPublicKeys payout;
+        payout.spend_public_key = read_array<32>(bytes, offset);
+        payout.view_public_key = read_array<32>(bytes, offset);
+        if (share.miner_id != miner_id_from_payout(payout)) {
+            throw std::runtime_error(
+                "share v2 miner id does not match payout public keys");
+        }
+        share.payout = payout;
+    }
 
     if (offset != bytes.size()) {
         throw std::logic_error("share parser did not consume canonical encoding");
