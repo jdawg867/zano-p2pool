@@ -149,6 +149,7 @@ if(ZANO_P2POOL_ZANO_SOURCE_DIR)
                 "${_zano_source_dir}/src"
                 "${_zano_source_dir}/contrib"
                 "${_zano_source_dir}/contrib/epee/include"
+                "${_zano_source_dir}/contrib/eos_portable_archive"
         )
         target_compile_definitions(zano_p2pool_zano_miner_tx PRIVATE STATICLIB=1)
         target_compile_options(zano_p2pool_zano_miner_tx PRIVATE
