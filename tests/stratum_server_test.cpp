@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cerrno>
 #include <chrono>
 #include <cstdint>
@@ -110,7 +111,24 @@ int main() {
 
     ShareChain shared_chain;
     std::mutex shared_chain_mutex;
-    StratumTcpServer server(config, &shared_chain, &shared_chain_mutex);
+    std::atomic<std::size_t> callback_count{0};
+    std::atomic<std::uint64_t> callback_nonce{0};
+    std::atomic<bool> callback_block_candidate{false};
+    std::atomic<bool> callback_chain_mutex_was_free{false};
+
+    StratumTcpServer server(
+        config,
+        &shared_chain,
+        &shared_chain_mutex,
+        [&](const Share& share, bool block_candidate) {
+            callback_nonce.store(share.nonce);
+            callback_block_candidate.store(block_candidate);
+            if (shared_chain_mutex.try_lock()) {
+                callback_chain_mutex_was_free.store(true);
+                shared_chain_mutex.unlock();
+            }
+            callback_count.fetch_add(1);
+        });
     CHECK(server.publish_template(
               header,
               seed,
@@ -173,6 +191,9 @@ int main() {
         std::lock_guard lock(shared_chain_mutex);
         CHECK(shared_chain.connected_size() == 1);
     }
+    CHECK(callback_count.load() == 1);
+    CHECK(callback_nonce.load() == UINT64_C(0x123456789abcdef0));
+    CHECK(callback_chain_mutex_was_free.load());
 #else
     CHECK(submit_response.find(R"("id":4)") != std::string::npos);
     CHECK(submit_response.find("pow-backend-unavailable") != std::string::npos);
@@ -181,11 +202,13 @@ int main() {
         std::lock_guard lock(shared_chain_mutex);
         CHECK(shared_chain.connected_size() == 0);
     }
+    CHECK(callback_count.load() == 0);
 #endif
 
     send_all(client, submit);
     const std::string duplicate = read_line(client);
     CHECK(duplicate.find("duplicate work") != std::string::npos);
+    CHECK(callback_count.load() <= 1);
 
     ::shutdown(client, SHUT_RDWR);
     ::close(client);
