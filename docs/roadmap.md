@@ -101,7 +101,8 @@ exact `ShareId`. Found responses bind the requested ID to the returned canonical
 share; not-found responses are explicit. In exact-Zano CI, receiving a valid child
 first creates a verified orphan, requesting/receiving its parent locally rehashes
 the parent, and the child is deterministically promoted. `p2p_sync_test` brings the
-suite to 17 tests. Normal and exact-Zano CI are green on the checkpoint code head.
+suite to 17 tests. Normal and exact-Zano CI are green; local exact-Zano confirmation
+is the remaining checkpoint gate.
 
 Important remaining constraint: independent `zanod getblocktemplate` calls can
 produce different mining headers at the same Zano height. A true multi-node P2Pool
