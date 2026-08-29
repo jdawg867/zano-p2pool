@@ -108,10 +108,12 @@ void P2pNodeProtocol::remember_trusted_work(
     trusted_work_.remember(context);
 }
 
-void P2pNodeProtocol::set_local_mining_anchor(
-    const P2pMiningAnchor& anchor) {
+void P2pNodeProtocol::set_local_mining_context(
+    const P2pMiningAnchor& anchor,
+    const P2pMiningContextProposal& proposal) {
     std::lock_guard lock(state_mutex_);
     local_mining_anchor_ = anchor;
+    local_mining_context_ = proposal;
 }
 
 void P2pNodeProtocol::set_expected_payout(
@@ -142,7 +144,18 @@ P2pTipHint P2pNodeProtocol::local_tip() const noexcept {
 
 bool P2pNodeProtocol::mining_context_trust_ready() const noexcept {
     std::lock_guard lock(state_mutex_);
-    return local_mining_anchor_.has_value() && expected_payout_.has_value();
+    return local_mining_anchor_.has_value() &&
+           local_mining_context_.has_value() &&
+           expected_payout_.has_value();
+}
+
+std::optional<P2pEnvelope>
+P2pNodeProtocol::local_mining_context_envelope() const {
+    std::lock_guard lock(state_mutex_);
+    if (!local_mining_context_.has_value()) {
+        return std::nullopt;
+    }
+    return make_p2p_mining_context_envelope(*local_mining_context_);
 }
 
 const char* p2p_node_message_status_name(
