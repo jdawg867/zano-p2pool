@@ -77,14 +77,11 @@ Current work adds the local miner-facing Stratum foundation:
 - per-session `(job_version, nonce)` duplicate suppression;
 - `eth_submitWork` routing through exact local ProgPoWZ and `ShareChain::submit_share()`;
 - accepted-share vs. full-network block-candidate classification without automatic daemon submission;
-- loopback TCP listener with newline-delimited JSON-RPC framing;
-- real socket integration coverage in normal and exact-Zano CI;
-- live daemon-derived template publication from executable Stratum mode.
+- loopback TCP listener with line-delimited JSON-RPC framing;
+- persistent executable Stratum mode with live daemon template refresh;
+- deterministic suppression of randomized same-tip `getblocktemplate` churn.
 
-Checkpoint 4 was confirmed locally with an exact-Zano Release build passing 12/12
-tests, including the real socket integration test. The remaining Milestone 0.4
-validation is connecting a real ProgPoWZ-capable miner to the loopback server and
-observing live testnet work/submission behavior.
+Checkpoint 4 was confirmed locally with an exact-Zano Release build passing 12/12 tests. The live executable then successfully served testnet work on `127.0.0.1:3333`. The same-tip refresh policy is pinned by `template_refresh_test`, bringing CI to 13 tests. A real ProgPoWZ miner connection is the final Milestone 0.4 validation step.
 
 ## Requirements
 
@@ -103,97 +100,52 @@ sudo apt install -y \
 
 ## Build
 
-Lightweight build:
-
 ```bash
 cmake -S . -B build
 cmake --build build -j"$(nproc)"
 ctest --test-dir build --output-on-failure
 ```
 
-For Stratum and exact ProgPoWZ verification, configure against the audited Zano
-source tree:
-
-```bash
-cmake -S . -B build-zano \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DZANO_P2POOL_ZANO_SOURCE_DIR=/path/to/zano
-cmake --build build-zano -j"$(nproc)"
-ctest --test-dir build-zano --output-on-failure
-```
-
 ## Run
 
 `getblocktemplate` needs a Zano payout address.
 
-One-shot testnet template inspection:
+Testnet is the development default:
 
 ```bash
-./build-zano/zano-p2pool \
+./build/zano-p2pool \
   --network testnet \
   --wallet YOUR_TESTNET_ZANO_ADDRESS
 ```
 
-Development Stratum mode is explicit and loopback-only by default:
-
-```bash
-./build-zano/zano-p2pool \
-  --network testnet \
-  --wallet YOUR_TESTNET_ZANO_ADDRESS \
-  --stratum \
-  --stratum-port 3333 \
-  --stratum-difficulty 100000
-```
-
-Optional Stratum controls:
-
-```text
---stratum-bind IPv4
---stratum-port PORT
---stratum-difficulty DIFFICULTY
---template-refresh-seconds SECONDS
-```
-
-Testnet RPC defaults to:
+This resolves to:
 
 ```text
 http://127.0.0.1:12111/json_rpc
 ```
 
-Mainnet can be selected explicitly:
+You can also select mainnet explicitly:
 
 ```bash
-./build-zano/zano-p2pool \
+./build/zano-p2pool \
   --network mainnet \
   --wallet YOUR_ZANO_ADDRESS
 ```
 
 or override the RPC endpoint directly with `--rpc-url`.
 
-Expected one-shot output includes the independently derived mining header:
+Stratum development mode is opt-in and defaults to loopback:
 
-```text
-zano-p2pool v0.1.0-dev
-Network: testnet
-RPC: http://127.0.0.1:12111/json_rpc
-ProgPoWZ backend: ...
-
-Template status: OK
-Height:          ...
-ProgPoWZ epoch:  ...
-Previous hash:   ...
-Difficulty:      ...
-Target:          ...
-Block reward:    ...
-ProgPoWZ seed:   ...
-Blob bytes:      ...
-Regular txs:     ...
-Mining blob:     ... bytes
-Mining header:   ...
+```bash
+./build/zano-p2pool \
+  --network testnet \
+  --wallet YOUR_TESTNET_ZANO_ADDRESS \
+  --stratum \
+  --stratum-bind 127.0.0.1 \
+  --stratum-port 3333
 ```
 
-Stratum mode additionally prints the listener, configured default share
-difficulty, refresh interval, and each newly published template version.
+Expected startup output includes the independently derived mining header and the local Stratum listener.
 
 ## Current Zano network defaults
 
