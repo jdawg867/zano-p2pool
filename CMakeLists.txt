@@ -28,6 +28,7 @@ add_library(zano_p2pool_core
     src/p2p_payout_policy.cpp
     src/p2p_mining_context.cpp
     src/p2p_mining_context_trust.cpp
+    src/p2p_node.cpp
     src/p2p_protocol.cpp
     src/p2p_runtime.cpp
     src/p2p_share.cpp
@@ -213,6 +214,10 @@ if(ZANO_P2POOL_BUILD_TESTS)
     add_executable(p2p_runtime_test tests/p2p_runtime_test.cpp)
     target_link_libraries(p2p_runtime_test PRIVATE zano_p2pool_core)
     add_test(NAME p2p_runtime_test COMMAND p2p_runtime_test)
+
+    add_executable(p2p_node_test tests/p2p_node_test.cpp)
+    target_link_libraries(p2p_node_test PRIVATE zano_p2pool_core)
+    add_test(NAME p2p_node_test COMMAND p2p_node_test)
 
     add_executable(p2p_share_test tests/p2p_share_test.cpp)
     target_link_libraries(p2p_share_test PRIVATE zano_p2pool_core)
