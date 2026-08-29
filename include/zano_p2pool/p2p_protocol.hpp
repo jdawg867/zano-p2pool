@@ -18,6 +18,7 @@ inline constexpr std::size_t kP2pHandshakePayloadSize = 83;
 
 enum class P2pMessageType : std::uint8_t {
     Handshake = 1,
+    ShareAnnounce = 2,
 };
 
 enum class P2pNetwork : std::uint8_t {
