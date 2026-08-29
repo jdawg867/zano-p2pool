@@ -1,6 +1,9 @@
 #include "zano_p2pool/share_chain.hpp"
 
+#include "zano_p2pool/progpowz.hpp"
+
 #include <algorithm>
+#include <limits>
 #include <stdexcept>
 
 namespace zano_p2pool {
@@ -63,6 +66,45 @@ ShareRejectReason ShareChain::structural_reject_reason(
     return ShareRejectReason::None;
 }
 
+ShareRejectReason ShareChain::trusted_context_reject_reason(
+    const Share& share,
+    const ShareWorkContext& trusted_context) const noexcept {
+    if (share.zano_height != trusted_context.zano_height) {
+        return ShareRejectReason::ZanoHeightMismatch;
+    }
+    if (share.mining_header_hash != trusted_context.mining_header_hash) {
+        return ShareRejectReason::MiningHeaderMismatch;
+    }
+    if (share.network_difficulty != trusted_context.network_difficulty) {
+        return ShareRejectReason::NetworkDifficultyMismatch;
+    }
+    return ShareRejectReason::None;
+}
+
+ShareRejectReason ShareChain::absolute_timestamp_reject_reason(
+    const Share& share,
+    std::uint64_t now) const noexcept {
+    if (share.timestamp > now &&
+        share.timestamp - now > kShareMaxFutureSeconds) {
+        return ShareRejectReason::TimestampTooFarFuture;
+    }
+    return ShareRejectReason::None;
+}
+
+ShareRejectReason ShareChain::parent_timestamp_reject_reason(
+    const Share& share,
+    const Share& parent) const noexcept {
+    if (share.timestamp >= parent.timestamp) {
+        return ShareRejectReason::None;
+    }
+
+    const std::uint64_t backstep = parent.timestamp - share.timestamp;
+    if (backstep > kShareMaxParentBackstepSeconds) {
+        return ShareRejectReason::TimestampBeforeParentTolerance;
+    }
+    return ShareRejectReason::None;
+}
+
 bool ShareChain::better_tip(
     const ConnectedShare& candidate,
     const ConnectedShare& current) const noexcept {
@@ -78,6 +120,7 @@ bool ShareChain::better_tip(
 ShareRejectReason ShareChain::connect_share(
     const Share& share,
     const ShareId& id,
+    std::optional<CandidateValidation> pow_validation,
     bool& best_tip_changed) {
     ChainWork cumulative = share_work(share.share_difficulty);
 
@@ -93,6 +136,12 @@ ShareRejectReason ShareChain::connect_share(
             return ShareRejectReason::ParentHeightMismatch;
         }
 
+        const ShareRejectReason timestamp_reason =
+            parent_timestamp_reject_reason(share, parent.share);
+        if (timestamp_reason != ShareRejectReason::None) {
+            return timestamp_reason;
+        }
+
         ChainWork summed{};
         if (!add_chain_work_checked(
                 parent.cumulative_work,
@@ -105,7 +154,7 @@ ShareRejectReason ShareChain::connect_share(
 
     const auto [it, inserted] = connected_.emplace(
         id,
-        ConnectedShare{share, id, cumulative});
+        ConnectedShare{share, id, cumulative, std::move(pow_validation)});
     if (!inserted) {
         throw std::logic_error("duplicate share reached connect_share");
     }
@@ -147,8 +196,13 @@ void ShareChain::promote_children(
         }
 
         const Share child = orphan_it->second.share;
-        const ShareRejectReason reason =
-            connect_share(child, child_id, best_tip_changed);
+        std::optional<CandidateValidation> validation =
+            std::move(orphan_it->second.pow_validation);
+        const ShareRejectReason reason = connect_share(
+            child,
+            child_id,
+            std::move(validation),
+            best_tip_changed);
         orphans_.erase(orphan_it);
 
         if (reason == ShareRejectReason::None) {
@@ -158,7 +212,9 @@ void ShareChain::promote_children(
     }
 }
 
-AddShareResult ShareChain::add_share(const Share& share) {
+AddShareResult ShareChain::add_prevalidated_share(
+    const Share& share,
+    std::optional<CandidateValidation> pow_validation) {
     AddShareResult result;
     result.id = share_id(share);
 
@@ -175,15 +231,20 @@ AddShareResult ShareChain::add_share(const Share& share) {
 
     if (!is_zero_share_id(share.parent_id) &&
         !connected_.contains(share.parent_id)) {
-        orphans_.emplace(result.id, OrphanShare{share, result.id});
+        orphans_.emplace(
+            result.id,
+            OrphanShare{share, result.id, std::move(pow_validation)});
         orphans_by_parent_[share.parent_id].push_back(result.id);
         result.disposition = ShareDisposition::Orphan;
         return result;
     }
 
     const std::optional<ShareId> old_best_tip = best_tip_id_;
-    result.reject_reason =
-        connect_share(share, result.id, result.best_tip_changed);
+    result.reject_reason = connect_share(
+        share,
+        result.id,
+        std::move(pow_validation),
+        result.best_tip_changed);
     if (result.reject_reason != ShareRejectReason::None) {
         result.disposition = ShareDisposition::Rejected;
         return result;
@@ -196,6 +257,78 @@ AddShareResult ShareChain::add_share(const Share& share) {
         result.best_tip_changed);
     result.best_tip_changed = old_best_tip != best_tip_id_;
     return result;
+}
+
+AddShareResult ShareChain::add_share_unchecked(const Share& share) {
+    return add_prevalidated_share(share, std::nullopt);
+}
+
+AddShareResult ShareChain::submit_share(
+    const Share& share,
+    const ShareWorkContext& trusted_context,
+    std::uint64_t now,
+    ProgPowZContextMode mode) {
+    AddShareResult rejected;
+    rejected.id = share_id(share);
+
+    if (connected_.contains(rejected.id) || orphans_.contains(rejected.id)) {
+        rejected.disposition = ShareDisposition::Duplicate;
+        return rejected;
+    }
+
+    rejected.reject_reason = structural_reject_reason(share);
+    if (rejected.reject_reason != ShareRejectReason::None) {
+        rejected.disposition = ShareDisposition::Rejected;
+        return rejected;
+    }
+
+    rejected.reject_reason =
+        trusted_context_reject_reason(share, trusted_context);
+    if (rejected.reject_reason != ShareRejectReason::None) {
+        rejected.disposition = ShareDisposition::Rejected;
+        return rejected;
+    }
+
+    rejected.reject_reason = absolute_timestamp_reject_reason(share, now);
+    if (rejected.reject_reason != ShareRejectReason::None) {
+        rejected.disposition = ShareDisposition::Rejected;
+        return rejected;
+    }
+
+    if (!is_zero_share_id(share.parent_id)) {
+        const auto parent_it = connected_.find(share.parent_id);
+        if (parent_it != connected_.end()) {
+            rejected.reject_reason =
+                parent_timestamp_reject_reason(share, parent_it->second.share);
+            if (rejected.reject_reason != ShareRejectReason::None) {
+                rejected.disposition = ShareDisposition::Rejected;
+                return rejected;
+            }
+        }
+    }
+
+    if (!progpowz_available()) {
+        rejected.reject_reason = ShareRejectReason::PowBackendUnavailable;
+        rejected.disposition = ShareDisposition::Rejected;
+        return rejected;
+    }
+
+    const CandidateValidation validation = validate_candidate(
+        trusted_context.zano_height,
+        trusted_context.mining_header_hash,
+        share.nonce,
+        difficulty128_to_decimal(share.share_difficulty),
+        difficulty128_to_decimal(trusted_context.network_difficulty),
+        mode);
+
+    if (!validation.meets_share_difficulty ||
+        validation.classification == CandidateClassification::Invalid) {
+        rejected.reject_reason = ShareRejectReason::InvalidPow;
+        rejected.disposition = ShareDisposition::Rejected;
+        return rejected;
+    }
+
+    return add_prevalidated_share(share, validation);
 }
 
 const ConnectedShare* ShareChain::find(const ShareId& id) const noexcept {
@@ -272,6 +405,20 @@ const char* share_reject_reason_name(ShareRejectReason reason) noexcept {
         return "invalid-non-root-height";
     case ShareRejectReason::ParentHeightMismatch:
         return "parent-height-mismatch";
+    case ShareRejectReason::TimestampTooFarFuture:
+        return "timestamp-too-far-future";
+    case ShareRejectReason::TimestampBeforeParentTolerance:
+        return "timestamp-before-parent-tolerance";
+    case ShareRejectReason::ZanoHeightMismatch:
+        return "zano-height-mismatch";
+    case ShareRejectReason::MiningHeaderMismatch:
+        return "mining-header-mismatch";
+    case ShareRejectReason::NetworkDifficultyMismatch:
+        return "network-difficulty-mismatch";
+    case ShareRejectReason::PowBackendUnavailable:
+        return "pow-backend-unavailable";
+    case ShareRejectReason::InvalidPow:
+        return "invalid-pow";
     case ShareRejectReason::CumulativeWorkOverflow:
         return "cumulative-work-overflow";
     }
