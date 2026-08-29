@@ -9,11 +9,6 @@
 namespace zano_p2pool {
 namespace {
 
-[[nodiscard]] bool is_supported_message_type(std::uint8_t value) noexcept {
-    return value == static_cast<std::uint8_t>(P2pMessageType::Handshake) ||
-           value == static_cast<std::uint8_t>(P2pMessageType::ShareAnnounce);
-}
-
 [[nodiscard]] bool is_supported_network(std::uint8_t value) noexcept {
     return value == static_cast<std::uint8_t>(P2pNetwork::Testnet) ||
            value == static_cast<std::uint8_t>(P2pNetwork::Mainnet);
@@ -91,6 +86,11 @@ void require_valid_handshake(const P2pHandshake& handshake) {
 
 }  // namespace
 
+bool p2p_message_type_supported(std::uint8_t value) noexcept {
+    return value == static_cast<std::uint8_t>(P2pMessageType::Handshake) ||
+           value == static_cast<std::uint8_t>(P2pMessageType::ShareAnnounce);
+}
+
 bool is_zero_node_id(const NodeId& node_id) noexcept {
     return std::all_of(
         node_id.begin(), node_id.end(), [](std::uint8_t byte) { return byte == 0; });
@@ -101,7 +101,7 @@ std::vector<std::uint8_t> serialize_p2p_envelope(
     if (envelope.version != kP2pProtocolVersion) {
         throw std::runtime_error("unsupported P2P protocol version");
     }
-    if (!is_supported_message_type(static_cast<std::uint8_t>(envelope.type))) {
+    if (!p2p_message_type_supported(static_cast<std::uint8_t>(envelope.type))) {
         throw std::runtime_error("unsupported P2P message type");
     }
     if (envelope.flags != 0) {
@@ -136,7 +136,7 @@ P2pEnvelope deserialize_p2p_envelope(std::span<const std::uint8_t> bytes) {
     }
 
     const std::uint8_t type_value = bytes[5];
-    if (!is_supported_message_type(type_value)) {
+    if (!p2p_message_type_supported(type_value)) {
         throw std::runtime_error("unsupported P2P message type");
     }
 
