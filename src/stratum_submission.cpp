@@ -57,9 +57,6 @@ StratumSubmissionResult StratumSubmissionRouter::submit(
         };
     }
 
-    // Record before the expensive local PoW check so repeated invalid work is
-    // also suppressed. A current job/nonce pair is deterministic: retrying it
-    // cannot become valid later.
     seen.insert(duplicate_key);
 
     Share share;
@@ -73,7 +70,14 @@ StratumSubmissionResult StratumSubmissionRouter::submit(
     share.nonce = submission.nonce;
     share.share_difficulty = issued.share_difficulty;
     share.network_difficulty = issued.trusted_context.network_difficulty;
-    share.miner_id = miner_id_for_session(*session);
+
+    if (session->payout.has_value()) {
+        share.version = kShareVersion2;
+        share.payout = session->payout;
+        share.miner_id = miner_id_from_payout(*session->payout);
+    } else {
+        share.miner_id = miner_id_for_session(*session);
+    }
 
     const ShareId id = share_id(share);
     const AddShareResult result = share_chain_.submit_share(
@@ -94,9 +98,6 @@ StratumSubmissionResult StratumSubmissionRouter::submit(
 
     const ConnectedShare* connected = share_chain_.find(id);
     if (connected == nullptr || !connected->pow_validation.has_value()) {
-        // A locally mined share always extends the local best tip, so it should
-        // connect immediately. Treat anything else as an internal admission
-        // failure rather than claiming miner success.
         return {
             StratumSubmissionDisposition::Rejected,
             ShareRejectReason::None,
@@ -136,10 +137,12 @@ bool StratumSubmissionRouter::was_submitted(
 
 MinerId StratumSubmissionRouter::miner_id_for_session(
     const StratumSession& session) const {
-    // Domain-separate the public Stratum login identity from arbitrary strings
-    // hashed elsewhere in the protocol. This is not a secret and is not yet a
-    // payout address representation; later payout accounting can bind a public
-    // miner identity to explicit payout policy.
+    if (session.payout.has_value()) {
+        return miner_id_from_payout(*session.payout);
+    }
+
+    // Legacy development identity for non-address usernames. Payout-capable
+    // miners use share v2 and the public-key-derived MinerId above.
     constexpr std::array<std::uint8_t, 5> kDomain{'Z', 'P', '2', 'M', 0};
     std::vector<std::uint8_t> bytes;
     bytes.reserve(kDomain.size() + session.username.size());
