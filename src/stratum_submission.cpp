@@ -3,26 +3,10 @@
 #include "zano_p2pool/crypto_hash.hpp"
 
 #include <array>
-#include <cstddef>
 #include <cstdint>
-#include <span>
-#include <stdexcept>
-#include <string_view>
 #include <vector>
 
 namespace zano_p2pool {
-namespace {
-
-[[nodiscard]] bool hash_is_zero(const Hash256& hash) noexcept {
-    for (const std::uint8_t byte : hash) {
-        if (byte != 0) {
-            return false;
-        }
-    }
-    return true;
-}
-
-}  // namespace
 
 StratumSubmissionResult StratumSubmissionRouter::submit(
     std::uint64_t session_id,
