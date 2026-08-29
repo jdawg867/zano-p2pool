@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <utility>
 
 namespace zano_p2pool {
@@ -45,6 +46,7 @@ enum class P2pShareReceiveStatus {
 struct P2pShareReceiveResult {
     P2pShareReceiveStatus status{P2pShareReceiveStatus::Rejected};
     AddShareResult chain_result{};
+    std::optional<ShareId> missing_parent_id;
 };
 
 class P2pShareReceiver {
@@ -56,6 +58,17 @@ public:
     [[nodiscard]] P2pShareReceiveResult receive(
         const P2pHandshake& peer,
         const P2pEnvelope& envelope,
+        std::uint64_t now,
+        ProgPowZContextMode mode = ProgPowZContextMode::Light);
+
+    // Common verified admission path for canonical shares received through
+    // gossip or synchronization. required_capability identifies which peer
+    // capability authorizes the operation; the trusted-work and local PoW
+    // rules are identical for both paths.
+    [[nodiscard]] P2pShareReceiveResult receive_share(
+        const P2pHandshake& peer,
+        const Share& share,
+        std::uint64_t required_capability,
         std::uint64_t now,
         ProgPowZContextMode mode = ProgPowZContextMode::Light);
 
