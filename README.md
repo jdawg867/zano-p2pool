@@ -85,19 +85,21 @@ Milestone 0.4 was validated with a local exact-Zano Release build passing all 13
 
 ## Milestone 0.5
 
-Current work builds the node-to-node P2P foundation. The first three checkpoints now provide:
+Current work builds the node-to-node P2P foundation. Completed checkpoints now include:
 
-- `ZP2P` versioned binary framing with a strict 64 KiB payload bound;
-- testnet/mainnet handshakes with non-zero public 32-byte node identifiers;
-- capability bits for share gossip and missing-parent synchronization;
-- configurable TCP listener/client transport with wrong-network, self-connection, oversized-frame, and unsupported-version rejection;
-- established peer sessions that remain open after the handshake;
-- canonical `ShareAnnounce` messages that carry the existing 165-byte `Share` encoding without introducing a second serialization format;
-- duplicate connected/orphaned share suppression before expensive verification;
-- received peer shares routed through `ShareChain::submit_share()` only when the share's Zano height/mining-header pair is already present in a **locally trusted** work-context registry;
-- exact-Zano socket tests that locally rehash an announced share before allowing it to affect cumulative work.
+- deterministic `ZP2P` v1 binary framing with a strict 64 KiB payload limit;
+- network/version/node-ID handshake and capability negotiation;
+- configurable TCP listener/client sessions with bounded stream framing;
+- canonical `ShareAnnounce` gossip using the existing 165-byte `Share` serialization;
+- locally trusted work-context lookup before peer work can be hashed/admitted;
+- duplicate peer-share suppression before expensive ProgPoWZ verification;
+- `ShareRequest` / `ShareResponse` synchronization by exact `ShareId`;
+- explicit not-found responses and response-ID binding;
+- exact-Zano orphan recovery: child-first reception, parent fetch, local parent rehash, and deterministic orphan promotion.
 
-Peer-claimed chain work, PoW results, network difficulty, and mining headers are never trusted automatically. Independent daemon `getblocktemplate` calls can produce different mining headers at the same Zano height, so true multi-node mining still needs a shared or reconstructable mining-context mechanism. That design must be solved without weakening the existing trusted-context rule.
+Best-share handshake values remain synchronization hints only. Peer-claimed chain work, PoW results, network difficulty, and mining headers are never trusted without local verification.
+
+A key remaining design constraint is mining-context synchronization. Independent `zanod getblocktemplate` calls can produce different mining headers at the same Zano height, so true multi-node P2Pool mining needs a shared or reconstructable mining context rather than trusting arbitrary peer headers.
 
 ## Requirements
 
