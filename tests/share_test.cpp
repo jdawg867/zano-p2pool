@@ -70,6 +70,39 @@ int main() {
     CHECK(serialize_share(decoded) == encoded);
     CHECK(share_id(decoded) == share_id(share));
 
+    // V2 preserves all v1 fields, appends the two public payout keys and binds
+    // miner_id to those keys. No secret wallet material is serialized.
+    Share v2 = share;
+    v2.version = kShareVersion2;
+    PayoutPublicKeys payout;
+    for (std::size_t i = 0; i < 32; ++i) {
+        payout.spend_public_key[i] = static_cast<std::uint8_t>(0x10U + i);
+        payout.view_public_key[i] = static_cast<std::uint8_t>(0x80U + i);
+    }
+    v2.payout = payout;
+    v2.miner_id = miner_id_from_payout(payout);
+
+    const auto encoded_v2 = serialize_share(v2);
+    CHECK(encoded_v2.size() == kShareV2SerializedSize);
+    CHECK(encoded_v2.size() == encoded.size() + 64);
+    const Share decoded_v2 = deserialize_share(encoded_v2);
+    CHECK(decoded_v2 == v2);
+    CHECK(decoded_v2.payout.has_value());
+    CHECK(decoded_v2.miner_id == miner_id_from_payout(*decoded_v2.payout));
+    CHECK(share_id(v2) != share_id(share));
+
+    Share bad_binding = v2;
+    bad_binding.miner_id[0] ^= 1;
+    expect_throw<std::invalid_argument>([&] {
+        (void)serialize_share(bad_binding);
+    });
+
+    auto tampered_payout = encoded_v2;
+    tampered_payout.back() ^= 1;
+    expect_throw<std::runtime_error>([&] {
+        (void)deserialize_share(tampered_payout);
+    });
+
     Share mutated = share;
     ++mutated.nonce;
     CHECK(share_id(mutated) != share_id(share));
@@ -110,7 +143,7 @@ int main() {
     });
 
     auto bad_version = encoded;
-    bad_version[4] = 2;
+    bad_version[4] = 3;
     expect_throw<std::runtime_error>([&] {
         (void)deserialize_share(bad_version);
     });
@@ -127,10 +160,16 @@ int main() {
         (void)deserialize_share(trailing);
     });
 
-    Share unsupported = share;
-    unsupported.version = 2;
+    Share missing_payout = share;
+    missing_payout.version = kShareVersion2;
     expect_throw<std::invalid_argument>([&] {
-        (void)serialize_share(unsupported);
+        (void)serialize_share(missing_payout);
+    });
+
+    Share v1_with_payout = share;
+    v1_with_payout.payout = payout;
+    expect_throw<std::invalid_argument>([&] {
+        (void)serialize_share(v1_with_payout);
     });
 
     return 0;
