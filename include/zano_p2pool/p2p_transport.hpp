@@ -29,6 +29,11 @@ public:
 
     void send_envelope(const P2pEnvelope& envelope);
     [[nodiscard]] P2pEnvelope receive_envelope();
+
+    // Interrupt blocking socket I/O without releasing or mutating the owned
+    // descriptor. Long-lived peer runtimes use this to wake receive_envelope(),
+    // join the reader thread, and only then call close().
+    void shutdown() noexcept;
     void close() noexcept;
 
 private:
