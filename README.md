@@ -44,25 +44,38 @@ The second milestone implements the consensus-critical local PoW verification la
 - classify local candidates as `Invalid`, `Share`, or `Block` without submitting them;
 - validate the standalone header derivation byte-for-byte against Zano on live testnet.
 
-Milestone 0.2 was validated against live Zano testnet and merged through PR #4.
+Milestone 0.2 was validated against live Zano testnet and merged to `main`.
 
 ## Milestone 0.3
 
-The third milestone adds the deterministic local P2Pool share-chain foundation:
+The third milestone establishes the deterministic in-memory P2Pool share chain:
 
-- versioned canonical share serialization and deterministic share IDs;
-- explicit parent linkage with a zero-parent root convention;
-- fixed-width share and network difficulty commitments;
-- deterministic per-share work and checked 256-bit cumulative work;
+- canonical versioned share serialization and deterministic IDs;
+- parent linkage and root rules;
+- fixed-width share/network difficulty commitments;
+- checked cumulative 256-bit share work;
 - orphan retention/promotion and stale-fork tracking;
 - deterministic best-tip selection and cumulative-work reorgs;
-- explicit timestamp policy with bounded future skew and parent-relative backward tolerance;
-- production-facing share admission bound to locally trusted Zano height, mining-header hash, and network difficulty;
-- exact local ProgPoWZ verification before any claimed share difficulty contributes chain work;
-- recording of whether an accepted share also meets full Zano network difficulty;
-- fail-closed behavior when the exact ProgPoWZ backend is unavailable.
+- trusted Zano work-context matching;
+- explicit timestamp rules;
+- mandatory exact local ProgPoWZ verification before production-admitted work contributes to the chain;
+- explicit share vs. full-network block-candidate classification.
 
-Milestone 0.3 was validated in both lightweight and exact-Zano CI modes, plus a local exact-Zano Release build with all 8 tests passing.
+Milestone 0.3 passed local exact-Zano Release tests and CI and was merged to `main`.
+
+## Milestone 0.4
+
+Current work adds the local miner-facing Stratum foundation:
+
+- Zano-compatible JSON-RPC 2.0 codec for `eth_submitLogin`, `eth_getWork`, `eth_submitHashrate`, and `eth_submitWork`;
+- exact `[header, seed, target, height]` work formatting;
+- deterministic worker/session state;
+- monotonic versioned work-template registry;
+- per-session requested-difficulty clamping and target calculation;
+- share difficulty capped at current Zano network difficulty;
+- current/stale/unknown header classification per session.
+
+Next, `eth_submitWork` will be routed through the existing verified share-chain admission path before TCP transport is enabled.
 
 ## Requirements
 
@@ -85,16 +98,6 @@ sudo apt install -y \
 cmake -S . -B build
 cmake --build build -j"$(nproc)"
 ctest --test-dir build --output-on-failure
-```
-
-To enable the exact ProgPoWZ backend from a local Zano source tree:
-
-```bash
-cmake -S . -B build-zano \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DZANO_P2POOL_ZANO_SOURCE_DIR=/path/to/zano
-cmake --build build-zano -j"$(nproc)"
-ctest --test-dir build-zano --output-on-failure
 ```
 
 ## Run
@@ -174,6 +177,6 @@ See [`docs/roadmap.md`](docs/roadmap.md).
 ## Safety
 
 This repository is experimental consensus/mining software. Until share validation,
-difficulty calculations, block serialization, share-chain consensus, networking, and
-payout rules have extensive test coverage, it should only be used for development and
-controlled testing.
+difficulty calculations, block serialization, share-chain consensus, Stratum, and
+payout rules have extensive test coverage, it should only be used for development
+and controlled testing.
