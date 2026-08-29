@@ -2,7 +2,6 @@
 
 #include "zano_p2pool/pow_target.hpp"
 
-#include <atomic>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -24,7 +23,6 @@ struct BlockCandidate {
 
 enum class BlockSubmitStatus : std::uint8_t {
     Submitted,
-    TemplateMissing,
     SubmissionFailed,
 };
 
@@ -32,6 +30,13 @@ struct BlockSubmitEvent {
     BlockSubmitStatus status{BlockSubmitStatus::SubmissionFailed};
     BlockCandidate candidate{};
     std::string error;
+};
+
+enum class BlockCandidateQueueStatus : std::uint8_t {
+    Queued,
+    StaleTemplate,
+    QueueFull,
+    Stopped,
 };
 
 using BlockSubmitFunction = std::function<void(const std::string& block_blob_hex)>;
@@ -66,15 +71,24 @@ public:
         const Hash256& mining_header_hash,
         std::string block_blob_hex);
 
-    // Returns false when the bounded queue is full or the submitter is not
-    // running. A candidate never blocks a Stratum response waiting for RPC.
-    [[nodiscard]] bool enqueue(const BlockCandidate& candidate) noexcept;
+    // Admission snapshots the exact template bytes while holding the submitter
+    // mutex. A candidate for an already-solved/evicted header is rejected as
+    // StaleTemplate before it can reach the worker. This is important on fast
+    // testnets where miners may have many old-header submissions already in
+    // flight when the first sibling block is accepted.
+    [[nodiscard]] BlockCandidateQueueStatus enqueue(
+        const BlockCandidate& candidate) noexcept;
 
     [[nodiscard]] bool running() const noexcept;
     [[nodiscard]] std::size_t queued() const noexcept;
     [[nodiscard]] std::size_t template_count() const noexcept;
 
 private:
+    struct QueuedCandidate {
+        BlockCandidate candidate{};
+        std::string block_blob_hex;
+    };
+
     void worker_loop() noexcept;
     void emit(BlockSubmitEvent event) noexcept;
 
@@ -91,10 +105,12 @@ private:
 
     std::map<Hash256, std::string> templates_;
     std::deque<Hash256> template_order_;
-    std::deque<BlockCandidate> queue_;
+    std::deque<QueuedCandidate> queue_;
 };
 
 [[nodiscard]] const char* block_submit_status_name(
     BlockSubmitStatus status) noexcept;
+[[nodiscard]] const char* block_candidate_queue_status_name(
+    BlockCandidateQueueStatus status) noexcept;
 
 }  // namespace zano_p2pool
