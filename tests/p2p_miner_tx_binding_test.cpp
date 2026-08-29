@@ -27,14 +27,14 @@ constexpr const char* kEd25519BasepointHex =
 
     // Current HF6 PoW transaction prefix, truncated immediately after extra.
     // The binding parser intentionally needs only version/input/extra fields.
-    std::vector<std::uint8_t> prefix{
-        0x04,  // transaction version 4
-        0x01,  // one input
-        0x00,  // txin_gen variant tag
-        0x01,  // txin_gen.height = 1
-        0x01,  // one extra field
-        0x16,  // crypto::public_key variant tag 22
-    };
+    std::vector<std::uint8_t> prefix;
+    prefix.reserve(6 + public_key.size());
+    prefix.push_back(0x04);  // transaction version 4
+    prefix.push_back(0x01);  // one input
+    prefix.push_back(0x00);  // txin_gen variant tag
+    prefix.push_back(0x01);  // txin_gen.height = 1
+    prefix.push_back(0x01);  // one extra field
+    prefix.push_back(0x16);  // crypto::public_key variant tag 22
     prefix.insert(prefix.end(), public_key.begin(), public_key.end());
     return prefix;
 }
