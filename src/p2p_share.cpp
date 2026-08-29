@@ -64,12 +64,25 @@ P2pShareReceiveResult P2pShareReceiver::receive(
     const P2pEnvelope& envelope,
     std::uint64_t now,
     ProgPowZContextMode mode) {
-    const Share share = parse_p2p_share_announce_envelope(envelope);
+    return receive_share(
+        peer,
+        parse_p2p_share_announce_envelope(envelope),
+        kP2pCapabilityShareGossip,
+        now,
+        mode);
+}
 
+P2pShareReceiveResult P2pShareReceiver::receive_share(
+    const P2pHandshake& peer,
+    const Share& share,
+    std::uint64_t required_capability,
+    std::uint64_t now,
+    ProgPowZContextMode mode) {
     P2pShareReceiveResult result;
     result.chain_result.id = share_id(share);
 
-    if ((peer.capabilities & kP2pCapabilityShareGossip) == 0) {
+    if (required_capability == 0 ||
+        (peer.capabilities & required_capability) != required_capability) {
         result.status = P2pShareReceiveStatus::CapabilityMissing;
         return result;
     }
@@ -98,6 +111,7 @@ P2pShareReceiveResult P2pShareReceiver::receive(
         break;
     case ShareDisposition::Orphan:
         result.status = P2pShareReceiveStatus::Orphan;
+        result.missing_parent_id = share.parent_id;
         break;
     case ShareDisposition::Duplicate:
         result.status = P2pShareReceiveStatus::Duplicate;
