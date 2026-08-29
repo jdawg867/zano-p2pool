@@ -49,7 +49,7 @@ int main() {
 
     const std::string expected_payload_hex =
         "01101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f"
-        "0000000000000003"
+        "0000000000000007"
         "0d06"
         "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf"
         "000000000000002a";
@@ -68,7 +68,7 @@ int main() {
     const std::string expected_frame_hex =
         "5a5032500101000000000053"
         "01101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f"
-        "0000000000000003"
+        "0000000000000007"
         "0d06"
         "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf"
         "000000000000002a";
@@ -83,6 +83,10 @@ int main() {
     CHECK(decoded_envelope == envelope);
     CHECK(zano_p2pool::parse_p2p_handshake_envelope(decoded_envelope) == handshake);
     CHECK(zano_p2pool::serialize_p2p_envelope(decoded_envelope) == frame);
+
+    CHECK((handshake.capabilities & zano_p2pool::kP2pCapabilityMiningContext) != 0);
+    CHECK(zano_p2pool::p2p_message_type_supported(
+        static_cast<std::uint8_t>(P2pMessageType::MiningContextAnnounce)));
 
     NodeId other_local_id{};
     other_local_id.fill(0x55);
