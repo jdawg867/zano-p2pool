@@ -1,3 +1,4 @@
+#include "zano_p2pool/crypto_hash.hpp"
 #include "zano_p2pool/share_chain.hpp"
 #include "test_check.hpp"
 
@@ -6,6 +7,14 @@
 #include <string>
 
 namespace {
+
+zano_p2pool::Hash256 hash_from_hex(std::string_view hex) {
+    const auto bytes = zano_p2pool::hex_to_bytes(hex);
+    CHECK(bytes.size() == 32);
+    zano_p2pool::Hash256 hash{};
+    std::copy(bytes.begin(), bytes.end(), hash.begin());
+    return hash;
+}
 
 zano_p2pool::Share make_share(
     std::string_view share_difficulty,
@@ -31,6 +40,14 @@ zano_p2pool::Share make_child(
     child.share_height = parent.share_height + 1;
     child.timestamp = parent.timestamp + 1;
     return child;
+}
+
+zano_p2pool::ShareWorkContext context_for(const zano_p2pool::Share& share) {
+    return zano_p2pool::ShareWorkContext{
+        share.zano_height,
+        share.mining_header_hash,
+        share.network_difficulty,
+    };
 }
 
 }  // namespace
@@ -66,17 +83,17 @@ int main() {
     Share child = make_child(root, "20", 2);
     const ShareId child_id = share_id(child);
 
-    const AddShareResult orphan_result = chain.add_share(child);
+    const AddShareResult orphan_result = chain.add_share_unchecked(child);
     CHECK(orphan_result.disposition == ShareDisposition::Orphan);
     CHECK(chain.orphan_size() == 1);
     CHECK(chain.connected_size() == 0);
     CHECK(chain.is_orphan(child_id));
     CHECK(chain.best_tip() == nullptr);
 
-    const AddShareResult duplicate_orphan = chain.add_share(child);
+    const AddShareResult duplicate_orphan = chain.add_share_unchecked(child);
     CHECK(duplicate_orphan.disposition == ShareDisposition::Duplicate);
 
-    const AddShareResult root_result = chain.add_share(root);
+    const AddShareResult root_result = chain.add_share_unchecked(root);
     CHECK(root_result.disposition == ShareDisposition::Connected);
     CHECK(root_result.promoted_orphans == 1);
     CHECK(root_result.best_tip_changed);
@@ -92,23 +109,24 @@ int main() {
     CHECK(chain.is_on_best_chain(child_id));
     CHECK(!chain.is_stale(root_id));
 
-    const AddShareResult duplicate_connected = chain.add_share(root);
+    const AddShareResult duplicate_connected = chain.add_share_unchecked(root);
     CHECK(duplicate_connected.disposition == ShareDisposition::Duplicate);
 
     // A lower-work sibling is connected and retained, but explicitly stale.
     Share sibling = make_child(root, "5", 3);
     const ShareId sibling_id = share_id(sibling);
-    const AddShareResult sibling_result = chain.add_share(sibling);
+    const AddShareResult sibling_result = chain.add_share_unchecked(sibling);
     CHECK(sibling_result.disposition == ShareDisposition::Connected);
     CHECK(!sibling_result.best_tip_changed);
     CHECK(chain.best_tip()->id == child_id);
     CHECK(chain.is_stale(sibling_id));
     CHECK(!chain.is_on_best_chain(sibling_id));
 
-    // Extending the stale branch with enough verified work causes a reorg.
+    // Extending the stale branch with enough work causes a reorg.
     Share sibling_tip = make_child(sibling, "21", 4);
     const ShareId sibling_tip_id = share_id(sibling_tip);
-    const AddShareResult sibling_tip_result = chain.add_share(sibling_tip);
+    const AddShareResult sibling_tip_result =
+        chain.add_share_unchecked(sibling_tip);
     CHECK(sibling_tip_result.disposition == ShareDisposition::Connected);
     CHECK(sibling_tip_result.best_tip_changed);
     CHECK(chain.best_tip()->id == sibling_tip_id);
@@ -120,34 +138,38 @@ int main() {
     // Root/non-root height rules fail closed.
     Share bad_root = make_share("1", 10);
     bad_root.share_height = 1;
-    const AddShareResult bad_root_result = chain.add_share(bad_root);
+    const AddShareResult bad_root_result = chain.add_share_unchecked(bad_root);
     CHECK(bad_root_result.disposition == ShareDisposition::Rejected);
     CHECK(bad_root_result.reject_reason == ShareRejectReason::InvalidRootHeight);
 
     Share bad_non_root = make_share("1", 11);
     bad_non_root.parent_id = root_id;
     bad_non_root.share_height = 0;
-    const AddShareResult bad_non_root_result = chain.add_share(bad_non_root);
+    const AddShareResult bad_non_root_result =
+        chain.add_share_unchecked(bad_non_root);
     CHECK(bad_non_root_result.disposition == ShareDisposition::Rejected);
     CHECK(bad_non_root_result.reject_reason ==
           ShareRejectReason::InvalidNonRootHeight);
 
     Share bad_height = make_child(root, "1", 12);
     bad_height.share_height = 2;
-    const AddShareResult bad_height_result = chain.add_share(bad_height);
+    const AddShareResult bad_height_result =
+        chain.add_share_unchecked(bad_height);
     CHECK(bad_height_result.disposition == ShareDisposition::Rejected);
     CHECK(bad_height_result.reject_reason == ShareRejectReason::ParentHeightMismatch);
 
     Share zero_share_difficulty = make_share("1", 13);
     zero_share_difficulty.share_difficulty = {};
-    const AddShareResult zero_share_result = chain.add_share(zero_share_difficulty);
+    const AddShareResult zero_share_result =
+        chain.add_share_unchecked(zero_share_difficulty);
     CHECK(zero_share_result.disposition == ShareDisposition::Rejected);
     CHECK(zero_share_result.reject_reason ==
           ShareRejectReason::ZeroShareDifficulty);
 
     Share zero_network_difficulty = make_share("1", 14);
     zero_network_difficulty.network_difficulty = {};
-    const AddShareResult zero_network_result = chain.add_share(zero_network_difficulty);
+    const AddShareResult zero_network_result =
+        chain.add_share_unchecked(zero_network_difficulty);
     CHECK(zero_network_result.disposition == ShareDisposition::Rejected);
     CHECK(zero_network_result.reject_reason ==
           ShareRejectReason::ZeroNetworkDifficulty);
@@ -159,10 +181,10 @@ int main() {
     Share bad_orphan = make_child(late_parent, "10", 21);
     bad_orphan.share_height = 2;
     const ShareId bad_orphan_id = share_id(bad_orphan);
-    CHECK(orphan_height_chain.add_share(bad_orphan).disposition ==
+    CHECK(orphan_height_chain.add_share_unchecked(bad_orphan).disposition ==
           ShareDisposition::Orphan);
     const AddShareResult late_parent_result =
-        orphan_height_chain.add_share(late_parent);
+        orphan_height_chain.add_share_unchecked(late_parent);
     CHECK(late_parent_result.disposition == ShareDisposition::Connected);
     CHECK(late_parent_result.promoted_orphans == 0);
     CHECK(!orphan_height_chain.is_orphan(bad_orphan_id));
@@ -179,16 +201,144 @@ int main() {
     ShareChain tie_chain;
     const Share& first = tie_a_id > tie_b_id ? tie_a : tie_b;
     const Share& second = tie_a_id > tie_b_id ? tie_b : tie_a;
-    CHECK(tie_chain.add_share(first).disposition == ShareDisposition::Connected);
-    CHECK(tie_chain.add_share(second).disposition == ShareDisposition::Connected);
+    CHECK(tie_chain.add_share_unchecked(first).disposition ==
+          ShareDisposition::Connected);
+    CHECK(tie_chain.add_share_unchecked(second).disposition ==
+          ShareDisposition::Connected);
     CHECK(tie_chain.best_tip() != nullptr);
     CHECK(tie_chain.best_tip()->id == expected_tie_tip);
+
+    // Production admission rejects future timestamps before invoking PoW.
+    Share future = make_share("1", 40);
+    const std::uint64_t now = future.timestamp;
+    future.timestamp = now + kShareMaxFutureSeconds + 1;
+    const AddShareResult future_result =
+        tie_chain.submit_share(future, context_for(future), now);
+    CHECK(future_result.disposition == ShareDisposition::Rejected);
+    CHECK(future_result.reject_reason == ShareRejectReason::TimestampTooFarFuture);
+
+    // Parent-relative timestamps may step backwards by at most the explicit
+    // tolerance. A larger backstep is rejected before PoW evaluation.
+    ShareChain timestamp_chain;
+    Share time_parent = make_share("1", 50);
+    time_parent.timestamp = 2'000;
+    CHECK(timestamp_chain.add_share_unchecked(time_parent).disposition ==
+          ShareDisposition::Connected);
+    Share old_child = make_child(time_parent, "1", 51);
+    old_child.timestamp =
+        time_parent.timestamp - kShareMaxParentBackstepSeconds - 1;
+    const AddShareResult old_child_result = timestamp_chain.submit_share(
+        old_child,
+        context_for(old_child),
+        time_parent.timestamp);
+    CHECK(old_child_result.disposition == ShareDisposition::Rejected);
+    CHECK(old_child_result.reject_reason ==
+          ShareRejectReason::TimestampBeforeParentTolerance);
+
+    // A share cannot substitute mining context supplied by a peer/miner.
+    Share context_share = make_share("1", 60);
+    ShareWorkContext wrong_height = context_for(context_share);
+    ++wrong_height.zano_height;
+    CHECK(tie_chain.submit_share(
+              context_share, wrong_height, context_share.timestamp).reject_reason ==
+          ShareRejectReason::ZanoHeightMismatch);
+
+    ShareWorkContext wrong_header = context_for(context_share);
+    wrong_header.mining_header_hash[0] ^= 0xff;
+    CHECK(tie_chain.submit_share(
+              context_share, wrong_header, context_share.timestamp).reject_reason ==
+          ShareRejectReason::MiningHeaderMismatch);
+
+    ShareWorkContext wrong_network = context_for(context_share);
+    wrong_network.network_difficulty = difficulty128_from_decimal("1");
+    CHECK(tie_chain.submit_share(
+              context_share, wrong_network, context_share.timestamp).reject_reason ==
+          ShareRejectReason::NetworkDifficultyMismatch);
+
+#ifdef ZANO_P2POOL_HAVE_PROGPOWZ
+    // Exact Zano compatibility vector: this hash meets share difficulty 3 but
+    // not network difficulty 4. Only after the local ProgPoWZ check succeeds is
+    // its claimed work allowed into the chain.
+    Share verified;
+    verified.timestamp = 1'700'100'000;
+    verified.zano_height = 0;
+    verified.mining_header_hash = hash_from_hex(
+        "ffeeddccbbaa9988776655443322110000112233445566778899aabbccddeeff");
+    verified.nonce = UINT64_C(0x123456789abcdef0);
+    verified.share_difficulty = difficulty128_from_decimal("3");
+    verified.network_difficulty = difficulty128_from_decimal("4");
+    verified.miner_id[31] = 0x42;
+
+    ShareChain verified_chain;
+    const AddShareResult verified_result = verified_chain.submit_share(
+        verified,
+        context_for(verified),
+        verified.timestamp,
+        ProgPowZContextMode::Light);
+    CHECK(verified_result.disposition == ShareDisposition::Connected);
+    const ConnectedShare* connected = verified_chain.find(share_id(verified));
+    CHECK(connected != nullptr);
+    CHECK(connected->pow_validation.has_value());
+    CHECK(connected->pow_validation->meets_share_difficulty);
+    CHECK(!connected->pow_validation->meets_network_difficulty);
+    CHECK(connected->pow_validation->classification ==
+          CandidateClassification::Share);
+    CHECK(hash_to_hex(connected->pow_validation->pow.final_hash) ==
+          "4feba8deef1ac892ee334cf258d029cc8651f037215f1767b8ce5c704a4fd68b");
+
+    Share block_candidate = verified;
+    block_candidate.network_difficulty = difficulty128_from_decimal("3");
+    block_candidate.miner_id[31] = 0x43;
+    ShareChain block_chain;
+    const AddShareResult block_result = block_chain.submit_share(
+        block_candidate,
+        context_for(block_candidate),
+        block_candidate.timestamp,
+        ProgPowZContextMode::Light);
+    CHECK(block_result.disposition == ShareDisposition::Connected);
+    const ConnectedShare* block_connected =
+        block_chain.find(share_id(block_candidate));
+    CHECK(block_connected != nullptr);
+    CHECK(block_connected->pow_validation.has_value());
+    CHECK(block_connected->pow_validation->meets_network_difficulty);
+    CHECK(block_connected->pow_validation->classification ==
+          CandidateClassification::Block);
+
+    Share invalid_pow = verified;
+    invalid_pow.share_difficulty = difficulty128_from_decimal("4");
+    invalid_pow.network_difficulty = difficulty128_from_decimal("5");
+    invalid_pow.miner_id[31] = 0x44;
+    ShareChain invalid_chain;
+    const AddShareResult invalid_result = invalid_chain.submit_share(
+        invalid_pow,
+        context_for(invalid_pow),
+        invalid_pow.timestamp,
+        ProgPowZContextMode::Light);
+    CHECK(invalid_result.disposition == ShareDisposition::Rejected);
+    CHECK(invalid_result.reject_reason == ShareRejectReason::InvalidPow);
+    CHECK(invalid_chain.connected_size() == 0);
+#else
+    // Lightweight builds fail closed rather than accepting unverified work.
+    Share unavailable = make_share("1", 70);
+    ShareChain unavailable_chain;
+    const AddShareResult unavailable_result = unavailable_chain.submit_share(
+        unavailable,
+        context_for(unavailable),
+        unavailable.timestamp);
+    CHECK(unavailable_result.disposition == ShareDisposition::Rejected);
+    CHECK(unavailable_result.reject_reason ==
+          ShareRejectReason::PowBackendUnavailable);
+    CHECK(unavailable_chain.connected_size() == 0);
+#endif
 
     CHECK(std::string(share_disposition_name(ShareDisposition::Connected)) ==
           "connected");
     CHECK(std::string(share_reject_reason_name(
               ShareRejectReason::ParentHeightMismatch)) ==
           "parent-height-mismatch");
+    CHECK(std::string(share_reject_reason_name(
+              ShareRejectReason::InvalidPow)) ==
+          "invalid-pow");
 
     return 0;
 }
