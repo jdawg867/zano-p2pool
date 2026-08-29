@@ -60,12 +60,9 @@ P2pEnvelope make_p2p_share_response_envelope(
 
     P2pEnvelope envelope;
     envelope.type = P2pMessageType::ShareResponse;
-    envelope.payload.reserve(
-        share == nullptr
-            ? kP2pShareResponseHeaderSize
-            : kP2pShareResponseFoundPayloadSize);
 
     if (share == nullptr) {
+        envelope.payload.reserve(kP2pShareResponseHeaderSize);
         envelope.payload.push_back(
             static_cast<std::uint8_t>(P2pShareResponseCode::NotFound));
         envelope.payload.insert(
@@ -77,11 +74,12 @@ P2pEnvelope make_p2p_share_response_envelope(
         throw std::runtime_error("P2P share response does not match requested id");
     }
 
+    const auto serialized = serialize_share(*share);
+    envelope.payload.reserve(kP2pShareResponseHeaderSize + serialized.size());
     envelope.payload.push_back(
         static_cast<std::uint8_t>(P2pShareResponseCode::Found));
     envelope.payload.insert(
         envelope.payload.end(), requested_id.begin(), requested_id.end());
-    const auto serialized = serialize_share(*share);
     envelope.payload.insert(
         envelope.payload.end(), serialized.begin(), serialized.end());
     return envelope;
@@ -118,14 +116,18 @@ P2pShareResponse parse_p2p_share_response_envelope(
     if (code != static_cast<std::uint8_t>(P2pShareResponseCode::Found)) {
         throw std::runtime_error("unsupported P2P share response status");
     }
-    if (envelope.payload.size() != kP2pShareResponseFoundPayloadSize) {
+
+    const std::size_t serialized_size =
+        envelope.payload.size() - kP2pShareResponseHeaderSize;
+    if (serialized_size != kShareV1SerializedSize &&
+        serialized_size != kShareV2SerializedSize) {
         throw std::runtime_error("invalid found P2P share response size");
     }
 
     response.code = P2pShareResponseCode::Found;
     response.share = deserialize_share(std::span<const std::uint8_t>(
         envelope.payload.data() + kP2pShareResponseHeaderSize,
-        kShareV1SerializedSize));
+        serialized_size));
     if (share_id(*response.share) != response.requested_id) {
         throw std::runtime_error("P2P share response id mismatch");
     }
