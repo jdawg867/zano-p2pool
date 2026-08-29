@@ -49,17 +49,17 @@ exact ProgPoWZ verification before claimed share difficulty contributes chain wo
 - [x] route `eth_submitWork` into verified share-chain admission
 - [x] duplicate `(job_version, nonce)` rejection
 - [x] distinguish accepted share vs. full-network block candidate
-- [ ] Stratum TCP listener
-- [ ] bind to loopback by default with configurable port
-- [ ] local socket integration test
-- [ ] test with ProgPoWZ-capable miners
+- [x] Stratum TCP listener
+- [x] bind to loopback by default with configurable port
+- [x] local socket integration test
+- [ ] wire live daemon-derived templates into the executable server mode
+- [ ] test with a real ProgPoWZ-capable miner
 
-Checkpoint 2 was confirmed locally with an exact-Zano Release build passing 10/10 tests.
-Checkpoint 3 is CI-green. Current work is resolved against the job actually issued
-to the session, duplicate nonces are suppressed before expensive hashing, and
-accepted shares/block candidates both pass through the same exact local ProgPoWZ
-and `ShareChain::submit_share()` verification path. Ordinary shares are never sent
-to `zanod`, and block candidates are surfaced without automatic submission.
+Checkpoints 1-4 are CI-green in both lightweight and exact-Zano configurations.
+The server defaults to `127.0.0.1:3333`, uses newline-delimited JSON-RPC, creates a
+deterministic session per connection, and routes valid submissions through local
+ProgPoWZ/share-chain admission. Full-network candidates are surfaced but are not
+automatically submitted to `zanod`.
 
 ## Phase 5 — P2P network
 
