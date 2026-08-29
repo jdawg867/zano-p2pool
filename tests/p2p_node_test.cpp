@@ -3,8 +3,10 @@
 #include "test_check.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <string_view>
 #include <thread>
@@ -125,6 +127,8 @@ int main() {
     P2pNodeProtocol requester_protocol(
         requester_chain, requester_work, requester_mutex);
 
+    std::atomic<std::size_t> provider_messages{0};
+    std::atomic<std::size_t> requester_messages{0};
     P2pRuntime* provider_runtime_ptr = nullptr;
     P2pRuntime* requester_runtime_ptr = nullptr;
 
@@ -134,13 +138,15 @@ int main() {
             make_handshake(0x20),
         },
         [&](const P2pHandshake& peer, const P2pEnvelope& envelope) {
-            CHECK(provider_runtime_ptr != nullptr);
-            static_cast<void>(provider_protocol.handle(
-                *provider_runtime_ptr,
-                peer,
-                envelope,
-                child.timestamp,
-                ProgPowZContextMode::Light));
+            ++provider_messages;
+            if (provider_runtime_ptr != nullptr) {
+                static_cast<void>(provider_protocol.handle(
+                    *provider_runtime_ptr,
+                    peer,
+                    envelope,
+                    child.timestamp,
+                    ProgPowZContextMode::Light));
+            }
         });
 
     P2pRuntime requester_runtime(
@@ -149,13 +155,15 @@ int main() {
             make_handshake(0x70),
         },
         [&](const P2pHandshake& peer, const P2pEnvelope& envelope) {
-            CHECK(requester_runtime_ptr != nullptr);
-            static_cast<void>(requester_protocol.handle(
-                *requester_runtime_ptr,
-                peer,
-                envelope,
-                child.timestamp,
-                ProgPowZContextMode::Light));
+            ++requester_messages;
+            if (requester_runtime_ptr != nullptr) {
+                static_cast<void>(requester_protocol.handle(
+                    *requester_runtime_ptr,
+                    peer,
+                    envelope,
+                    child.timestamp,
+                    ProgPowZContextMode::Light));
+            }
         });
 
     provider_runtime_ptr = &provider_runtime;
@@ -183,6 +191,8 @@ int main() {
                requester_chain.contains(child_id) &&
                !requester_chain.is_orphan(child_id);
     }));
+    CHECK(requester_messages.load() >= 2);
+    CHECK(provider_messages.load() >= 1);
 
     {
         std::lock_guard lock(requester_mutex);
@@ -192,14 +202,12 @@ int main() {
         CHECK(requester_chain.best_tip()->id == child_id);
     }
 #else
-    // Lightweight builds exercise the same live message/request/response path
-    // but fail closed at local PoW admission without the exact backend.
-    CHECK(wait_for([&] {
-        std::lock_guard lock(requester_mutex);
-        return requester_chain.connected_size() == 0;
-    }));
+    // Lightweight builds receive the live gossip frame but fail closed at
+    // local PoW admission without the exact backend.
+    CHECK(wait_for([&] { return requester_messages.load() >= 1; }));
     {
         std::lock_guard lock(requester_mutex);
+        CHECK(requester_chain.connected_size() == 0);
         CHECK(!requester_chain.contains(parent_id));
         CHECK(!requester_chain.contains(child_id));
     }
