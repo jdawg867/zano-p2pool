@@ -1,11 +1,12 @@
 #include "zano_p2pool/p2p_runtime.hpp"
+#include "zano_p2pool/p2p_tip.hpp"
 #include "test_check.hpp"
 
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <mutex>
-#include <string>
+#include <thread>
 #include <vector>
 
 namespace {
