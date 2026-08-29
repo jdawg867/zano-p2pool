@@ -310,6 +310,12 @@ P2pEnvelope P2pTcpConnection::receive_envelope() {
     return receive_envelope_fd(socket_fd_);
 }
 
+void P2pTcpConnection::shutdown() noexcept {
+    if (socket_fd_ >= 0) {
+        (void)::shutdown(socket_fd_, SHUT_RDWR);
+    }
+}
+
 void P2pTcpConnection::close() noexcept {
     close_fd(socket_fd_);
 }
