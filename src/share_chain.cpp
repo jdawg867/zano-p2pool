@@ -346,6 +346,11 @@ const ConnectedShare* ShareChain::find(const ShareId& id) const noexcept {
     return it == connected_.end() ? nullptr : &it->second;
 }
 
+const Share* ShareChain::find_orphan_share(const ShareId& id) const noexcept {
+    const auto it = orphans_.find(id);
+    return it == orphans_.end() ? nullptr : &it->second.share;
+}
+
 const ConnectedShare* ShareChain::best_tip() const noexcept {
     if (!best_tip_id_) {
         return nullptr;
