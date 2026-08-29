@@ -42,6 +42,12 @@ public:
     // inbound connections, then start its managed reader loop.
     void connect_peer(const P2pEndpoint& endpoint);
 
+    // Send to live connections advertising the exact public node id. Returns
+    // true if at least one matching peer accepted the frame for sending.
+    [[nodiscard]] bool send_to(
+        const NodeId& peer_node_id,
+        const P2pEnvelope& envelope) noexcept;
+
     // Best-effort broadcast to currently live peers. A failed send disconnects
     // that peer; other peers still receive the message.
     void broadcast(const P2pEnvelope& envelope) noexcept;
@@ -57,6 +63,9 @@ private:
     void accept_loop() noexcept;
     void add_peer(P2pTcpConnection connection);
     void peer_loop(const std::shared_ptr<Peer>& peer) noexcept;
+    [[nodiscard]] bool send_peer(
+        const std::shared_ptr<Peer>& peer,
+        const P2pEnvelope& envelope) noexcept;
 
     P2pRuntimeConfig config_;
     P2pMessageHandler handler_;
