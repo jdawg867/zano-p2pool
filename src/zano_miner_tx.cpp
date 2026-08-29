@@ -2,6 +2,7 @@
 
 #include "zano_p2pool/crypto_hash.hpp"
 
+#include <algorithm>
 #include <stdexcept>
 #include <string>
 #include <vector>
