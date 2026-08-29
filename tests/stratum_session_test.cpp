@@ -3,10 +3,12 @@
 #include "zano_p2pool/stratum_protocol.hpp"
 #include "zano_p2pool/stratum_session.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
 namespace {
 
