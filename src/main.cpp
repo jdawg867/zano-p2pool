@@ -5,6 +5,7 @@
 #include "zano_p2pool/rpc_client.hpp"
 #include "zano_p2pool/share.hpp"
 #include "zano_p2pool/stratum_server.hpp"
+#include "zano_p2pool/template_refresh.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -354,6 +355,14 @@ int main(int argc, char** argv) {
 
             try {
                 LiveTemplate next = fetch_live_template(rpc, options);
+                if (!zano_p2pool::should_refresh_stratum_template(
+                        live.block,
+                        live.mining_work,
+                        next.block,
+                        next.mining_work)) {
+                    continue;
+                }
+
                 const std::uint64_t next_version = server.publish_template(
                     next.mining_work.header_hash,
                     next.seed_hash,
