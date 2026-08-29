@@ -20,6 +20,7 @@ pkg_check_modules(CURL REQUIRED IMPORTED_TARGET libcurl)
 pkg_check_modules(JSONC REQUIRED IMPORTED_TARGET json-c)
 
 add_library(zano_p2pool_core
+    src/block_submitter.cpp
     src/block_template.cpp
     src/crypto_hash.cpp
     src/mining_header.cpp
@@ -148,6 +149,10 @@ target_link_libraries(zano-p2pool-header PRIVATE zano_p2pool_core)
 
 if(ZANO_P2POOL_BUILD_TESTS)
     enable_testing()
+
+    add_executable(block_submitter_test tests/block_submitter_test.cpp)
+    target_link_libraries(block_submitter_test PRIVATE zano_p2pool_core)
+    add_test(NAME block_submitter_test COMMAND block_submitter_test)
 
     add_executable(block_template_test tests/block_template_test.cpp)
     target_link_libraries(block_template_test PRIVATE zano_p2pool_core)
