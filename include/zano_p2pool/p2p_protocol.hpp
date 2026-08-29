@@ -22,6 +22,7 @@ enum class P2pMessageType : std::uint8_t {
     ShareRequest = 3,
     ShareResponse = 4,
     TipAnnounce = 5,
+    MiningContextAnnounce = 6,
 };
 
 enum class P2pNetwork : std::uint8_t {
@@ -33,8 +34,11 @@ using NodeId = Hash256;
 
 inline constexpr std::uint64_t kP2pCapabilityShareGossip = 1ULL << 0;
 inline constexpr std::uint64_t kP2pCapabilityShareSync = 1ULL << 1;
+inline constexpr std::uint64_t kP2pCapabilityMiningContext = 1ULL << 2;
 inline constexpr std::uint64_t kP2pCapabilitiesV1 =
-    kP2pCapabilityShareGossip | kP2pCapabilityShareSync;
+    kP2pCapabilityShareGossip |
+    kP2pCapabilityShareSync |
+    kP2pCapabilityMiningContext;
 
 struct P2pEnvelope {
     std::uint8_t version{kP2pProtocolVersion};
