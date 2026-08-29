@@ -10,8 +10,13 @@ namespace zano_p2pool {
 
 inline constexpr std::size_t kP2pShareRequestPayloadSize = 32;
 inline constexpr std::size_t kP2pShareResponseHeaderSize = 33;
-inline constexpr std::size_t kP2pShareResponseFoundPayloadSize =
+inline constexpr std::size_t kP2pShareResponseFoundV1PayloadSize =
     kP2pShareResponseHeaderSize + kShareV1SerializedSize;
+inline constexpr std::size_t kP2pShareResponseFoundV2PayloadSize =
+    kP2pShareResponseHeaderSize + kShareV2SerializedSize;
+// Compatibility alias for v1-era tests/callers.
+inline constexpr std::size_t kP2pShareResponseFoundPayloadSize =
+    kP2pShareResponseFoundV1PayloadSize;
 
 enum class P2pShareResponseCode : std::uint8_t {
     Found = 1,
