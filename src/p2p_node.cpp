@@ -69,9 +69,25 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
         }
         break;
     }
-    case P2pMessageType::MiningContextAnnounce:
-        result.status = P2pNodeMessageStatus::MiningContextDeferred;
+    case P2pMessageType::MiningContextAnnounce: {
+        std::lock_guard lock(state_mutex_);
+        if (!local_mining_anchor_.has_value() || !expected_payout_.has_value()) {
+            result.status = P2pNodeMessageStatus::MiningContextDeferred;
+            return result;
+        }
+
+        const P2pMiningContextTrustResult trust =
+            promote_p2p_mining_context(
+                trusted_work_,
+                peer,
+                envelope,
+                *local_mining_anchor_,
+                *expected_payout_);
+        result.status = P2pNodeMessageStatus::MiningContextProcessed;
+        result.mining_context_status = trust.status;
+        result.mining_context_registry_inserted = trust.registry_inserted;
         return result;
+    }
     case P2pMessageType::Handshake:
         // Handshakes are consumed by P2pTcpConnection before a runtime peer is
         // established; another handshake on an established session is not a
@@ -92,6 +108,23 @@ void P2pNodeProtocol::remember_trusted_work(
     trusted_work_.remember(context);
 }
 
+void P2pNodeProtocol::set_local_mining_anchor(
+    const P2pMiningAnchor& anchor) {
+    std::lock_guard lock(state_mutex_);
+    local_mining_anchor_ = anchor;
+}
+
+void P2pNodeProtocol::set_expected_payout(
+    const P2pPayoutAddress& payout) {
+    std::lock_guard lock(state_mutex_);
+    expected_payout_ = payout;
+}
+
+void P2pNodeProtocol::clear_expected_payout() noexcept {
+    std::lock_guard lock(state_mutex_);
+    expected_payout_.reset();
+}
+
 std::size_t P2pNodeProtocol::trusted_work_count() const noexcept {
     std::lock_guard lock(state_mutex_);
     return trusted_work_.size();
@@ -107,6 +140,11 @@ P2pTipHint P2pNodeProtocol::local_tip() const noexcept {
     return p2p_tip_hint_from_chain(chain_);
 }
 
+bool P2pNodeProtocol::mining_context_trust_ready() const noexcept {
+    std::lock_guard lock(state_mutex_);
+    return local_mining_anchor_.has_value() && expected_payout_.has_value();
+}
+
 const char* p2p_node_message_status_name(
     P2pNodeMessageStatus status) noexcept {
     switch (status) {
@@ -118,6 +156,8 @@ const char* p2p_node_message_status_name(
         return "share-response-processed";
     case P2pNodeMessageStatus::TipProcessed:
         return "tip-processed";
+    case P2pNodeMessageStatus::MiningContextProcessed:
+        return "mining-context-processed";
     case P2pNodeMessageStatus::MiningContextDeferred:
         return "mining-context-deferred";
     case P2pNodeMessageStatus::UnexpectedHandshake:
