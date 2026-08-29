@@ -12,7 +12,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(ZANO_P2POOL_BUILD_TESTS "Build zano-p2pool tests" ON)
 set(ZANO_P2POOL_ZANO_SOURCE_DIR "" CACHE PATH
-    "Path to a Zano source tree used to enable exact ProgPoWZ support")
+    "Path to a Zano source tree used to enable exact ProgPoWZ/Zano crypto support")
 
 find_package(PkgConfig REQUIRED)
 find_package(Threads REQUIRED)
@@ -23,6 +23,7 @@ add_library(zano_p2pool_core
     src/block_template.cpp
     src/crypto_hash.cpp
     src/mining_header.cpp
+    src/p2p_miner_tx_binding.cpp
     src/p2p_mining_context.cpp
     src/p2p_protocol.cpp
     src/p2p_share.cpp
@@ -40,6 +41,7 @@ add_library(zano_p2pool_core
     src/stratum_session.cpp
     src/stratum_submission.cpp
     src/template_refresh.cpp
+    src/zano_curve.cpp
 )
 
 target_include_directories(zano_p2pool_core
@@ -93,9 +95,39 @@ if(ZANO_P2POOL_ZANO_SOURCE_DIR)
 
     message(STATUS
         "ProgPoWZ enabled from Zano source: ${_zano_libethash_dir}")
+
+    set(_zano_curve_sources
+        "${_zano_source_dir}/src/crypto/crypto.cpp"
+        "${_zano_source_dir}/src/crypto/crypto-ops.c"
+        "${_zano_source_dir}/src/crypto/crypto-ops-data.c"
+        "${_zano_source_dir}/src/crypto/random.c"
+        "${_zano_source_dir}/src/crypto/hash.c"
+        "${_zano_source_dir}/src/crypto/keccak.c"
+    )
+
+    if(EXISTS "${_zano_source_dir}/src/crypto/crypto.cpp")
+        add_library(zano_p2pool_zano_curve STATIC ${_zano_curve_sources})
+        target_include_directories(zano_p2pool_zano_curve
+            PUBLIC
+                "${_zano_source_dir}/src"
+        )
+        target_compile_definitions(zano_p2pool_zano_curve PRIVATE STATICLIB=1)
+        target_link_libraries(zano_p2pool_zano_curve PUBLIC Threads::Threads)
+
+        target_compile_definitions(zano_p2pool_core PUBLIC
+            ZANO_P2POOL_HAVE_ZANO_CURVE=1
+        )
+        target_link_libraries(zano_p2pool_core PUBLIC zano_p2pool_zano_curve)
+
+        message(STATUS
+            "Exact Zano curve backend enabled from: ${_zano_source_dir}/src/crypto")
+    else()
+        message(STATUS
+            "Exact Zano curve backend disabled: src/crypto not present in Zano source tree")
+    endif()
 else()
     message(STATUS
-        "ProgPoWZ backend disabled; set ZANO_P2POOL_ZANO_SOURCE_DIR to enable it")
+        "Exact Zano backends disabled; set ZANO_P2POOL_ZANO_SOURCE_DIR to enable them")
 endif()
 
 add_executable(zano-p2pool src/main.cpp)
@@ -185,4 +217,8 @@ if(ZANO_P2POOL_BUILD_TESTS)
     add_executable(p2p_mining_context_test tests/p2p_mining_context_test.cpp)
     target_link_libraries(p2p_mining_context_test PRIVATE zano_p2pool_core)
     add_test(NAME p2p_mining_context_test COMMAND p2p_mining_context_test)
+
+    add_executable(p2p_miner_tx_binding_test tests/p2p_miner_tx_binding_test.cpp)
+    target_link_libraries(p2p_miner_tx_binding_test PRIVATE zano_p2pool_core)
+    add_test(NAME p2p_miner_tx_binding_test COMMAND p2p_miner_tx_binding_test)
 endif()
