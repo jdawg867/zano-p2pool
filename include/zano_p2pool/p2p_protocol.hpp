@@ -61,6 +61,9 @@ enum class P2pHandshakeStatus {
     SelfConnection,
 };
 
+[[nodiscard]] bool p2p_message_type_supported(
+    std::uint8_t value) noexcept;
+
 [[nodiscard]] std::vector<std::uint8_t> serialize_p2p_envelope(
     const P2pEnvelope& envelope);
 [[nodiscard]] P2pEnvelope deserialize_p2p_envelope(
