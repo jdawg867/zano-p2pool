@@ -83,6 +83,15 @@ This resolves to `http://127.0.0.1:12111/json_rpc`.
 | mainnet | 11211 | 11121 | 11777 |
 | testnet | 12111 | 11314 | 11888 |
 
+## Current Zano references
+
+- `getblocktemplate`: https://docs.zano.org/docs/build/rpc-api/daemon-rpc-api/getblocktemplate/
+- `submitblock`: https://docs.zano.org/docs/build/rpc-api/daemon-rpc-api/submitblock/
+- Zano source: https://github.com/hyle-team/zano
+- Zano difficulty implementation: https://github.com/hyle-team/zano/blob/master/src/currency_core/difficulty.cpp
+- Zano target tests: https://github.com/hyle-team/zano/blob/master/tests/hash-target.cpp
+- Zano ProgPoWZ miner reference: https://github.com/hyle-team/progminer
+
 ## Development roadmap
 
 See [`docs/roadmap.md`](docs/roadmap.md).
