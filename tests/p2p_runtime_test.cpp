@@ -68,6 +68,23 @@ bool wait_for_peers(
     return false;
 }
 
+bool wait_for_counts(
+    const P2pRuntime& first,
+    std::size_t first_expected,
+    const P2pRuntime& second,
+    std::size_t second_expected) {
+    const auto deadline = std::chrono::steady_clock::now() + 2s;
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (first.peer_count() == first_expected &&
+            second.peer_count() == second_expected) {
+            return true;
+        }
+        std::this_thread::sleep_for(10ms);
+    }
+    return first.peer_count() == first_expected &&
+           second.peer_count() == second_expected;
+}
+
 }  // namespace
 
 int main() {
@@ -121,7 +138,7 @@ int main() {
     node_a.connect_peer(P2pEndpoint{"127.0.0.1", node_b.listen_port()});
     CHECK(wait_for_peers(node_a, node_b, 1));
     node_a.connect_peer(P2pEndpoint{"127.0.0.1", node_c.listen_port()});
-    CHECK(wait_for_peers(node_a, node_c, 1));
+    CHECK(wait_for_counts(node_a, 2, node_c, 1));
     CHECK(node_a.peer_count() == 2);
 
     P2pTipHint tip_a;
