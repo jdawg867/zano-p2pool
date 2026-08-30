@@ -136,7 +136,7 @@ end-to-end against a synchronized Zano testnet daemon:
 
 This validates the complete single-node path:
 
-`SRBMMiner -> Stratum -> ProgPoWZ verification -> share chain -> block candidate -> canonical block reconstruction -> zanod submitblock`.
+`SRBMiner -> Stratum -> ProgPoWZ verification -> share chain -> block candidate -> canonical block reconstruction -> zanod submitblock`.
 
 Independent `zanod getblocktemplate` calls can produce different mining headers at
 the same Zano height. The protocol/runtime now has an independently verified
