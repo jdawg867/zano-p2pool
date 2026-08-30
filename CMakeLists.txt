@@ -88,6 +88,7 @@ if(ZANO_P2POOL_ZANO_SOURCE_DIR)
     endif()
 
     enable_language(C)
+    find_package(Boost REQUIRED COMPONENTS serialization)
 
     add_subdirectory(
         "${_zano_libethash_dir}"
@@ -110,11 +111,14 @@ if(ZANO_P2POOL_ZANO_SOURCE_DIR)
         "${_zano_source_dir}/src/crypto/crypto.cpp"
         "${_zano_source_dir}/src/crypto/crypto-sugar.cpp"
         "${_zano_source_dir}/src/crypto/range_proofs.cpp"
+        "${_zano_source_dir}/src/crypto/one_out_of_many_proofs.cpp"
+        "${_zano_source_dir}/src/crypto/zarcanum.cpp"
         "${_zano_source_dir}/src/crypto/crypto-ops.c"
         "${_zano_source_dir}/src/crypto/crypto-ops-data.c"
         "${_zano_source_dir}/src/crypto/random.c"
         "${_zano_source_dir}/src/crypto/hash.c"
         "${_zano_source_dir}/src/crypto/keccak.c"
+        "${_zano_source_dir}/src/crypto/blake2b-ref.c"
     )
 
     if(EXISTS "${_zano_source_dir}/src/crypto/crypto.cpp")
@@ -126,6 +130,10 @@ if(ZANO_P2POOL_ZANO_SOURCE_DIR)
                 "${_zano_source_dir}/contrib/epee/include"
         )
         target_compile_definitions(zano_p2pool_zano_curve PRIVATE STATICLIB=1)
+        target_compile_options(zano_p2pool_zano_curve PRIVATE
+            -ffunction-sections
+            -fdata-sections
+        )
         target_link_libraries(zano_p2pool_zano_curve PUBLIC Threads::Threads)
 
         target_compile_definitions(zano_p2pool_core PUBLIC
@@ -136,13 +144,14 @@ if(ZANO_P2POOL_ZANO_SOURCE_DIR)
         message(STATUS
             "Exact Zano curve backend enabled from: ${_zano_source_dir}/src/crypto")
 
-        # Pull only the canonical miner-transaction constructor object from
-        # currency_format_utils.cpp. Function/data sections plus linker GC keep
-        # unrelated daemon/database code out of P2Pool while preserving the
-        # exact HF6 output/range/balance-proof implementation reached by
-        # construct_miner_tx().
+        # Pull only the canonical miner-transaction constructor and the
+        # transaction helpers it directly needs. Function/data sections plus
+        # linker GC keep unrelated daemon/database code out of P2Pool while
+        # preserving the exact HF6 output/range/balance-proof implementation
+        # reached by construct_miner_tx().
         add_library(zano_p2pool_zano_miner_tx STATIC
             "${_zano_source_dir}/src/currency_core/currency_format_utils.cpp"
+            "${_zano_source_dir}/src/currency_core/currency_format_utils_transactions.cpp"
         )
         target_include_directories(zano_p2pool_zano_miner_tx
             PUBLIC
@@ -159,6 +168,7 @@ if(ZANO_P2POOL_ZANO_SOURCE_DIR)
         target_link_libraries(zano_p2pool_zano_miner_tx
             PUBLIC
                 zano_p2pool_zano_curve
+                Boost::serialization
                 Threads::Threads
         )
 
