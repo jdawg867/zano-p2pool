@@ -1,11 +1,13 @@
 #pragma once
 
+#include "zano_p2pool/p2p_peer_score.hpp"
 #include "zano_p2pool/p2p_transport.hpp"
 
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -19,6 +21,7 @@ struct P2pRuntimeConfig {
     P2pHandshake handshake{};
     std::chrono::milliseconds outbound_reconnect_initial{250};
     std::chrono::milliseconds outbound_reconnect_max{5000};
+    P2pPeerScoreConfig peer_score{};
 };
 
 using P2pMessageHandler = std::function<void(
@@ -48,6 +51,19 @@ public:
     // managed outbound target. Startup failures and later disconnects are retried
     // in the background with bounded exponential backoff until stop().
     void connect_peer(const P2pEndpoint& endpoint);
+
+    // Report a protocol-level violation attributable to a validated public node
+    // id. Normal socket closure is not a violation and must not call this API.
+    // Crossing the configured threshold immediately disconnects that identity
+    // and suppresses managed outbound reconnects until the temporary ban expires.
+    void report_peer_misbehavior(
+        const NodeId& peer_node_id,
+        std::uint32_t penalty = kP2pProtocolViolationPenalty) noexcept;
+
+    [[nodiscard]] std::uint32_t peer_score(
+        const NodeId& peer_node_id) const noexcept;
+    [[nodiscard]] bool peer_banned(
+        const NodeId& peer_node_id) const noexcept;
 
     // Send to live connections advertising the exact public node id. Returns
     // true if at least one matching peer accepted the frame for sending.
@@ -86,6 +102,7 @@ private:
 
     P2pRuntimeConfig config_;
     P2pMessageHandler handler_;
+    P2pPeerScoreBook peer_scores_;
 
     std::atomic<bool> running_{false};
     std::unique_ptr<P2pTcpListener> listener_;
