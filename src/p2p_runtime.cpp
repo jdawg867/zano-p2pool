@@ -131,6 +131,24 @@ void P2pRuntime::broadcast(const P2pEnvelope& envelope) noexcept {
     }
 }
 
+void P2pRuntime::broadcast_except(
+    const NodeId& excluded_node_id,
+    const P2pEnvelope& envelope) noexcept {
+    std::vector<std::shared_ptr<Peer>> peers;
+    {
+        std::lock_guard lock(peers_mutex_);
+        peers = peers_;
+    }
+
+    for (const auto& peer : peers) {
+        if (!peer->alive.load() ||
+            peer->connection.peer_handshake().node_id == excluded_node_id) {
+            continue;
+        }
+        static_cast<void>(send_peer(peer, envelope));
+    }
+}
+
 bool P2pRuntime::running() const noexcept {
     return running_.load();
 }
