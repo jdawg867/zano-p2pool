@@ -15,6 +15,15 @@ MinerId miner(std::uint8_t value) {
     return id;
 }
 
+PayoutPublicKeys payout(std::uint8_t seed) {
+    PayoutPublicKeys result;
+    for (std::size_t i = 0; i < 32; ++i) {
+        result.spend_public_key[i] = static_cast<std::uint8_t>(seed + i);
+        result.view_public_key[i] = static_cast<std::uint8_t>(seed + 0x40U + i);
+    }
+    return result;
+}
+
 ChainWork work(std::string_view decimal) {
     return share_work(difficulty128_from_decimal(decimal));
 }
@@ -35,6 +44,30 @@ ShareId append_share(
     share.share_difficulty = difficulty128_from_decimal(difficulty);
     share.network_difficulty = difficulty128_from_decimal("1000000");
     share.miner_id = miner_id;
+
+    const AddShareResult result = chain.add_share_unchecked(share);
+    CHECK(result.disposition == ShareDisposition::Connected);
+    return result.id;
+}
+
+ShareId append_share_v2(
+    ShareChain& chain,
+    const ShareId& parent,
+    std::uint64_t height,
+    std::string_view difficulty,
+    const PayoutPublicKeys& payout_keys) {
+    Share share;
+    share.version = kShareVersion2;
+    share.parent_id = parent;
+    share.share_height = height;
+    share.timestamp = 2000 + height;
+    share.zano_height = 210000 + height;
+    share.mining_header_hash.fill(static_cast<std::uint8_t>(height + 0x20U));
+    share.nonce = height + 200;
+    share.share_difficulty = difficulty128_from_decimal(difficulty);
+    share.network_difficulty = difficulty128_from_decimal("1000000");
+    share.miner_id = miner_id_from_payout(payout_keys);
+    share.payout = payout_keys;
 
     const AddShareResult result = chain.add_share_unchecked(share);
     CHECK(result.disposition == ShareDisposition::Connected);
@@ -127,6 +160,53 @@ int main() {
     CHECK(tie_payouts[1].amount == 1);
     CHECK(tie_payouts[2].miner_id == miner_c);
     CHECK(tie_payouts[2].amount == 0);
+
+    // PPLNS always walks the current verified best-chain ancestry. Work on a
+    // branch that becomes stale after a reorg must never remain in the window.
+    ShareChain reorg_chain;
+    ShareId reorg_root{};
+    reorg_root = append_share(reorg_chain, reorg_root, 0, "10", miner_a);
+    const ShareId losing_tip =
+        append_share(reorg_chain, reorg_root, 1, "50", miner_b);
+    const ShareId winning_parent =
+        append_share(reorg_chain, reorg_root, 1, "20", miner_c);
+    CHECK(reorg_chain.best_tip() != nullptr);
+    CHECK(reorg_chain.best_tip()->id == losing_tip);
+
+    const ShareId winning_tip =
+        append_share(reorg_chain, winning_parent, 2, "40", miner_c);
+    CHECK(reorg_chain.best_tip() != nullptr);
+    CHECK(reorg_chain.best_tip()->id == winning_tip);
+    CHECK(reorg_chain.is_stale(losing_tip));
+
+    const PplnsWindow reorg_window = build_pplns_window(reorg_chain, work("65"));
+    CHECK(reorg_window.complete);
+    CHECK(reorg_window.covered_work == work("65"));
+    CHECK(find_work(reorg_window, miner_a)->work == work("5"));
+    CHECK(find_work(reorg_window, miner_b) == nullptr);
+    CHECK(find_work(reorg_window, miner_c)->work == work("60"));
+
+    // Public payout identity from v2 shares is retained while repeated work for
+    // the same MinerId is aggregated, so direct coinbase construction does not
+    // depend on a node-local wallet/address database.
+    ShareChain payout_chain;
+    const PayoutPublicKeys payout_keys = payout(0x31);
+    ShareId payout_parent{};
+    payout_parent = append_share_v2(
+        payout_chain, payout_parent, 0, "25", payout_keys);
+    payout_parent = append_share_v2(
+        payout_chain, payout_parent, 1, "35", payout_keys);
+
+    const MinerId payout_miner = miner_id_from_payout(payout_keys);
+    const PplnsWindow payout_window = build_pplns_window(
+        payout_chain, work("60"));
+    CHECK(payout_window.complete);
+    CHECK(payout_window.miners.size() == 1);
+    const PplnsMinerWork* payout_row = find_work(payout_window, payout_miner);
+    CHECK(payout_row != nullptr);
+    CHECK(payout_row->work == work("60"));
+    CHECK(payout_row->payout.has_value());
+    CHECK(*payout_row->payout == payout_keys);
 
     ShareChain empty;
     const PplnsWindow empty_window = build_pplns_window(empty, work("100"));
