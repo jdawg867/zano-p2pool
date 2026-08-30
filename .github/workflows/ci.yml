@@ -60,6 +60,7 @@ jobs:
             build-essential \
             cmake \
             libboost-dev \
+            libboost-serialization-dev \
             libcurl4-openssl-dev \
             libjson-c-dev \
             pkg-config
@@ -74,7 +75,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          cmake --build build-zano -j2 2>&1 | tee build-zano/exact-build.log
+          cmake --build build-zano -j2 --verbose 2>&1 | tee build-zano/exact-build.log
 
       - name: Upload exact build log on failure
         if: failure()
