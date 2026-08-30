@@ -1,5 +1,7 @@
 #include "zano_p2pool/pplns.hpp"
 
+#include "zano_p2pool/pow_target.hpp"
+
 #include <boost/multiprecision/cpp_int.hpp>
 
 #include <algorithm>
@@ -70,6 +72,7 @@ PplnsWindow build_pplns_window(
     }
 
     cpp_int remaining = requested;
+    std::size_t included_shares = 0;
     std::map<MinerId, CreditedWork> credited;
 
     const ConnectedShare* current = chain.best_tip();
@@ -85,6 +88,7 @@ PplnsWindow build_pplns_window(
         miner.work += included;
         merge_payout_identity(miner, current->share);
         remaining -= included;
+        ++included_shares;
 
         if (remaining == 0 || is_zero_share_id(current->share.parent_id)) {
             break;
@@ -100,6 +104,7 @@ PplnsWindow build_pplns_window(
     PplnsWindow result;
     result.requested_work = requested_work;
     result.covered_work = int_to_work(requested - remaining);
+    result.included_shares = included_shares;
     result.complete = remaining == 0;
     result.miners.reserve(credited.size());
     for (const auto& [miner_id, row] : credited) {
@@ -111,6 +116,65 @@ PplnsWindow build_pplns_window(
             int_to_work(row.work),
             row.payout,
         });
+    }
+    return result;
+}
+
+PplnsWindow build_sidechain_pplns_window(
+    const ShareChain& chain,
+    const SidechainParameters& params,
+    const Difficulty128& network_difficulty) {
+    if (params.pplns_window_shares == 0 ||
+        params.pplns_window_shares > 32) {
+        throw std::invalid_argument(
+            "sidechain PPLNS share window must be between 1 and 32");
+    }
+    if (params.pplns_max_network_difficulty_multiplier == 0) {
+        throw std::invalid_argument(
+            "sidechain PPLNS network-difficulty multiplier must be nonzero");
+    }
+    if (difficulty128_is_zero(network_difficulty)) {
+        throw std::invalid_argument(
+            "sidechain PPLNS network difficulty must be nonzero");
+    }
+
+    const ConnectedShare* current = chain.best_tip();
+    if (current == nullptr) {
+        return {};
+    }
+
+    cpp_int recent_work = 0;
+    std::size_t counted = 0;
+    while (current != nullptr && counted < params.pplns_window_shares) {
+        const cpp_int current_work = work_to_int(
+            share_work(current->share.share_difficulty));
+        if (current_work == 0) {
+            throw std::logic_error("connected share has zero work");
+        }
+        recent_work += current_work;
+        ++counted;
+
+        if (is_zero_share_id(current->share.parent_id)) {
+            break;
+        }
+        current = chain.find(current->share.parent_id);
+        if (current == nullptr) {
+            throw std::logic_error(
+                "best-chain PPLNS traversal encountered a missing parent");
+        }
+    }
+
+    const cpp_int network_work = work_to_int(share_work(network_difficulty));
+    const cpp_int work_cap =
+        network_work * params.pplns_max_network_difficulty_multiplier;
+    const cpp_int requested = std::min(recent_work, work_cap);
+    if (requested <= 0) {
+        throw std::logic_error("sidechain PPLNS policy produced zero work");
+    }
+
+    PplnsWindow result = build_pplns_window(chain, int_to_work(requested));
+    if (!result.complete || result.included_shares > params.pplns_window_shares) {
+        throw std::logic_error("sidechain PPLNS policy bound was violated");
     }
     return result;
 }
