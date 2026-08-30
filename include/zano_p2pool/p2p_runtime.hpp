@@ -39,7 +39,8 @@ public:
     void stop() noexcept;
 
     // Establish one outbound peer using the same validated handshake path as
-    // inbound connections, then start its managed reader loop.
+    // inbound connections, then start its managed reader loop. Self-connections
+    // and duplicate live node ids are rejected.
     void connect_peer(const P2pEndpoint& endpoint);
 
     // Send to live connections advertising the exact public node id. Returns
@@ -68,7 +69,7 @@ private:
     struct Peer;
 
     void accept_loop() noexcept;
-    void add_peer(P2pTcpConnection connection);
+    [[nodiscard]] bool add_peer(P2pTcpConnection connection);
     void peer_loop(const std::shared_ptr<Peer>& peer) noexcept;
     [[nodiscard]] bool send_peer(
         const std::shared_ptr<Peer>& peer,
