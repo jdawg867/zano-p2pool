@@ -20,6 +20,8 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
     ProgPowZContextMode mode) {
     P2pNodeMessageResult result;
     std::optional<P2pEnvelope> followup;
+    std::optional<P2pEnvelope> relay_share;
+    std::optional<P2pEnvelope> relay_tip;
 
     switch (envelope.type) {
     case P2pMessageType::ShareAnnounce: {
@@ -32,6 +34,11 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
         if (receive.missing_parent_id.has_value()) {
             followup = make_p2p_share_request_envelope(
                 *receive.missing_parent_id);
+        }
+        if (receive.status == P2pShareReceiveStatus::Connected) {
+            relay_share = envelope;
+            relay_tip = make_p2p_tip_announce_envelope(
+                p2p_tip_hint_from_chain(chain_));
         }
         break;
     }
@@ -53,6 +60,16 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
             if (sync.share_result->missing_parent_id.has_value()) {
                 followup = make_p2p_share_request_envelope(
                     *sync.share_result->missing_parent_id);
+            }
+            if (sync.share_result->status == P2pShareReceiveStatus::Connected) {
+                const P2pShareResponse response =
+                    parse_p2p_share_response_envelope(envelope);
+                if (response.share.has_value()) {
+                    relay_share = make_p2p_share_announce_envelope(
+                        *response.share);
+                    relay_tip = make_p2p_tip_announce_envelope(
+                        p2p_tip_hint_from_chain(chain_));
+                }
             }
         }
         break;
@@ -96,8 +113,20 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
         return result;
     }
 
+    // Network I/O deliberately happens after the node-state critical section.
+    // Freshly connected shares are forwarded to every peer except the source.
+    // Duplicate/orphan/rejected shares never fan out, which provides natural
+    // loop suppression without trusting peer-provided seen sets.
     if (followup.has_value()) {
         result.sent_followup = runtime.send_to(peer.node_id, *followup);
+    }
+    if (relay_share.has_value()) {
+        runtime.broadcast_except(peer.node_id, *relay_share);
+        result.relayed_share = true;
+    }
+    if (relay_tip.has_value()) {
+        runtime.broadcast_except(peer.node_id, *relay_tip);
+        result.relayed_tip = true;
     }
     return result;
 }
