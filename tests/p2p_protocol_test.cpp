@@ -34,6 +34,8 @@ using zano_p2pool::SidechainParentNetwork;
 [[nodiscard]] P2pHandshake make_handshake() {
     P2pHandshake handshake;
     handshake.network = P2pNetwork::Testnet;
+    handshake.sidechain_id =
+        zano_p2pool::canonical_p2p_sidechain_id(handshake.network);
     for (std::size_t i = 0; i < handshake.node_id.size(); ++i) {
         handshake.node_id[i] = static_cast<std::uint8_t>(0x10U + i);
         handshake.best_share_id[i] = static_cast<std::uint8_t>(0xa0U + i);
@@ -75,10 +77,18 @@ int main() {
 
     const auto testnet_sidechain_id = zano_p2pool::sidechain_id(testnet_params);
     const auto mainnet_sidechain_id = zano_p2pool::sidechain_id(mainnet_params);
+    CHECK(zano_p2pool::hash_to_hex(testnet_sidechain_id) ==
+          "fbf26192fae53245968e3c83e1153eac613415eeed6581440944efecc353b8fa");
+    CHECK(zano_p2pool::hash_to_hex(mainnet_sidechain_id) ==
+          "fad216aee63f8c0f1747b7d92b4cb9bdb71f2cee5cc004fa40ef72f4cb5eb3ed");
     CHECK(!zano_p2pool::is_zero_sidechain_id(testnet_sidechain_id));
     CHECK(!zano_p2pool::is_zero_sidechain_id(mainnet_sidechain_id));
     CHECK(testnet_sidechain_id != mainnet_sidechain_id);
     CHECK(zano_p2pool::sidechain_id(testnet_params) == testnet_sidechain_id);
+    CHECK(zano_p2pool::canonical_p2p_sidechain_id(P2pNetwork::Testnet) ==
+          testnet_sidechain_id);
+    CHECK(zano_p2pool::canonical_p2p_sidechain_id(P2pNetwork::Mainnet) ==
+          mainnet_sidechain_id);
 
     auto changed_params = testnet_params;
     ++changed_params.max_future_seconds;
@@ -87,7 +97,9 @@ int main() {
     const P2pHandshake handshake = make_handshake();
 
     const std::string expected_payload_hex =
-        "01101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f"
+        "01"
+        "fbf26192fae53245968e3c83e1153eac613415eeed6581440944efecc353b8fa"
+        "101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f"
         "0000000000000007"
         "0d06"
         "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf"
@@ -105,8 +117,10 @@ int main() {
     CHECK(envelope.payload == payload);
 
     const std::string expected_frame_hex =
-        "5a5032500101000000000053"
-        "01101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f"
+        "5a5032500201000000000073"
+        "01"
+        "fbf26192fae53245968e3c83e1153eac613415eeed6581440944efecc353b8fa"
+        "101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f"
         "0000000000000007"
         "0d06"
         "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf"
@@ -130,14 +144,29 @@ int main() {
     NodeId other_local_id{};
     other_local_id.fill(0x55);
     CHECK(zano_p2pool::validate_p2p_handshake(
-              handshake, P2pNetwork::Testnet, other_local_id) ==
-          P2pHandshakeStatus::Accept);
+              handshake,
+              P2pNetwork::Testnet,
+              testnet_sidechain_id,
+              other_local_id) == P2pHandshakeStatus::Accept);
     CHECK(zano_p2pool::validate_p2p_handshake(
-              handshake, P2pNetwork::Mainnet, other_local_id) ==
-          P2pHandshakeStatus::WrongNetwork);
+              handshake,
+              P2pNetwork::Mainnet,
+              mainnet_sidechain_id,
+              other_local_id) == P2pHandshakeStatus::WrongNetwork);
+
+    P2pHandshake wrong_sidechain = handshake;
+    wrong_sidechain.sidechain_id = mainnet_sidechain_id;
     CHECK(zano_p2pool::validate_p2p_handshake(
-              handshake, P2pNetwork::Testnet, handshake.node_id) ==
-          P2pHandshakeStatus::SelfConnection);
+              wrong_sidechain,
+              P2pNetwork::Testnet,
+              testnet_sidechain_id,
+              other_local_id) == P2pHandshakeStatus::WrongSidechain);
+
+    CHECK(zano_p2pool::validate_p2p_handshake(
+              handshake,
+              P2pNetwork::Testnet,
+              testnet_sidechain_id,
+              handshake.node_id) == P2pHandshakeStatus::SelfConnection);
 
     NodeId zero_node{};
     CHECK(zano_p2pool::is_zero_node_id(zero_node));
@@ -174,7 +203,8 @@ int main() {
     }));
 
     auto bad_version = frame;
-    bad_version[4] = 2;
+    bad_version[4] = static_cast<std::uint8_t>(
+        zano_p2pool::kP2pProtocolVersion + 1);
     CHECK(throws_runtime_error([&] {
         (void)zano_p2pool::deserialize_p2p_envelope(bad_version);
     }));
@@ -215,16 +245,26 @@ int main() {
         (void)zano_p2pool::deserialize_p2p_handshake_payload(bad_network_payload);
     }));
 
+    auto zero_sidechain_payload = payload;
+    std::fill(
+        zero_sidechain_payload.begin() + 1,
+        zero_sidechain_payload.begin() + 33,
+        0);
+    CHECK(throws_runtime_error([&] {
+        (void)zano_p2pool::deserialize_p2p_handshake_payload(
+            zero_sidechain_payload);
+    }));
+
     auto zero_node_payload = payload;
-    std::fill(zero_node_payload.begin() + 1, zero_node_payload.begin() + 33, 0);
+    std::fill(zero_node_payload.begin() + 33, zero_node_payload.begin() + 65, 0);
     CHECK(throws_runtime_error([&] {
         (void)zano_p2pool::deserialize_p2p_handshake_payload(zero_node_payload);
     }));
 
     auto inconsistent_tip_payload = payload;
     std::fill(
-        inconsistent_tip_payload.begin() + 43,
         inconsistent_tip_payload.begin() + 75,
+        inconsistent_tip_payload.begin() + 107,
         0);
     CHECK(throws_runtime_error([&] {
         (void)zano_p2pool::deserialize_p2p_handshake_payload(
@@ -250,7 +290,8 @@ int main() {
     }));
 
     P2pEnvelope unsupported_version = envelope;
-    unsupported_version.version = 2;
+    unsupported_version.version = static_cast<std::uint8_t>(
+        zano_p2pool::kP2pProtocolVersion + 1);
     CHECK(throws_runtime_error([&] {
         (void)zano_p2pool::serialize_p2p_envelope(unsupported_version);
     }));
