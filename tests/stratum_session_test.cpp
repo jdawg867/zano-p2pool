@@ -104,6 +104,27 @@ int main() {
     CHECK(registry.match_submission(session1, header1) ==
           StratumWorkMatch::Current);
 
+    // Consensus sidechain mode overrides a miner's requested/configured vardiff
+    // exactly. The wire target and recorded share difficulty must be identical
+    // to the branch-derived value supplied by the node.
+    const Difficulty128 consensus_override =
+        difficulty128_from_decimal("300000000");
+    const auto consensus_work =
+        registry.issue_work(session2, consensus_override);
+    CHECK(consensus_work.share_difficulty == consensus_override);
+    CHECK(consensus_work.wire_work.share_target.hex() ==
+          difficulty_to_target("300000000").hex());
+    s2 = registry.find_session(session2);
+    CHECK(s2 != nullptr);
+    CHECK(s2->configured_share_difficulty == config.default_share_difficulty);
+
+    // An impossible consensus override still fails closed at the Stratum edge.
+    expect_runtime_error([&] {
+        (void)registry.issue_work(
+            session2,
+            difficulty128_from_decimal("1000000001"));
+    });
+
     // Reissuing unchanged work is idempotent and does not create a false stale
     // generation.
     const auto work1_again = registry.issue_work(session1);
