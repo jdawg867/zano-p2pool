@@ -55,7 +55,7 @@ using boost::multiprecision::cpp_int;
 
 // Calculate the difficulty required for the next share built on a particular
 // parent branch. `history` must be ordered newest-to-oldest and should start at
-// that parent. At most `params.difficulty_window_shares` samples are used.
+// that parent. At most `difficulty_window_shares` samples are used.
 //
 // The calculation follows the established P2Pool retarget shape: discard the
 // oldest/newest 10% by timestamp, measure cumulative work across the retained
@@ -64,15 +64,17 @@ using boost::multiprecision::cpp_int;
 // difficulty so it remains compatible with the existing share<=network rule.
 [[nodiscard]] inline Difficulty128 calculate_next_sidechain_difficulty(
     std::span<const SidechainDifficultySample> history,
-    const SidechainParameters& params,
+    std::uint64_t target_share_seconds,
+    std::uint64_t minimum_share_difficulty,
+    std::uint64_t difficulty_window_shares,
     const Difficulty128& network_difficulty) {
     using sidechain_difficulty_detail::big_endian_to_int;
     using sidechain_difficulty_detail::cpp_int;
     using sidechain_difficulty_detail::int_to_difficulty128;
 
-    if (params.target_share_seconds == 0 ||
-        params.minimum_share_difficulty == 0 ||
-        params.difficulty_window_shares < 2) {
+    if (target_share_seconds == 0 ||
+        minimum_share_difficulty == 0 ||
+        difficulty_window_shares < 2) {
         throw std::invalid_argument("invalid sidechain difficulty parameters");
     }
     if (difficulty128_is_zero(network_difficulty)) {
@@ -80,7 +82,7 @@ using boost::multiprecision::cpp_int;
     }
 
     const cpp_int network = big_endian_to_int(network_difficulty);
-    const cpp_int minimum = params.minimum_share_difficulty;
+    const cpp_int minimum = minimum_share_difficulty;
     const cpp_int effective_minimum = std::min(minimum, network);
 
     if (history.empty()) {
@@ -89,7 +91,7 @@ using boost::multiprecision::cpp_int;
 
     const std::size_t sample_count = std::min<std::size_t>(
         history.size(),
-        static_cast<std::size_t>(params.difficulty_window_shares));
+        static_cast<std::size_t>(difficulty_window_shares));
     const auto samples = history.first(sample_count);
 
     std::uint64_t oldest_timestamp = std::numeric_limits<std::uint64_t>::max();
@@ -155,10 +157,22 @@ using boost::multiprecision::cpp_int;
     }
 
     cpp_int next =
-        (maximum_work - minimum_work) * params.target_share_seconds / delta_t;
+        (maximum_work - minimum_work) * target_share_seconds / delta_t;
     next = std::max(next, effective_minimum);
     next = std::min(next, network);
     return int_to_difficulty128(next);
+}
+
+[[nodiscard]] inline Difficulty128 calculate_next_sidechain_difficulty(
+    std::span<const SidechainDifficultySample> history,
+    const SidechainParameters& params,
+    const Difficulty128& network_difficulty) {
+    return calculate_next_sidechain_difficulty(
+        history,
+        params.target_share_seconds,
+        params.minimum_share_difficulty,
+        params.difficulty_window_shares,
+        network_difficulty);
 }
 
 }  // namespace zano_p2pool
