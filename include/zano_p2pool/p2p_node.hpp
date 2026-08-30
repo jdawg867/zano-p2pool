@@ -31,6 +31,8 @@ struct P2pNodeMessageResult {
         P2pMiningContextTrustStatus::ProofsRejected};
     bool mining_context_registry_inserted{false};
     bool sent_followup{false};
+    bool relayed_share{false};
+    bool relayed_tip{false};
 };
 
 // Runtime protocol dispatcher for share-chain synchronization. ShareChain,
