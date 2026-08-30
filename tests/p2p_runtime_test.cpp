@@ -309,5 +309,79 @@ int main() {
     CHECK(!reconnect_client.running());
     CHECK(reconnect_client.peer_count() == 0);
 
+    // Peer scoring is identity-based and only advances through explicit
+    // protocol-violation reports. Sub-threshold penalties leave the connection
+    // live. Crossing the threshold disconnects the peer, suppresses the managed
+    // outbound reconnect for the ban window, then permits a clean reconnect with
+    // a reset score after the temporary ban expires.
+    Inbox scored_inbox;
+    P2pRuntime scored_client(
+        P2pRuntimeConfig{
+            P2pEndpoint{"127.0.0.1", 0},
+            make_handshake(0x21),
+            25ms,
+            100ms,
+            P2pPeerScoreConfig{50, 200ms},
+        },
+        [&scored_inbox](
+            const P2pHandshake&,
+            const P2pEnvelope& envelope) {
+            scored_inbox.push(envelope);
+        });
+    P2pRuntime scored_server(
+        P2pRuntimeConfig{
+            P2pEndpoint{"127.0.0.1", 0},
+            make_handshake(0x61),
+        });
+
+    scored_client.start();
+    scored_server.start();
+    scored_client.connect_peer(
+        P2pEndpoint{"127.0.0.1", scored_server.listen_port()});
+    CHECK(wait_for_peers(scored_client, scored_server, 1));
+
+    const NodeId scored_server_id = scored_server.local_handshake().node_id;
+    CHECK(scored_client.peer_score(scored_server_id) == 0);
+    CHECK(!scored_client.peer_banned(scored_server_id));
+
+    scored_client.report_peer_misbehavior(scored_server_id, 20);
+    CHECK(scored_client.peer_score(scored_server_id) == 20);
+    CHECK(!scored_client.peer_banned(scored_server_id));
+    CHECK(scored_client.peer_count() == 1);
+
+    scored_client.report_peer_misbehavior(scored_server_id, 30);
+    CHECK(scored_client.peer_score(scored_server_id) == 50);
+    CHECK(scored_client.peer_banned(scored_server_id));
+    CHECK(wait_for_peers(scored_client, scored_server, 0));
+
+    std::this_thread::sleep_for(100ms);
+    CHECK(scored_client.peer_banned(scored_server_id));
+    CHECK(scored_client.peer_count() == 0);
+    CHECK(scored_server.peer_count() == 0);
+
+    CHECK(wait_for_peers(scored_client, scored_server, 1));
+    CHECK(!scored_client.peer_banned(scored_server_id));
+    CHECK(scored_client.peer_score(scored_server_id) == 0);
+
+    P2pTipHint post_ban_tip;
+    post_ban_tip.share_id[31] = 0x73;
+    post_ban_tip.share_height = 203;
+    CHECK(scored_server.send_to(
+        scored_client.local_handshake().node_id,
+        make_p2p_tip_announce_envelope(post_ban_tip)));
+    CHECK(scored_inbox.wait_for_count(1));
+    {
+        std::lock_guard lock(scored_inbox.mutex);
+        CHECK(scored_inbox.messages.size() == 1);
+        CHECK(
+            parse_p2p_tip_announce_envelope(scored_inbox.messages[0]) ==
+            post_ban_tip);
+    }
+
+    scored_server.stop();
+    scored_client.stop();
+    CHECK(!scored_client.running());
+    CHECK(scored_client.peer_count() == 0);
+
     return 0;
 }
