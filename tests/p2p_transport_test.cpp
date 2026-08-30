@@ -38,6 +38,7 @@ P2pHandshake make_handshake(
     std::uint16_t listen_port = 0) {
     P2pHandshake handshake;
     handshake.network = network;
+    handshake.sidechain_id = canonical_p2p_sidechain_id(network);
     handshake.node_id = node_id_from(node_seed);
     handshake.capabilities = kP2pCapabilitiesV1;
     handshake.listen_port = listen_port;
@@ -168,6 +169,30 @@ int main() {
             (void)connect_p2p_peer(
                 P2pEndpoint{"127.0.0.1", testnet_listener.port()},
                 make_handshake(P2pNetwork::Mainnet, 0x60));
+        }));
+        CHECK(server_result.wait_for(std::chrono::seconds(2)) ==
+              std::future_status::ready);
+        CHECK(throws_runtime([&] { (void)server_result.get(); }));
+    }
+
+    // Same-parent-network peers with different sidechain consensus identities
+    // are also rejected before a runtime peer can be established.
+    {
+        P2pTcpListener sidechain_listener(
+            P2pEndpoint{"127.0.0.1", 0},
+            make_handshake(P2pNetwork::Testnet, 0x24));
+        sidechain_listener.start();
+        auto server_result = std::async(std::launch::async, [&sidechain_listener] {
+            return sidechain_listener.accept_peer();
+        });
+
+        P2pHandshake incompatible =
+            make_handshake(P2pNetwork::Testnet, 0x64);
+        incompatible.sidechain_id[0] ^= 0x80U;
+        CHECK(throws_runtime([&] {
+            (void)connect_p2p_peer(
+                P2pEndpoint{"127.0.0.1", sidechain_listener.port()},
+                incompatible);
         }));
         CHECK(server_result.wait_for(std::chrono::seconds(2)) ==
               std::future_status::ready);
