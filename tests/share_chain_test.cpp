@@ -1,5 +1,6 @@
 #include "zano_p2pool/crypto_hash.hpp"
 #include "zano_p2pool/share_chain.hpp"
+#include "zano_p2pool/sidechain_params.hpp"
 #include "test_check.hpp"
 
 #include <algorithm>
@@ -74,6 +75,60 @@ int main() {
     ChainWork overflow_result{};
     const ChainWork work1 = share_work(difficulty128_from_decimal("1"));
     CHECK(!add_chain_work_checked(max_work, work1, overflow_result));
+
+    // A consensus-configured chain requires the exact branch-relative target.
+    // Wrong difficulty is rejected before ProgPoWZ is invoked, so this invariant
+    // is covered in both lightweight and exact-Zano builds.
+    SidechainParameters consensus_params = canonical_sidechain_parameters(
+        SidechainParentNetwork::Testnet);
+    consensus_params.minimum_share_difficulty = 10;
+    consensus_params.target_share_seconds = 10;
+    consensus_params.difficulty_window_shares = 20;
+
+    ShareChain consensus_chain(consensus_params);
+    CHECK(consensus_chain.enforces_sidechain_difficulty());
+    const Difficulty128 consensus_network = difficulty128_from_decimal("1000");
+    CHECK(consensus_chain.expected_next_share_difficulty(consensus_network) ==
+          difficulty128_from_decimal("10"));
+
+    Share wrong_root = make_share("9", 90);
+    wrong_root.network_difficulty = consensus_network;
+    const AddShareResult wrong_root_result = consensus_chain.submit_share(
+        wrong_root,
+        context_for(wrong_root),
+        wrong_root.timestamp);
+    CHECK(wrong_root_result.disposition == ShareDisposition::Rejected);
+    CHECK(wrong_root_result.reject_reason ==
+          ShareRejectReason::UnexpectedShareDifficulty);
+
+    // Branch-relative retargeting follows the explicit parent, not the global
+    // best tip. Synthetic unchecked insertion is used only to construct the two
+    // deterministic histories without requiring PoW vectors for every sample.
+    ShareChain fork_difficulty_chain(consensus_params);
+    Share difficulty_root = make_share("10", 100);
+    difficulty_root.timestamp = 10'000;
+    difficulty_root.network_difficulty = consensus_network;
+    CHECK(fork_difficulty_chain.add_share_unchecked(difficulty_root).disposition ==
+          ShareDisposition::Connected);
+
+    Share steady_branch = make_child(difficulty_root, "10", 101);
+    steady_branch.timestamp = difficulty_root.timestamp + 10;
+    steady_branch.network_difficulty = consensus_network;
+    CHECK(fork_difficulty_chain.add_share_unchecked(steady_branch).disposition ==
+          ShareDisposition::Connected);
+
+    Share fast_branch = make_child(difficulty_root, "10", 102);
+    fast_branch.timestamp = difficulty_root.timestamp + 5;
+    fast_branch.network_difficulty = consensus_network;
+    CHECK(fork_difficulty_chain.add_share_unchecked(fast_branch).disposition ==
+          ShareDisposition::Connected);
+
+    CHECK(fork_difficulty_chain.expected_child_share_difficulty(
+              share_id(steady_branch), consensus_network) ==
+          difficulty128_from_decimal("10"));
+    CHECK(fork_difficulty_chain.expected_child_share_difficulty(
+              share_id(fast_branch), consensus_network) ==
+          difficulty128_from_decimal("20"));
 
     // Orphans are retained but cannot affect the active tip until their parent
     // arrives. Parent insertion deterministically promotes descendants.
@@ -336,6 +391,9 @@ int main() {
     CHECK(std::string(share_reject_reason_name(
               ShareRejectReason::ParentHeightMismatch)) ==
           "parent-height-mismatch");
+    CHECK(std::string(share_reject_reason_name(
+              ShareRejectReason::UnexpectedShareDifficulty)) ==
+          "unexpected-share-difficulty");
     CHECK(std::string(share_reject_reason_name(
               ShareRejectReason::InvalidPow)) ==
           "invalid-pow");
