@@ -112,6 +112,24 @@ cumulative work remains the only best-tip selection input. `p2p_tip_test` brings
 the suite to 18 tests; normal and exact-Zano CI are green and local confirmation is
 pending.
 
+### Live block-submission validation
+
+On 2026-08-30 the current `feature/p2p-foundation` implementation was validated
+end-to-end against a synchronized Zano testnet daemon:
+
+- local exact-Zano Release build passed 30/30 tests;
+- SRBMiner-MULTI connected over the local `progpow_zano` Stratum endpoint;
+- real GPU shares were repeatedly accepted by the verified P2Pool share path;
+- a full-network-difficulty candidate was found at Zano height 167413;
+- the pool reconstructed the canonical HF6 miner transaction and full block;
+- `zanod` accepted the block through JSON-RPC `submitblock`;
+- the pool immediately refreshed and published the height-167414 Stratum template;
+- the daemon remained synchronized and subsequently advanced beyond height 167422.
+
+This validates the complete single-node path:
+
+`SRBMiner -> Stratum -> ProgPoWZ verification -> share chain -> block candidate -> canonical block reconstruction -> zanod submitblock`.
+
 Important remaining constraint: independent `zanod getblocktemplate` calls can
 produce different mining headers at the same Zano height. A true multi-node P2Pool
 therefore still needs a shared or reconstructable mining-context mechanism rather
