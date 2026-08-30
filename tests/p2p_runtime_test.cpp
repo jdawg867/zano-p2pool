@@ -47,6 +47,11 @@ struct Inbox {
         std::unique_lock lock(mutex);
         return cv.wait_for(lock, 2s, [&] { return messages.size() >= count; });
     }
+
+    std::size_t size() {
+        std::lock_guard lock(mutex);
+        return messages.size();
+    }
 };
 
 bool wait_for_peers(
@@ -68,6 +73,7 @@ bool wait_for_peers(
 int main() {
     Inbox inbox_a;
     Inbox inbox_b;
+    Inbox inbox_c;
 
     P2pRuntime node_a(
         P2pRuntimeConfig{
@@ -87,29 +93,66 @@ int main() {
             inbox_b.push(envelope);
         });
 
+    P2pRuntime node_c(
+        P2pRuntimeConfig{
+            P2pEndpoint{"127.0.0.1", 0},
+            make_handshake(0x90),
+        },
+        [&inbox_c](const P2pHandshake&, const P2pEnvelope& envelope) {
+            inbox_c.push(envelope);
+        });
+
     CHECK(!node_a.running());
     CHECK(!node_b.running());
+    CHECK(!node_c.running());
     node_a.start();
     node_b.start();
+    node_c.start();
     CHECK(node_a.running());
     CHECK(node_b.running());
+    CHECK(node_c.running());
     CHECK(node_a.listen_port() != 0);
     CHECK(node_b.listen_port() != 0);
+    CHECK(node_c.listen_port() != 0);
     CHECK(node_a.local_handshake().listen_port == node_a.listen_port());
     CHECK(node_b.local_handshake().listen_port == node_b.listen_port());
+    CHECK(node_c.local_handshake().listen_port == node_c.listen_port());
 
     node_a.connect_peer(P2pEndpoint{"127.0.0.1", node_b.listen_port()});
     CHECK(wait_for_peers(node_a, node_b, 1));
+    node_a.connect_peer(P2pEndpoint{"127.0.0.1", node_c.listen_port()});
+    CHECK(wait_for_peers(node_a, node_c, 1));
+    CHECK(node_a.peer_count() == 2);
 
     P2pTipHint tip_a;
     tip_a.share_id[31] = 0xa1;
     tip_a.share_height = 41;
     node_a.broadcast(make_p2p_tip_announce_envelope(tip_a));
     CHECK(inbox_b.wait_for_count(1));
+    CHECK(inbox_c.wait_for_count(1));
     {
         std::lock_guard lock(inbox_b.mutex);
         CHECK(inbox_b.messages.size() == 1);
         CHECK(parse_p2p_tip_announce_envelope(inbox_b.messages[0]) == tip_a);
+    }
+    {
+        std::lock_guard lock(inbox_c.mutex);
+        CHECK(inbox_c.messages.size() == 1);
+        CHECK(parse_p2p_tip_announce_envelope(inbox_c.messages[0]) == tip_a);
+    }
+
+    P2pTipHint relay_tip;
+    relay_tip.share_id[31] = 0xc3;
+    relay_tip.share_height = 43;
+    node_a.broadcast_except(
+        node_b.local_handshake().node_id,
+        make_p2p_tip_announce_envelope(relay_tip));
+    CHECK(inbox_c.wait_for_count(2));
+    std::this_thread::sleep_for(50ms);
+    CHECK(inbox_b.size() == 1);
+    {
+        std::lock_guard lock(inbox_c.mutex);
+        CHECK(parse_p2p_tip_announce_envelope(inbox_c.messages[1]) == relay_tip);
     }
 
     P2pTipHint tip_b;
@@ -139,14 +182,18 @@ int main() {
 
     const auto deadline = std::chrono::steady_clock::now() + 2s;
     while (std::chrono::steady_clock::now() < deadline &&
-           node_b.peer_count() != 0) {
+           (node_b.peer_count() != 0 || node_c.peer_count() != 0)) {
         std::this_thread::sleep_for(10ms);
     }
     CHECK(node_b.peer_count() == 0);
+    CHECK(node_c.peer_count() == 0);
 
     node_b.stop();
+    node_c.stop();
     CHECK(!node_b.running());
+    CHECK(!node_c.running());
     CHECK(node_b.peer_count() == 0);
+    CHECK(node_c.peer_count() == 0);
 
     return 0;
 }
