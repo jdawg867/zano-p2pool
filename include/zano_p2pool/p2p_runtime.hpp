@@ -52,6 +52,13 @@ public:
     // that peer; other peers still receive the message.
     void broadcast(const P2pEnvelope& envelope) noexcept;
 
+    // Best-effort broadcast excluding every connection that advertises the
+    // supplied node id. This is the relay primitive used by gossip so a frame
+    // is never immediately echoed back to the peer that supplied it.
+    void broadcast_except(
+        const NodeId& excluded_node_id,
+        const P2pEnvelope& envelope) noexcept;
+
     [[nodiscard]] bool running() const noexcept;
     [[nodiscard]] std::uint16_t listen_port() const noexcept;
     [[nodiscard]] P2pHandshake local_handshake() const;
