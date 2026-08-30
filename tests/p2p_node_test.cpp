@@ -277,7 +277,10 @@ int main() {
     CHECK(!requester_relayed_tip.load());
 #endif
 
-    // Benign synchronization/trust states must not accrue reputation damage.
+    // Benign or ambiguous synchronization/trust states must not accrue
+    // reputation damage. Generic share rejection can be caused by local
+    // validation inability, so only explicitly attributable capability misuse
+    // is scoreable on the share paths.
     P2pNodeMessageResult neutral_result;
     neutral_result.status = P2pNodeMessageStatus::MiningContextProcessed;
     neutral_result.mining_context_status =
@@ -288,6 +291,22 @@ int main() {
     CHECK(p2p_node_message_penalty(neutral_result) == 0);
     neutral_result.share_status = P2pShareReceiveStatus::UnknownWorkContext;
     CHECK(p2p_node_message_penalty(neutral_result) == 0);
+    neutral_result.share_status = P2pShareReceiveStatus::Rejected;
+    CHECK(p2p_node_message_penalty(neutral_result) == 0);
+    neutral_result.share_status = P2pShareReceiveStatus::CapabilityMissing;
+    CHECK(p2p_node_message_penalty(neutral_result) ==
+          kP2pProtocolViolationPenalty);
+
+    neutral_result.status = P2pNodeMessageStatus::ShareResponseProcessed;
+    neutral_result.sync_status = P2pShareSyncReceiveStatus::ShareProcessed;
+    neutral_result.share_status = P2pShareReceiveStatus::Rejected;
+    CHECK(p2p_node_message_penalty(neutral_result) == 0);
+    neutral_result.share_status = P2pShareReceiveStatus::CapabilityMissing;
+    CHECK(p2p_node_message_penalty(neutral_result) ==
+          kP2pProtocolViolationPenalty);
+    neutral_result.sync_status = P2pShareSyncReceiveStatus::CapabilityMissing;
+    CHECK(p2p_node_message_penalty(neutral_result) ==
+          kP2pProtocolViolationPenalty);
 
     // A parsed but impossible in-session handshake is an unambiguous protocol
     // violation. P2pNodeProtocol must report it to the runtime automatically.
@@ -307,9 +326,10 @@ int main() {
     }
     CHECK(requester_runtime.peer_banned(scored_peer.node_id));
 
-    // Malformed payloads throw during parsing/structural validation. Those
-    // exceptions must still charge the validated peer identity before being
-    // propagated to the caller.
+    // Generic parse/validation exceptions still propagate, but remain
+    // reputation-neutral until peer-attributable protocol violations have a
+    // dedicated exception type. This avoids banning a peer for a local/internal
+    // failure that happens to use the same broad exception class.
     const P2pHandshake malformed_peer = make_handshake(0x44);
     P2pEnvelope malformed_tip;
     malformed_tip.type = P2pMessageType::TipAnnounce;
@@ -326,8 +346,7 @@ int main() {
         malformed_threw = true;
     }
     CHECK(malformed_threw);
-    CHECK(requester_runtime.peer_score(malformed_peer.node_id) ==
-          kP2pProtocolViolationPenalty);
+    CHECK(requester_runtime.peer_score(malformed_peer.node_id) == 0);
     CHECK(!requester_runtime.peer_banned(malformed_peer.node_id));
 
     leaf_runtime.stop();
