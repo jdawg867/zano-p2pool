@@ -13,6 +13,8 @@
 
 namespace zano_p2pool {
 
+struct SidechainParameters;
+
 using ChainWork = std::array<std::uint8_t, 32>;
 
 inline constexpr std::uint64_t kShareMaxFutureSeconds = 60;
@@ -43,6 +45,7 @@ enum class ShareRejectReason {
     ZeroShareDifficulty,
     ZeroNetworkDifficulty,
     ShareDifficultyAboveNetwork,
+    UnexpectedShareDifficulty,
     InvalidRootHeight,
     InvalidNonRootHeight,
     ParentHeightMismatch,
@@ -73,6 +76,13 @@ struct ConnectedShare {
 
 class ShareChain {
 public:
+    // The default constructor preserves the existing synthetic/testing behavior
+    // where callers may build arbitrary work branches with add_share_unchecked().
+    // A production sidechain passes its canonical SidechainParameters explicitly;
+    // submit_share() then enforces the branch-relative expected difficulty.
+    ShareChain() = default;
+    explicit ShareChain(const SidechainParameters& sidechain_parameters);
+
     [[nodiscard]] AddShareResult submit_share(
         const Share& share,
         const ShareWorkContext& trusted_context,
@@ -93,11 +103,34 @@ public:
     [[nodiscard]] std::size_t connected_size() const noexcept;
     [[nodiscard]] std::size_t orphan_size() const noexcept;
 
+    [[nodiscard]] bool enforces_sidechain_difficulty() const noexcept {
+        return difficulty_policy_.has_value();
+    }
+
+    // Expected difficulty for a new share extending the currently selected tip.
+    // On an empty chain this returns the configured minimum, capped by the
+    // current Zano network difficulty.
+    [[nodiscard]] Difficulty128 expected_next_share_difficulty(
+        const Difficulty128& network_difficulty) const;
+
+    // Expected difficulty for a child of an explicit connected parent. A zero
+    // parent id denotes a root share and therefore an empty history.
+    [[nodiscard]] Difficulty128 expected_child_share_difficulty(
+        const ShareId& parent_id,
+        const Difficulty128& network_difficulty) const;
+
 private:
+    struct DifficultyPolicy {
+        std::uint64_t target_share_seconds{0};
+        std::uint64_t minimum_share_difficulty{0};
+        std::uint64_t difficulty_window_shares{0};
+    };
+
     struct OrphanShare {
         Share share{};
         ShareId id{};
         std::optional<CandidateValidation> pow_validation;
+        bool enforce_sidechain_difficulty{false};
     };
 
     [[nodiscard]] bool better_tip(
@@ -114,10 +147,13 @@ private:
     [[nodiscard]] ShareRejectReason parent_timestamp_reject_reason(
         const Share& share,
         const Share& parent) const noexcept;
+    [[nodiscard]] ShareRejectReason expected_difficulty_reject_reason(
+        const Share& share) const;
     [[nodiscard]] ShareRejectReason connect_share(
         const Share& share,
         const ShareId& id,
         std::optional<CandidateValidation> pow_validation,
+        bool enforce_sidechain_difficulty,
         bool& best_tip_changed);
     void promote_children(
         const ShareId& parent_id,
@@ -125,12 +161,14 @@ private:
         bool& best_tip_changed);
     [[nodiscard]] AddShareResult add_prevalidated_share(
         const Share& share,
-        std::optional<CandidateValidation> pow_validation);
+        std::optional<CandidateValidation> pow_validation,
+        bool enforce_sidechain_difficulty);
 
     std::map<ShareId, ConnectedShare> connected_;
     std::map<ShareId, OrphanShare> orphans_;
     std::map<ShareId, std::vector<ShareId>> orphans_by_parent_;
     std::optional<ShareId> best_tip_id_;
+    std::optional<DifficultyPolicy> difficulty_policy_;
 };
 
 [[nodiscard]] const char* share_disposition_name(
