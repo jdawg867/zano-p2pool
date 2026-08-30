@@ -161,6 +161,7 @@ std::vector<P2pEnvelope> canonical_envelopes() {
     const Share share = make_share();
     ShareId request_id{};
     fill_pattern(request_id, 0xa0);
+    const ShareId found_request_id = share_id(share);
 
     P2pTipHint tip;
     fill_pattern(tip.share_id, 0xc0);
@@ -171,7 +172,7 @@ std::vector<P2pEnvelope> canonical_envelopes() {
         make_p2p_share_announce_envelope(share),
         make_p2p_share_request_envelope(request_id),
         make_p2p_share_response_envelope(request_id, nullptr),
-        make_p2p_share_response_envelope(request_id, &share),
+        make_p2p_share_response_envelope(found_request_id, &share),
         make_p2p_tip_announce_envelope(tip),
         make_p2p_mining_context_envelope(make_mining_context()),
     };
