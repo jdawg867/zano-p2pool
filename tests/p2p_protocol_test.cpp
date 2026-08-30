@@ -65,22 +65,31 @@ int main() {
           zano_p2pool::kShareMaxFutureSeconds);
     CHECK(testnet_params.max_parent_backstep_seconds ==
           zano_p2pool::kShareMaxParentBackstepSeconds);
+    CHECK(testnet_params.target_share_seconds == 10);
+    CHECK(testnet_params.minimum_share_difficulty == 100000000);
+    CHECK(testnet_params.difficulty_window_shares == 2160);
+    CHECK(testnet_params.pplns_window_shares == 32);
+    CHECK(testnet_params.pplns_max_network_difficulty_multiplier == 2);
 
     const auto testnet_params_bytes =
         zano_p2pool::serialize_sidechain_parameters(testnet_params);
     const auto mainnet_params_bytes =
         zano_p2pool::serialize_sidechain_parameters(mainnet_params);
     CHECK(zano_p2pool::bytes_to_hex(testnet_params_bytes) ==
-          "5a50325349445631010102000000000000003c000000000000003c");
+          "5a50325349445632010102000000000000003c000000000000003c"
+          "000000000000000a0000000005f5e1000000000000000870"
+          "00000000000000200000000000000002");
     CHECK(zano_p2pool::bytes_to_hex(mainnet_params_bytes) ==
-          "5a50325349445631020102000000000000003c000000000000003c");
+          "5a50325349445632020102000000000000003c000000000000003c"
+          "000000000000000a0000000005f5e1000000000000000870"
+          "00000000000000200000000000000002");
 
     const auto testnet_sidechain_id = zano_p2pool::sidechain_id(testnet_params);
     const auto mainnet_sidechain_id = zano_p2pool::sidechain_id(mainnet_params);
     CHECK(zano_p2pool::hash_to_hex(testnet_sidechain_id) ==
-          "fbf26192fae53245968e3c83e1153eac613415eeed6581440944efecc353b8fa");
+          "8fa702b5b875e51cb925949ec01ed103d6f0f29b357dbf0452326ff787abf72a");
     CHECK(zano_p2pool::hash_to_hex(mainnet_sidechain_id) ==
-          "fad216aee63f8c0f1747b7d92b4cb9bdb71f2cee5cc004fa40ef72f4cb5eb3ed");
+          "cdba59fbce2b4abb2778266a36f829c6fb3a247fa79be0fa1bd1082d0d5a430f");
     CHECK(!zano_p2pool::is_zero_sidechain_id(testnet_sidechain_id));
     CHECK(!zano_p2pool::is_zero_sidechain_id(mainnet_sidechain_id));
     CHECK(testnet_sidechain_id != mainnet_sidechain_id);
@@ -91,14 +100,14 @@ int main() {
           mainnet_sidechain_id);
 
     auto changed_params = testnet_params;
-    ++changed_params.max_future_seconds;
+    ++changed_params.target_share_seconds;
     CHECK(zano_p2pool::sidechain_id(changed_params) != testnet_sidechain_id);
 
     const P2pHandshake handshake = make_handshake();
 
     const std::string expected_payload_hex =
         "01"
-        "fbf26192fae53245968e3c83e1153eac613415eeed6581440944efecc353b8fa"
+        "8fa702b5b875e51cb925949ec01ed103d6f0f29b357dbf0452326ff787abf72a"
         "101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f"
         "0000000000000007"
         "0d06"
@@ -119,7 +128,7 @@ int main() {
     const std::string expected_frame_hex =
         "5a5032500201000000000073"
         "01"
-        "fbf26192fae53245968e3c83e1153eac613415eeed6581440944efecc353b8fa"
+        "8fa702b5b875e51cb925949ec01ed103d6f0f29b357dbf0452326ff787abf72a"
         "101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f"
         "0000000000000007"
         "0d06"
