@@ -119,6 +119,19 @@ int main() {
     const P2pHandshake client_handshake =
         make_handshake(P2pNetwork::Testnet, 0x50, 41001);
 
+    // A locally constructed compatibility handshake may omit sidechain_id, but
+    // transport must immediately normalize its stored runtime identity to the
+    // canonical sidechain before any socket is opened.
+    {
+        P2pHandshake implicit =
+            make_handshake(P2pNetwork::Testnet, 0x08);
+        implicit.sidechain_id.fill(0);
+        P2pTcpListener normalized(
+            P2pEndpoint{"127.0.0.1", 0}, implicit);
+        CHECK(normalized.local_handshake().sidechain_id ==
+              canonical_p2p_sidechain_id(P2pNetwork::Testnet));
+    }
+
     P2pTcpListener listener(
         P2pEndpoint{"127.0.0.1", 0}, server_initial);
     CHECK(!listener.running());
@@ -126,6 +139,7 @@ int main() {
     CHECK(listener.running());
     CHECK(listener.port() != 0);
     CHECK(listener.local_handshake().listen_port == listener.port());
+    CHECK(listener.local_handshake().sidechain_id == server_initial.sidechain_id);
 
     auto accepted = std::async(std::launch::async, [&listener] {
         return listener.accept_peer();
