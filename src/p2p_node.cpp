@@ -18,117 +18,175 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
     const P2pEnvelope& envelope,
     std::uint64_t now,
     ProgPowZContextMode mode) {
-    P2pNodeMessageResult result;
-    std::optional<P2pEnvelope> followup;
-    std::optional<P2pEnvelope> relay_share;
-    std::optional<P2pEnvelope> relay_tip;
+    try {
+        P2pNodeMessageResult result;
+        std::optional<P2pEnvelope> followup;
+        std::optional<P2pEnvelope> relay_share;
+        std::optional<P2pEnvelope> relay_tip;
 
-    switch (envelope.type) {
-    case P2pMessageType::ShareAnnounce: {
-        std::lock_guard lock(state_mutex_);
-        P2pShareReceiver receiver(chain_, trusted_work_);
-        const P2pShareReceiveResult receive =
-            receiver.receive(peer, envelope, now, mode);
-        result.status = P2pNodeMessageStatus::ShareProcessed;
-        result.share_status = receive.status;
-        if (receive.missing_parent_id.has_value()) {
-            followup = make_p2p_share_request_envelope(
-                *receive.missing_parent_id);
-        }
-        if (receive.status == P2pShareReceiveStatus::Connected) {
-            relay_share = envelope;
-            relay_tip = make_p2p_tip_announce_envelope(
-                p2p_tip_hint_from_chain(chain_));
-        }
-        break;
-    }
-    case P2pMessageType::ShareRequest: {
-        std::lock_guard lock(state_mutex_);
-        followup = answer_p2p_share_request(peer, envelope, chain_);
-        result.status = P2pNodeMessageStatus::ShareRequestAnswered;
-        break;
-    }
-    case P2pMessageType::ShareResponse: {
-        std::lock_guard lock(state_mutex_);
-        P2pShareReceiver receiver(chain_, trusted_work_);
-        const P2pShareSyncReceiveResult sync =
-            receive_p2p_share_response(receiver, peer, envelope, now, mode);
-        result.status = P2pNodeMessageStatus::ShareResponseProcessed;
-        result.sync_status = sync.status;
-        if (sync.share_result.has_value()) {
-            result.share_status = sync.share_result->status;
-            if (sync.share_result->missing_parent_id.has_value()) {
+        switch (envelope.type) {
+        case P2pMessageType::ShareAnnounce: {
+            std::lock_guard lock(state_mutex_);
+            P2pShareReceiver receiver(chain_, trusted_work_);
+            const P2pShareReceiveResult receive =
+                receiver.receive(peer, envelope, now, mode);
+            result.status = P2pNodeMessageStatus::ShareProcessed;
+            result.share_status = receive.status;
+            if (receive.missing_parent_id.has_value()) {
                 followup = make_p2p_share_request_envelope(
-                    *sync.share_result->missing_parent_id);
+                    *receive.missing_parent_id);
             }
-            if (sync.share_result->status == P2pShareReceiveStatus::Connected) {
-                const P2pShareResponse response =
-                    parse_p2p_share_response_envelope(envelope);
-                if (response.share.has_value()) {
-                    relay_share = make_p2p_share_announce_envelope(
-                        *response.share);
-                    relay_tip = make_p2p_tip_announce_envelope(
-                        p2p_tip_hint_from_chain(chain_));
+            if (receive.status == P2pShareReceiveStatus::Connected) {
+                relay_share = envelope;
+                relay_tip = make_p2p_tip_announce_envelope(
+                    p2p_tip_hint_from_chain(chain_));
+            }
+            break;
+        }
+        case P2pMessageType::ShareRequest: {
+            std::lock_guard lock(state_mutex_);
+            followup = answer_p2p_share_request(peer, envelope, chain_);
+            result.status = P2pNodeMessageStatus::ShareRequestAnswered;
+            break;
+        }
+        case P2pMessageType::ShareResponse: {
+            std::lock_guard lock(state_mutex_);
+            P2pShareReceiver receiver(chain_, trusted_work_);
+            const P2pShareSyncReceiveResult sync =
+                receive_p2p_share_response(receiver, peer, envelope, now, mode);
+            result.status = P2pNodeMessageStatus::ShareResponseProcessed;
+            result.sync_status = sync.status;
+            if (sync.share_result.has_value()) {
+                result.share_status = sync.share_result->status;
+                if (sync.share_result->missing_parent_id.has_value()) {
+                    followup = make_p2p_share_request_envelope(
+                        *sync.share_result->missing_parent_id);
+                }
+                if (sync.share_result->status == P2pShareReceiveStatus::Connected) {
+                    const P2pShareResponse response =
+                        parse_p2p_share_response_envelope(envelope);
+                    if (response.share.has_value()) {
+                        relay_share = make_p2p_share_announce_envelope(
+                            *response.share);
+                        relay_tip = make_p2p_tip_announce_envelope(
+                            p2p_tip_hint_from_chain(chain_));
+                    }
                 }
             }
+            break;
         }
-        break;
-    }
-    case P2pMessageType::TipAnnounce: {
-        std::lock_guard lock(state_mutex_);
-        const P2pTipHint hint = parse_p2p_tip_announce_envelope(envelope);
-        const P2pTipSyncDecision decision =
-            plan_p2p_tip_sync(peer, hint, chain_);
-        result.status = P2pNodeMessageStatus::TipProcessed;
-        result.tip_status = decision.status;
-        if (decision.requested_id.has_value()) {
-            followup = make_p2p_share_request_envelope(*decision.requested_id);
+        case P2pMessageType::TipAnnounce: {
+            std::lock_guard lock(state_mutex_);
+            const P2pTipHint hint = parse_p2p_tip_announce_envelope(envelope);
+            const P2pTipSyncDecision decision =
+                plan_p2p_tip_sync(peer, hint, chain_);
+            result.status = P2pNodeMessageStatus::TipProcessed;
+            result.tip_status = decision.status;
+            if (decision.requested_id.has_value()) {
+                followup = make_p2p_share_request_envelope(*decision.requested_id);
+            }
+            break;
         }
-        break;
-    }
-    case P2pMessageType::MiningContextAnnounce: {
-        std::lock_guard lock(state_mutex_);
-        if (!local_mining_anchor_.has_value() || !expected_payout_.has_value()) {
-            result.status = P2pNodeMessageStatus::MiningContextDeferred;
-            return result;
+        case P2pMessageType::MiningContextAnnounce: {
+            std::lock_guard lock(state_mutex_);
+            if (!local_mining_anchor_.has_value() || !expected_payout_.has_value()) {
+                result.status = P2pNodeMessageStatus::MiningContextDeferred;
+                break;
+            }
+
+            const P2pMiningContextTrustResult trust =
+                promote_p2p_mining_context(
+                    trusted_work_,
+                    peer,
+                    envelope,
+                    *local_mining_anchor_,
+                    *expected_payout_);
+            result.status = P2pNodeMessageStatus::MiningContextProcessed;
+            result.mining_context_status = trust.status;
+            result.mining_context_registry_inserted = trust.registry_inserted;
+            break;
+        }
+        case P2pMessageType::Handshake:
+            // Handshakes are consumed by P2pTcpConnection before a runtime peer is
+            // established; another handshake on an established session is a
+            // scoreable node-protocol violation.
+            result.status = P2pNodeMessageStatus::UnexpectedHandshake;
+            break;
         }
 
-        const P2pMiningContextTrustResult trust =
-            promote_p2p_mining_context(
-                trusted_work_,
-                peer,
-                envelope,
-                *local_mining_anchor_,
-                *expected_payout_);
-        result.status = P2pNodeMessageStatus::MiningContextProcessed;
-        result.mining_context_status = trust.status;
-        result.mining_context_registry_inserted = trust.registry_inserted;
-        return result;
-    }
-    case P2pMessageType::Handshake:
-        // Handshakes are consumed by P2pTcpConnection before a runtime peer is
-        // established; another handshake on an established session is not a
-        // node-protocol message.
-        result.status = P2pNodeMessageStatus::UnexpectedHandshake;
-        return result;
-    }
+        const std::uint32_t penalty = p2p_node_message_penalty(result);
+        if (penalty != 0) {
+            runtime.report_peer_misbehavior(peer.node_id, penalty);
+        }
 
-    // Network I/O deliberately happens after the node-state critical section.
-    // Freshly connected shares are forwarded to every peer except the source.
-    // Duplicate/orphan/rejected shares never fan out, which provides natural
-    // loop suppression without trusting peer-provided seen sets.
-    if (followup.has_value()) {
-        result.sent_followup = runtime.send_to(peer.node_id, *followup);
+        // Network I/O deliberately happens after the node-state critical section.
+        // Freshly connected shares are forwarded to every peer except the source.
+        // Duplicate/orphan/rejected shares never fan out, which provides natural
+        // loop suppression without trusting peer-provided seen sets.
+        if (followup.has_value()) {
+            result.sent_followup = runtime.send_to(peer.node_id, *followup);
+        }
+        if (relay_share.has_value()) {
+            runtime.broadcast_except(peer.node_id, *relay_share);
+            result.relayed_share = true;
+        }
+        if (relay_tip.has_value()) {
+            runtime.broadcast_except(peer.node_id, *relay_tip);
+            result.relayed_tip = true;
+        }
+        return result;
+    } catch (...) {
+        // Parsing and structural-validation exceptions are attributable to the
+        // peer after the transport handshake has established its public node id.
+        runtime.report_peer_misbehavior(peer.node_id);
+        throw;
     }
-    if (relay_share.has_value()) {
-        runtime.broadcast_except(peer.node_id, *relay_share);
-        result.relayed_share = true;
+}
+
+std::uint32_t p2p_node_message_penalty(
+    const P2pNodeMessageResult& result) noexcept {
+    switch (result.status) {
+    case P2pNodeMessageStatus::ShareProcessed:
+        return (result.share_status == P2pShareReceiveStatus::Rejected ||
+                result.share_status == P2pShareReceiveStatus::CapabilityMissing)
+                   ? kP2pProtocolViolationPenalty
+                   : 0;
+
+    case P2pNodeMessageStatus::ShareRequestAnswered:
+        return 0;
+
+    case P2pNodeMessageStatus::ShareResponseProcessed:
+        if (result.sync_status == P2pShareSyncReceiveStatus::CapabilityMissing) {
+            return kP2pProtocolViolationPenalty;
+        }
+        if (result.sync_status == P2pShareSyncReceiveStatus::ShareProcessed &&
+            (result.share_status == P2pShareReceiveStatus::Rejected ||
+             result.share_status == P2pShareReceiveStatus::CapabilityMissing)) {
+            return kP2pProtocolViolationPenalty;
+        }
+        return 0;
+
+    case P2pNodeMessageStatus::TipProcessed:
+        return (result.tip_status == P2pTipSyncStatus::HeightMismatch ||
+                result.tip_status == P2pTipSyncStatus::CapabilityMissing)
+                   ? kP2pProtocolViolationPenalty
+                   : 0;
+
+    case P2pNodeMessageStatus::MiningContextProcessed:
+        return (result.mining_context_status ==
+                    P2pMiningContextTrustStatus::CapabilityMissing ||
+                result.mining_context_status ==
+                    P2pMiningContextTrustStatus::ProofsRejected)
+                   ? kP2pProtocolViolationPenalty
+                   : 0;
+
+    case P2pNodeMessageStatus::MiningContextDeferred:
+        return 0;
+
+    case P2pNodeMessageStatus::UnexpectedHandshake:
+        return kP2pProtocolViolationPenalty;
     }
-    if (relay_tip.has_value()) {
-        runtime.broadcast_except(peer.node_id, *relay_tip);
-        result.relayed_tip = true;
-    }
-    return result;
+    return 0;
 }
 
 void P2pNodeProtocol::remember_trusted_work(

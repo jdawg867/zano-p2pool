@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <utility>
 
@@ -52,6 +53,7 @@ struct P2pRuntime::OutboundTarget {
 
     P2pEndpoint endpoint;
     std::shared_ptr<Peer> peer;
+    std::optional<NodeId> node_id;
     std::chrono::milliseconds backoff;
     std::chrono::steady_clock::time_point next_attempt;
     bool attempt_in_progress{false};
@@ -61,7 +63,8 @@ P2pRuntime::P2pRuntime(
     P2pRuntimeConfig config,
     P2pMessageHandler handler)
     : config_(std::move(config)),
-      handler_(std::move(handler)) {}
+      handler_(std::move(handler)),
+      peer_scores_(config_.peer_score) {}
 
 P2pRuntime::~P2pRuntime() {
     stop();
@@ -184,12 +187,14 @@ void P2pRuntime::connect_peer(const P2pEndpoint& endpoint) {
         auto peer = add_peer(std::move(connection));
         if (!peer) {
             throw std::runtime_error(
-                "P2P peer rejected: self-connection or duplicate live node id");
+                "P2P peer rejected: self-connection, duplicate, or banned node id");
         }
+        const NodeId peer_node_id = peer->connection.peer_handshake().node_id;
 
         {
             std::lock_guard lock(reconnect_mutex_);
             target->peer = std::move(peer);
+            target->node_id = peer_node_id;
             target->attempt_in_progress = false;
             target->backoff = config_.outbound_reconnect_initial;
             target->next_attempt =
@@ -210,6 +215,44 @@ void P2pRuntime::connect_peer(const P2pEndpoint& endpoint) {
         reconnect_cv_.notify_all();
         throw;
     }
+}
+
+void P2pRuntime::report_peer_misbehavior(
+    const NodeId& peer_node_id,
+    std::uint32_t penalty) noexcept {
+    const P2pPeerPenaltyResult result =
+        peer_scores_.penalize(peer_node_id, penalty);
+    if (!result.ban_started) {
+        return;
+    }
+
+    std::vector<std::shared_ptr<Peer>> banned_peers;
+    {
+        std::lock_guard lock(peers_mutex_);
+        for (const auto& peer : peers_) {
+            if (peer->alive.load() &&
+                peer->connection.peer_handshake().node_id == peer_node_id) {
+                banned_peers.push_back(peer);
+            }
+        }
+    }
+
+    for (const auto& peer : banned_peers) {
+        peer->alive.store(false);
+        std::lock_guard send_lock(peer->send_mutex);
+        peer->connection.shutdown();
+    }
+    reconnect_cv_.notify_all();
+}
+
+std::uint32_t P2pRuntime::peer_score(
+    const NodeId& peer_node_id) const noexcept {
+    return peer_scores_.score(peer_node_id);
+}
+
+bool P2pRuntime::peer_banned(
+    const NodeId& peer_node_id) const noexcept {
+    return peer_scores_.banned(peer_node_id);
 }
 
 bool P2pRuntime::send_to(
@@ -316,12 +359,23 @@ void P2pRuntime::reconnect_loop() noexcept {
 
             for (const auto& candidate : outbound_targets_) {
                 if (candidate->peer && !candidate->peer->alive.load()) {
+                    candidate->node_id =
+                        candidate->peer->connection.peer_handshake().node_id;
                     candidate->peer.reset();
                     candidate->next_attempt =
                         now + config_.outbound_reconnect_initial;
                     candidate->backoff = next_backoff(
                         config_.outbound_reconnect_initial,
                         config_.outbound_reconnect_max);
+                }
+
+                if (!candidate->peer && candidate->node_id.has_value()) {
+                    if (const auto banned_until =
+                            peer_scores_.banned_until(*candidate->node_id, now);
+                        banned_until.has_value()) {
+                        candidate->next_attempt = *banned_until;
+                        continue;
+                    }
                 }
 
                 if (!candidate->peer &&
@@ -348,8 +402,9 @@ void P2pRuntime::reconnect_loop() noexcept {
             auto peer = add_peer(std::move(connection));
             if (!peer) {
                 throw std::runtime_error(
-                    "P2P peer rejected: self-connection or duplicate live node id");
+                    "P2P peer rejected: self-connection, duplicate, or banned node id");
             }
+            const NodeId peer_node_id = peer->connection.peer_handshake().node_id;
 
             std::lock_guard lock(reconnect_mutex_);
             if (!running_.load()) {
@@ -359,6 +414,7 @@ void P2pRuntime::reconnect_loop() noexcept {
                 continue;
             }
             target->peer = std::move(peer);
+            target->node_id = peer_node_id;
             target->attempt_in_progress = false;
             target->backoff = config_.outbound_reconnect_initial;
             target->next_attempt =
@@ -389,7 +445,8 @@ std::shared_ptr<P2pRuntime::Peer> P2pRuntime::add_peer(
     }
 
     const NodeId peer_node_id = connection.peer_handshake().node_id;
-    if (peer_node_id == config_.handshake.node_id) {
+    if (peer_node_id == config_.handshake.node_id ||
+        peer_scores_.banned(peer_node_id)) {
         connection.close();
         return {};
     }
