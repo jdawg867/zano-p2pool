@@ -35,6 +35,13 @@ struct P2pNodeMessageResult {
     bool relayed_tip{false};
 };
 
+// Returns the deterministic score penalty for a fully parsed node-protocol
+// result. Benign synchronization states such as duplicates, unknown work,
+// missing parents and mining-anchor races remain neutral. Malformed payloads
+// throw before a result exists and are scored by P2pNodeProtocol::handle().
+[[nodiscard]] std::uint32_t p2p_node_message_penalty(
+    const P2pNodeMessageResult& result) noexcept;
+
 // Runtime protocol dispatcher for share-chain synchronization. ShareChain,
 // P2pTrustedWorkRegistry and the current local mining context are protected by
 // the same node-wide mutex so Stratum, P2P gossip, sync and checkpoint-6B.4
