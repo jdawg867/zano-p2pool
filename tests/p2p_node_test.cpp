@@ -94,13 +94,17 @@ int main() {
 
     ShareChain provider_chain;
     ShareChain requester_chain;
+    ShareChain leaf_chain;
     P2pTrustedWorkRegistry provider_work;
     P2pTrustedWorkRegistry requester_work;
+    P2pTrustedWorkRegistry leaf_work;
     std::mutex provider_mutex;
     std::mutex requester_mutex;
+    std::mutex leaf_mutex;
 
     provider_work.remember(trusted);
     requester_work.remember(trusted);
+    leaf_work.remember(trusted);
 
 #ifdef ZANO_P2POOL_HAVE_PROGPOWZ
     CHECK(provider_chain.submit_share(
@@ -126,11 +130,17 @@ int main() {
         provider_chain, provider_work, provider_mutex);
     P2pNodeProtocol requester_protocol(
         requester_chain, requester_work, requester_mutex);
+    P2pNodeProtocol leaf_protocol(
+        leaf_chain, leaf_work, leaf_mutex);
 
     std::atomic<std::size_t> provider_messages{0};
     std::atomic<std::size_t> requester_messages{0};
+    std::atomic<std::size_t> leaf_messages{0};
+    std::atomic<bool> requester_relayed_share{false};
+    std::atomic<bool> requester_relayed_tip{false};
     P2pRuntime* provider_runtime_ptr = nullptr;
     P2pRuntime* requester_runtime_ptr = nullptr;
+    P2pRuntime* leaf_runtime_ptr = nullptr;
 
     P2pRuntime provider_runtime(
         P2pRuntimeConfig{
@@ -157,8 +167,31 @@ int main() {
         [&](const P2pHandshake& peer, const P2pEnvelope& envelope) {
             ++requester_messages;
             if (requester_runtime_ptr != nullptr) {
-                static_cast<void>(requester_protocol.handle(
+                const P2pNodeMessageResult result = requester_protocol.handle(
                     *requester_runtime_ptr,
+                    peer,
+                    envelope,
+                    child.timestamp,
+                    ProgPowZContextMode::Light);
+                if (result.relayed_share) {
+                    requester_relayed_share.store(true);
+                }
+                if (result.relayed_tip) {
+                    requester_relayed_tip.store(true);
+                }
+            }
+        });
+
+    P2pRuntime leaf_runtime(
+        P2pRuntimeConfig{
+            P2pEndpoint{"127.0.0.1", 0},
+            make_handshake(0xb0),
+        },
+        [&](const P2pHandshake& peer, const P2pEnvelope& envelope) {
+            ++leaf_messages;
+            if (leaf_runtime_ptr != nullptr) {
+                static_cast<void>(leaf_protocol.handle(
+                    *leaf_runtime_ptr,
                     peer,
                     envelope,
                     child.timestamp,
@@ -168,20 +201,27 @@ int main() {
 
     provider_runtime_ptr = &provider_runtime;
     requester_runtime_ptr = &requester_runtime;
+    leaf_runtime_ptr = &leaf_runtime;
 
     provider_runtime.start();
     requester_runtime.start();
+    leaf_runtime.start();
     requester_runtime.connect_peer(
         P2pEndpoint{"127.0.0.1", provider_runtime.listen_port()});
+    leaf_runtime.connect_peer(
+        P2pEndpoint{"127.0.0.1", requester_runtime.listen_port()});
 
     CHECK(wait_for([&] {
         return provider_runtime.peer_count() == 1 &&
-               requester_runtime.peer_count() == 1;
+               requester_runtime.peer_count() == 2 &&
+               leaf_runtime.peer_count() == 1;
     }));
 
-    // Child-first gossip must trigger the full targeted sync path:
+    // Child-first gossip must trigger the full targeted sync path on the relay:
     // requester orphan -> ShareRequest(parent) -> provider response -> local
-    // parent revalidation -> deterministic child promotion.
+    // parent revalidation -> deterministic child promotion. The now-connected
+    // parent and best-tip hint are then relayed to the leaf without echoing the
+    // source, causing the leaf to request and validate the promoted child too.
     provider_runtime.broadcast(make_p2p_share_announce_envelope(child));
 
 #ifdef ZANO_P2POOL_HAVE_PROGPOWZ
@@ -191,8 +231,17 @@ int main() {
                requester_chain.contains(child_id) &&
                !requester_chain.is_orphan(child_id);
     }));
+    CHECK(wait_for([&] {
+        std::lock_guard lock(leaf_mutex);
+        return leaf_chain.contains(parent_id) &&
+               leaf_chain.contains(child_id) &&
+               !leaf_chain.is_orphan(child_id);
+    }));
     CHECK(requester_messages.load() >= 2);
     CHECK(provider_messages.load() >= 1);
+    CHECK(leaf_messages.load() >= 2);
+    CHECK(requester_relayed_share.load());
+    CHECK(requester_relayed_tip.load());
 
     {
         std::lock_guard lock(requester_mutex);
@@ -201,9 +250,16 @@ int main() {
         CHECK(requester_chain.best_tip() != nullptr);
         CHECK(requester_chain.best_tip()->id == child_id);
     }
+    {
+        std::lock_guard lock(leaf_mutex);
+        CHECK(leaf_chain.connected_size() == 2);
+        CHECK(leaf_chain.orphan_size() == 0);
+        CHECK(leaf_chain.best_tip() != nullptr);
+        CHECK(leaf_chain.best_tip()->id == child_id);
+    }
 #else
     // Lightweight builds receive the live gossip frame but fail closed at
-    // local PoW admission without the exact backend.
+    // local PoW admission without the exact backend, so nothing is relayed.
     CHECK(wait_for([&] { return requester_messages.load() >= 1; }));
     {
         std::lock_guard lock(requester_mutex);
@@ -211,8 +267,17 @@ int main() {
         CHECK(!requester_chain.contains(parent_id));
         CHECK(!requester_chain.contains(child_id));
     }
+    {
+        std::lock_guard lock(leaf_mutex);
+        CHECK(leaf_chain.connected_size() == 0);
+        CHECK(!leaf_chain.contains(parent_id));
+        CHECK(!leaf_chain.contains(child_id));
+    }
+    CHECK(!requester_relayed_share.load());
+    CHECK(!requester_relayed_tip.load());
 #endif
 
+    leaf_runtime.stop();
     requester_runtime.stop();
     provider_runtime.stop();
     return 0;
