@@ -136,9 +136,11 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
         }
         return result;
     } catch (...) {
-        // Parsing and structural-validation exceptions are attributable to the
-        // peer after the transport handshake has established its public node id.
-        runtime.report_peer_misbehavior(peer.node_id);
+        // Generic exceptions are deliberately reputation-neutral. Existing
+        // parsers and validation paths use broad exception types for both
+        // peer-attributable malformed input and local/internal failures; until
+        // those failures are typed explicitly, charging here risks banning a
+        // peer for a local fault.
         throw;
     }
 }
@@ -147,8 +149,10 @@ std::uint32_t p2p_node_message_penalty(
     const P2pNodeMessageResult& result) noexcept {
     switch (result.status) {
     case P2pNodeMessageStatus::ShareProcessed:
-        return (result.share_status == P2pShareReceiveStatus::Rejected ||
-                result.share_status == P2pShareReceiveStatus::CapabilityMissing)
+        // Rejected is intentionally neutral because it can represent a local
+        // inability to validate (for example an unavailable exact PoW backend),
+        // not necessarily malicious peer behavior.
+        return result.share_status == P2pShareReceiveStatus::CapabilityMissing
                    ? kP2pProtocolViolationPenalty
                    : 0;
 
@@ -160,8 +164,7 @@ std::uint32_t p2p_node_message_penalty(
             return kP2pProtocolViolationPenalty;
         }
         if (result.sync_status == P2pShareSyncReceiveStatus::ShareProcessed &&
-            (result.share_status == P2pShareReceiveStatus::Rejected ||
-             result.share_status == P2pShareReceiveStatus::CapabilityMissing)) {
+            result.share_status == P2pShareReceiveStatus::CapabilityMissing) {
             return kP2pProtocolViolationPenalty;
         }
         return 0;
