@@ -71,7 +71,19 @@ jobs:
             -DZANO_P2POOL_ZANO_SOURCE_DIR="$GITHUB_WORKSPACE/zano-src"
 
       - name: Build with exact Zano consensus backends
-        run: cmake --build build-zano -j2
+        shell: bash
+        run: |
+          set -o pipefail
+          cmake --build build-zano -j2 2>&1 | tee build-zano/exact-build.log
+
+      - name: Upload exact build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: exact-build-log
+          path: build-zano/exact-build.log
+          if-no-files-found: error
+          retention-days: 3
 
       - name: Test exact Zano compatibility
         run: ctest --test-dir build-zano --output-on-failure
