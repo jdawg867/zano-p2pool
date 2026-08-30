@@ -281,6 +281,10 @@ if(ZANO_P2POOL_BUILD_TESTS)
     target_link_libraries(p2p_node_test PRIVATE zano_p2pool_core)
     add_test(NAME p2p_node_test COMMAND p2p_node_test)
 
+    add_executable(p2p_consensus_reorg_test tests/p2p_consensus_reorg_test.cpp)
+    target_link_libraries(p2p_consensus_reorg_test PRIVATE zano_p2pool_core)
+    add_test(NAME p2p_consensus_reorg_test COMMAND p2p_consensus_reorg_test)
+
     add_executable(p2p_share_test tests/p2p_share_test.cpp)
     target_link_libraries(p2p_share_test PRIVATE zano_p2pool_core)
     add_test(NAME p2p_share_test COMMAND p2p_share_test)
