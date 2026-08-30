@@ -213,12 +213,39 @@ has confirmed real share propagation across that trust boundary.
 
 ## Phase 6 — PPLNS and payouts
 
-- [ ] deterministic PPLNS window
-- [ ] work-weighted payout accounting
-- [ ] audit Zano miner-transaction consensus rules
-- [ ] determine feasibility of direct multi-recipient coinbase payouts
-- [ ] temporary custodial payout mode only if clearly marked
-- [ ] non-custodial payout design if consensus permits
+- [x] deterministic PPLNS window
+- [x] work-weighted payout accounting
+- [x] audit Zano miner-transaction consensus rules
+- [x] determine feasibility of direct multi-recipient coinbase payouts
+- [x] temporary custodial payout mode not required; direct non-custodial payouts are feasible
+- [x] non-custodial payout design if consensus permits
+
+Checkpoint 1 records the already-implemented deterministic PPLNS accounting path.
+`build_pplns_window()` walks only the locally selected best chain newest-to-oldest,
+credits exactly the requested work, and clips the oldest included share when the
+window boundary falls inside that share. Repeated shares aggregate by `MinerId`,
+and v2 public payout keys remain bound to the credited identity. `allocate_pplns_reward()`
+uses exact integer arithmetic with deterministic largest-remainder apportionment,
+lexicographic `MinerId` tie-breaking, and an exact reward-sum invariant. The Phase 6
+regression added on `feature/pplns-window-accounting` additionally proves that after
+a share-chain reorg, stale-branch work is excluded from the payout window and the
+new best branch alone determines credited work.
+
+Checkpoint 2 records the pinned-Zano HF6 miner-transaction audit and direct payout
+feasibility result. The audited Zano source fixes current miner transactions at
+transaction version 4 / hardfork 6, enforces a hard 32-output transaction limit
+that matches the Bulletproof+ aggregation maximum, and defines a 125 kB full-reward
+zone. The exact-Zano adapter passes the verified PPLNS destinations directly into
+Zano's canonical `construct_miner_tx()` implementation, refuses plans above the
+32-output limit, binds the generated reward back to the daemon template, and uses
+Zano's own balance/range-proof machinery. `zano_miner_tx_test` constructs and parses
+a real two-recipient HF6 miner transaction in exact-Zano builds, while the P2P
+mining-context proof tests independently verify the resulting proof-bearing miner
+transaction before trust promotion. This confirms direct multi-recipient,
+non-custodial coinbase payouts are feasible for the current pinned HF6 rules, so a
+temporary custodial fallback is intentionally not required. On 2026-08-30 the local
+exact-Zano Release suite passed 33/33 in 3.76 seconds, and branch CI #409 passed both
+`build-and-test` and `progpowz-compat`.
 
 ## Phase 7 — public network hardening
 
