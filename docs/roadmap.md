@@ -76,7 +76,7 @@ shares through the verified Stratum path.
 - [x] best-tip handshake and `TipAnnounce` sync hints
 - [x] shared/reconstructable mining-context synchronization
 - [x] outbound reconnect/backoff
-- [ ] peer scoring/bans
+- [x] peer scoring/bans
 - [ ] consensus/reorg integration tests
 - [ ] protocol fuzzing
 - [x] two-node live testnet validation
@@ -128,6 +128,20 @@ reconnection after an established peer disappears and returns, including success
 message exchange after recovery. On 2026-08-30 the exact-Zano Release suite passed
 31/31 locally in 3.04 seconds, and branch CI passed both `build-and-test` and
 `progpowz-compat`.
+
+Checkpoint 8 adds deterministic peer scoring and temporary bans keyed by validated
+public node ID. Explicit protocol-level violations accumulate toward a configurable
+threshold; reaching it disconnects that identity immediately and suppresses managed
+outbound reconnects until the ban expires, while ordinary socket disconnects remain
+neutral. Automatic scoring is applied only to unambiguous protocol abuse: malformed
+payload exceptions, unexpected in-session handshakes, capability misuse,
+inconsistent tip heights, rejected proof-bearing mining contexts, and similarly
+invalid peer data. Duplicate shares, unknown work contexts, and asynchronous
+mining-context anchor mismatches remain neutral. `p2p_runtime_test` covers threshold,
+disconnect, ban-window reconnect gating, expiry and recovery; `p2p_node_test` covers
+automatic protocol classification and scoring. On 2026-08-30 the exact-Zano Release
+suite passed 31/31 locally in 3.22 seconds, and branch CI passed both `build-and-test`
+and `progpowz-compat`.
 
 ### Live two-node P2P validation
 
