@@ -75,7 +75,7 @@ shares through the verified Stratum path.
 - [x] exact-Zano orphan promotion after parent synchronization
 - [x] best-tip handshake and `TipAnnounce` sync hints
 - [x] shared/reconstructable mining-context synchronization
-- [ ] outbound reconnect/backoff
+- [x] outbound reconnect/backoff
 - [ ] peer scoring/bans
 - [ ] consensus/reorg integration tests
 - [ ] protocol fuzzing
@@ -119,6 +119,15 @@ share mined against that foreign header. `p2p_mining_context_runtime_test` exerc
 this over real loopback P2P sockets. On 2026-08-30 the exact-Zano Release suite passed
 31/31 locally, and branch CI passed both the normal `build-and-test` job and the
 exact-Zano `progpowz-compat` job.
+
+Checkpoint 7 adds managed outbound peer reconnect with bounded exponential backoff.
+Configured outbound endpoints remain registered after an initial dial failure or a
+later socket disconnect, while live duplicate node IDs remain rejected by the
+existing admission path. `p2p_runtime_test` now covers both delayed peer startup and
+reconnection after an established peer disappears and returns, including successful
+message exchange after recovery. On 2026-08-30 the exact-Zano Release suite passed
+31/31 locally in 3.04 seconds, and branch CI passed both `build-and-test` and
+`progpowz-compat`.
 
 ### Live two-node P2P validation
 

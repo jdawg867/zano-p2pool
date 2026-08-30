@@ -212,5 +212,102 @@ int main() {
     CHECK(node_b.peer_count() == 0);
     CHECK(node_c.peer_count() == 0);
 
+    // A configured outbound endpoint remains managed even if the first dial
+    // fails. Once the endpoint appears, the runtime must connect without a new
+    // connect_peer() call. After a later disconnect it must back off, keep
+    // retrying, and reconnect again when a replacement listener appears.
+    P2pTcpListener port_reserver(
+        P2pEndpoint{"127.0.0.1", 0},
+        make_handshake(0xc0));
+    port_reserver.start();
+    const std::uint16_t reconnect_port = port_reserver.port();
+    CHECK(reconnect_port != 0);
+    port_reserver.stop();
+
+    Inbox reconnect_inbox;
+    P2pRuntime reconnect_client(
+        P2pRuntimeConfig{
+            P2pEndpoint{"127.0.0.1", 0},
+            make_handshake(0xd0),
+            25ms,
+            100ms,
+        },
+        [&reconnect_inbox](
+            const P2pHandshake&,
+            const P2pEnvelope& envelope) {
+            reconnect_inbox.push(envelope);
+        });
+    reconnect_client.start();
+
+    bool initial_connect_failed = false;
+    try {
+        reconnect_client.connect_peer(
+            P2pEndpoint{"127.0.0.1", reconnect_port});
+    } catch (...) {
+        initial_connect_failed = true;
+    }
+    CHECK(initial_connect_failed);
+    CHECK(reconnect_client.peer_count() == 0);
+
+    P2pRuntime reconnect_server(
+        P2pRuntimeConfig{
+            P2pEndpoint{"127.0.0.1", reconnect_port},
+            make_handshake(0xe0),
+        });
+    reconnect_server.start();
+    CHECK(wait_for_peers(reconnect_client, reconnect_server, 1));
+
+    P2pTipHint first_reconnect_tip;
+    first_reconnect_tip.share_id[31] = 0xd1;
+    first_reconnect_tip.share_height = 101;
+    CHECK(reconnect_server.send_to(
+        reconnect_client.local_handshake().node_id,
+        make_p2p_tip_announce_envelope(first_reconnect_tip)));
+    CHECK(reconnect_inbox.wait_for_count(1));
+
+    reconnect_server.stop();
+    const auto disconnect_deadline =
+        std::chrono::steady_clock::now() + 2s;
+    while (std::chrono::steady_clock::now() < disconnect_deadline &&
+           reconnect_client.peer_count() != 0) {
+        std::this_thread::sleep_for(10ms);
+    }
+    CHECK(reconnect_client.peer_count() == 0);
+
+    // Leave the target unavailable long enough to force failed retries and
+    // exercise the bounded backoff path before bringing the endpoint back.
+    std::this_thread::sleep_for(150ms);
+
+    P2pRuntime restarted_server(
+        P2pRuntimeConfig{
+            P2pEndpoint{"127.0.0.1", reconnect_port},
+            make_handshake(0xf0),
+        });
+    restarted_server.start();
+    CHECK(wait_for_peers(reconnect_client, restarted_server, 1));
+
+    P2pTipHint second_reconnect_tip;
+    second_reconnect_tip.share_id[31] = 0xd2;
+    second_reconnect_tip.share_height = 102;
+    CHECK(restarted_server.send_to(
+        reconnect_client.local_handshake().node_id,
+        make_p2p_tip_announce_envelope(second_reconnect_tip)));
+    CHECK(reconnect_inbox.wait_for_count(2));
+    {
+        std::lock_guard lock(reconnect_inbox.mutex);
+        CHECK(reconnect_inbox.messages.size() == 2);
+        CHECK(
+            parse_p2p_tip_announce_envelope(reconnect_inbox.messages[0]) ==
+            first_reconnect_tip);
+        CHECK(
+            parse_p2p_tip_announce_envelope(reconnect_inbox.messages[1]) ==
+            second_reconnect_tip);
+    }
+
+    restarted_server.stop();
+    reconnect_client.stop();
+    CHECK(!reconnect_client.running());
+    CHECK(reconnect_client.peer_count() == 0);
+
     return 0;
 }
