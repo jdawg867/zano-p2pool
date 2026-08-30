@@ -269,6 +269,10 @@ if(ZANO_P2POOL_BUILD_TESTS)
     target_link_libraries(p2p_protocol_test PRIVATE zano_p2pool_core)
     add_test(NAME p2p_protocol_test COMMAND p2p_protocol_test)
 
+    add_executable(p2p_protocol_fuzz_test tests/p2p_protocol_fuzz_test.cpp)
+    target_link_libraries(p2p_protocol_fuzz_test PRIVATE zano_p2pool_core)
+    add_test(NAME p2p_protocol_fuzz_test COMMAND p2p_protocol_fuzz_test)
+
     add_executable(p2p_transport_test tests/p2p_transport_test.cpp)
     target_link_libraries(p2p_transport_test PRIVATE zano_p2pool_core)
     add_test(NAME p2p_transport_test COMMAND p2p_transport_test)
