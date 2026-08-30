@@ -1,7 +1,9 @@
 #pragma once
 
 #include "zano_p2pool/share_chain.hpp"
+#include "zano_p2pool/sidechain_params.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <vector>
@@ -19,6 +21,7 @@ struct PplnsMinerWork {
 struct PplnsWindow {
     ChainWork requested_work{};
     ChainWork covered_work{};
+    std::size_t included_shares{0};
     bool complete{false};
     std::vector<PplnsMinerWork> miners;
 };
@@ -40,6 +43,16 @@ struct PplnsPayout {
 [[nodiscard]] PplnsWindow build_pplns_window(
     const ShareChain& chain,
     const ChainWork& requested_work);
+
+// Build the canonical sidechain payout window. The effective requested work is
+// the lesser of (a) all work in the newest params.pplns_window_shares best-chain
+// shares and (b) current Zano network difficulty multiplied by
+// params.pplns_max_network_difficulty_multiplier. This keeps bootstrap windows
+// complete while guaranteeing the direct-payout share-count/output bound.
+[[nodiscard]] PplnsWindow build_sidechain_pplns_window(
+    const ShareChain& chain,
+    const SidechainParameters& params,
+    const Difficulty128& network_difficulty);
 
 // Divide reward_atomic proportionally to credited work using exact integer
 // arithmetic. Floor allocations are followed by deterministic largest-remainder
