@@ -100,6 +100,25 @@ bool is_zero_node_id(const NodeId& node_id) noexcept {
         node_id.begin(), node_id.end(), [](std::uint8_t byte) { return byte == 0; });
 }
 
+SidechainId canonical_p2p_sidechain_id(P2pNetwork network) {
+    switch (network) {
+    case P2pNetwork::Testnet:
+        return sidechain_id(canonical_sidechain_parameters(
+            SidechainParentNetwork::Testnet));
+    case P2pNetwork::Mainnet:
+        return sidechain_id(canonical_sidechain_parameters(
+            SidechainParentNetwork::Mainnet));
+    }
+    throw std::invalid_argument("unsupported P2P network");
+}
+
+SidechainId resolved_p2p_sidechain_id(const P2pHandshake& handshake) {
+    if (!is_zero_sidechain_id(handshake.sidechain_id)) {
+        return handshake.sidechain_id;
+    }
+    return canonical_p2p_sidechain_id(handshake.network);
+}
+
 std::vector<std::uint8_t> serialize_p2p_envelope(
     const P2pEnvelope& envelope) {
     if (envelope.version != kP2pProtocolVersion) {
@@ -176,10 +195,16 @@ P2pEnvelope deserialize_p2p_envelope(std::span<const std::uint8_t> bytes) {
 std::vector<std::uint8_t> serialize_p2p_handshake_payload(
     const P2pHandshake& handshake) {
     require_valid_handshake(handshake);
+    const SidechainId effective_sidechain_id =
+        resolved_p2p_sidechain_id(handshake);
 
     std::vector<std::uint8_t> out;
     out.reserve(kP2pHandshakePayloadSize);
     out.push_back(static_cast<std::uint8_t>(handshake.network));
+    out.insert(
+        out.end(),
+        effective_sidechain_id.begin(),
+        effective_sidechain_id.end());
     out.insert(out.end(), handshake.node_id.begin(), handshake.node_id.end());
     append_u64_be(out, handshake.capabilities);
     append_u16_be(out, handshake.listen_port);
@@ -206,15 +231,24 @@ P2pHandshake deserialize_p2p_handshake_payload(
 
     P2pHandshake handshake;
     handshake.network = static_cast<P2pNetwork>(network_value);
-
-    std::copy_n(bytes.begin() + 1, handshake.node_id.size(), handshake.node_id.begin());
-    handshake.capabilities = read_u64_be(bytes, 33);
-    handshake.listen_port = read_u16_be(bytes, 41);
     std::copy_n(
-        bytes.begin() + 43,
+        bytes.begin() + 1,
+        handshake.sidechain_id.size(),
+        handshake.sidechain_id.begin());
+    if (is_zero_sidechain_id(handshake.sidechain_id)) {
+        throw std::runtime_error("P2P sidechain id must be non-zero");
+    }
+    std::copy_n(
+        bytes.begin() + 33,
+        handshake.node_id.size(),
+        handshake.node_id.begin());
+    handshake.capabilities = read_u64_be(bytes, 65);
+    handshake.listen_port = read_u16_be(bytes, 73);
+    std::copy_n(
+        bytes.begin() + 75,
         handshake.best_share_id.size(),
         handshake.best_share_id.begin());
-    handshake.best_share_height = read_u64_be(bytes, 75);
+    handshake.best_share_height = read_u64_be(bytes, 107);
 
     require_valid_handshake(handshake);
     return handshake;
@@ -243,14 +277,29 @@ P2pHandshake parse_p2p_handshake_envelope(const P2pEnvelope& envelope) {
 P2pHandshakeStatus validate_p2p_handshake(
     const P2pHandshake& peer,
     P2pNetwork expected_network,
+    const SidechainId& expected_sidechain_id,
     const NodeId& local_node_id) noexcept {
     if (peer.network != expected_network) {
         return P2pHandshakeStatus::WrongNetwork;
+    }
+    if (peer.sidechain_id != expected_sidechain_id) {
+        return P2pHandshakeStatus::WrongSidechain;
     }
     if (peer.node_id == local_node_id) {
         return P2pHandshakeStatus::SelfConnection;
     }
     return P2pHandshakeStatus::Accept;
+}
+
+P2pHandshakeStatus validate_p2p_handshake(
+    const P2pHandshake& peer,
+    P2pNetwork expected_network,
+    const NodeId& local_node_id) {
+    return validate_p2p_handshake(
+        peer,
+        expected_network,
+        canonical_p2p_sidechain_id(expected_network),
+        local_node_id);
 }
 
 }  // namespace zano_p2pool

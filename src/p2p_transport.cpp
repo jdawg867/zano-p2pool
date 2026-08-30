@@ -244,11 +244,19 @@ void send_envelope_fd(int fd, const P2pEnvelope& envelope) {
 void require_accepted_handshake(
     const P2pHandshake& peer,
     const P2pHandshake& local) {
-    switch (validate_p2p_handshake(peer, local.network, local.node_id)) {
+    const SidechainId expected_sidechain_id =
+        resolved_p2p_sidechain_id(local);
+    switch (validate_p2p_handshake(
+        peer,
+        local.network,
+        expected_sidechain_id,
+        local.node_id)) {
         case P2pHandshakeStatus::Accept:
             return;
         case P2pHandshakeStatus::WrongNetwork:
             throw std::runtime_error("P2P peer is on the wrong network");
+        case P2pHandshakeStatus::WrongSidechain:
+            throw std::runtime_error("P2P peer is on the wrong sidechain");
         case P2pHandshakeStatus::SelfConnection:
             throw std::runtime_error("P2P self-connection rejected");
     }
@@ -325,6 +333,8 @@ P2pTcpListener::P2pTcpListener(
     P2pHandshake local_handshake)
     : endpoint_(std::move(endpoint)),
       local_handshake_(std::move(local_handshake)) {
+    local_handshake_.sidechain_id =
+        resolved_p2p_sidechain_id(local_handshake_);
     (void)serialize_p2p_handshake_payload(local_handshake_);
 }
 
@@ -403,17 +413,20 @@ P2pTcpConnection P2pTcpListener::accept_peer() {
 P2pTcpConnection connect_p2p_peer(
     const P2pEndpoint& endpoint,
     const P2pHandshake& local_handshake) {
-    (void)serialize_p2p_handshake_payload(local_handshake);
+    P2pHandshake normalized_local = local_handshake;
+    normalized_local.sidechain_id =
+        resolved_p2p_sidechain_id(normalized_local);
+    (void)serialize_p2p_handshake_payload(normalized_local);
 
     int socket_fd = open_connected_socket(endpoint);
     try {
         send_envelope_fd(
             socket_fd,
-            make_p2p_handshake_envelope(local_handshake));
+            make_p2p_handshake_envelope(normalized_local));
         const P2pEnvelope peer_envelope = receive_envelope_fd(socket_fd);
         const P2pHandshake peer_handshake =
             parse_p2p_handshake_envelope(peer_envelope);
-        require_accepted_handshake(peer_handshake, local_handshake);
+        require_accepted_handshake(peer_handshake, normalized_local);
         return P2pTcpConnection(socket_fd, peer_handshake, false);
     } catch (...) {
         close_fd(socket_fd);
