@@ -70,7 +70,12 @@ public:
         std::uint64_t height,
         const Difficulty128& network_difficulty);
 
-    [[nodiscard]] StratumIssuedWork issue_work(std::uint64_t session_id);
+    // A full sidechain node supplies consensus_share_difficulty so miner work
+    // uses the exact branch-derived target required by ShareChain admission.
+    // Standalone/session tests may omit it and retain configured vardiff behavior.
+    [[nodiscard]] StratumIssuedWork issue_work(
+        std::uint64_t session_id,
+        std::optional<Difficulty128> consensus_share_difficulty = std::nullopt);
 
     [[nodiscard]] StratumWorkMatch match_submission(
         std::uint64_t session_id,
