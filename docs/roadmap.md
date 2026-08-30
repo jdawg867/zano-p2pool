@@ -53,23 +53,87 @@ exact ProgPoWZ verification before claimed share difficulty contributes chain wo
 - [x] bind to loopback by default with configurable port
 - [x] local socket integration test
 - [x] wire live daemon-derived templates into executable Stratum mode
-- [x] test with a real ProgPoWZ-capable miner
+- [x] test with ProgPoWZ-capable miners
 
-Milestone 0.4 is complete on the feature branch. Validation includes a local
-exact-Zano Release build passing all 13 tests, live testnet template refresh on
-`127.0.0.1:3333`, stable suppression of randomized same-tip templates, and a real
-SRBMiner-MULTI `progpow_zano` session submitting repeatedly accepted shares through
-the locally verified Stratum path.
+Milestone 0.4 is complete and merged to `main`. It was validated with a local
+exact-Zano Release build passing all 13 tests, live Zano testnet template refresh,
+and a real SRBMiner-MULTI `progpow_zano` session submitting repeatedly accepted
+shares through the verified Stratum path.
 
 ## Phase 5 — P2P network
 
-- [ ] peer handshake/versioning
-- [ ] peer discovery/bootstrap peers
-- [ ] share gossip
-- [ ] missing-parent synchronization
+- [x] versioned binary message envelope
+- [x] handshake/version/network identity codec
+- [x] capability bits and public node identifier semantics
+- [x] wrong-network / unsupported-version rejection
+- [x] TCP listener/client transport
+- [x] bounded stream framing
+- [x] share gossip
+- [x] locally trusted-context gate for peer shares
+- [x] duplicate peer-share suppression
+- [x] missing-parent request/response synchronization
+- [x] exact-Zano orphan promotion after parent synchronization
+- [x] best-tip handshake and `TipAnnounce` sync hints
+- [ ] shared/reconstructable mining-context synchronization
+- [ ] outbound reconnect/backoff
 - [ ] peer scoring/bans
-- [ ] consensus/reorg tests
+- [ ] consensus/reorg integration tests
 - [ ] protocol fuzzing
+- [ ] two-node live testnet validation
+
+Checkpoint 1 pins the P2P v1 envelope and handshake byte-for-byte. Frames use a
+12-byte big-endian header (`ZP2P`, protocol version, message type, reserved flags,
+payload length), enforce a 64 KiB payload cap, and fail closed on malformed,
+truncated, trailing, unsupported-version/type/flag data. The handshake carries
+network, non-zero public 32-byte node ID, capability bits, advertised listen port,
+and a best-share sync hint. Best-share hints are not trusted consensus data.
+
+Checkpoint 2 adds configurable TCP listener/client transport, bounded stream
+framing, bidirectional socket handshake validation, and loopback integration tests.
+
+Checkpoint 3 adds canonical `ShareAnnounce` gossip using the existing 165-byte
+`Share` serialization. Peer shares are admitted only when their mining context is
+already trusted locally, and exact-Zano CI rehashes them before they can affect the
+share chain.
+
+Checkpoint 4 adds bounded `ShareRequest` / `ShareResponse` synchronization by
+exact `ShareId`. Found responses bind the requested ID to the returned canonical
+share; not-found responses are explicit. In exact-Zano CI, receiving a valid child
+first creates a verified orphan, requesting/receiving its parent locally rehashes
+the parent, and the child is deterministically promoted. `p2p_sync_test` brings the
+suite to 17 tests, with local exact-Zano confirmation complete.
+
+Checkpoint 5 adds deterministic best-tip synchronization hints to both the initial
+handshake and later 40-byte `TipAnnounce` messages (`ShareId + height`). No peer
+cumulative-work value is transmitted or trusted. Unknown tip IDs are fetched by
+exact ID; known tips with inconsistent advertised heights are flagged. If a known
+tip is already an orphan, the planner requests its missing parent. Local verified
+cumulative work remains the only best-tip selection input. `p2p_tip_test` brings
+the suite to 18 tests; normal and exact-Zano CI are green and local confirmation is
+pending.
+
+### Live block-submission validation
+
+On 2026-08-30 the current `feature/p2p-foundation` implementation was validated
+end-to-end against a synchronized Zano testnet daemon:
+
+- local exact-Zano Release build passed 30/30 tests;
+- SRBMiner-MULTI connected over the local `progpow_zano` Stratum endpoint;
+- real GPU shares were repeatedly accepted by the verified P2Pool share path;
+- a full-network-difficulty candidate was found at Zano height 167413;
+- the pool reconstructed the canonical HF6 miner transaction and full block;
+- `zanod` accepted the block through JSON-RPC `submitblock`;
+- the pool immediately refreshed and published the height-167414 Stratum template;
+- the daemon remained synchronized and subsequently advanced beyond height 167422.
+
+This validates the complete single-node path:
+
+`SRBMiner -> Stratum -> ProgPoWZ verification -> share chain -> block candidate -> canonical block reconstruction -> zanod submitblock`.
+
+Important remaining constraint: independent `zanod getblocktemplate` calls can
+produce different mining headers at the same Zano height. A true multi-node P2Pool
+therefore still needs a shared or reconstructable mining-context mechanism rather
+than trusting arbitrary peer headers.
 
 ## Phase 6 — PPLNS and payouts
 

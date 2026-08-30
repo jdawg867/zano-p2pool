@@ -81,7 +81,27 @@ The fourth milestone adds the local miner-facing Stratum foundation:
 - persistent executable Stratum mode with live daemon template refresh;
 - deterministic suppression of randomized same-tip `getblocktemplate` churn.
 
-Milestone 0.4 was validated with a local exact-Zano Release build passing all 13 tests, live Zano testnet template refresh on `127.0.0.1:3333`, and a real SRBMiner-MULTI `progpow_zano` session submitting repeatedly accepted shares through the verified Stratum path.
+Milestone 0.4 was validated with a local exact-Zano Release build passing all 13 tests, live Zano testnet template refresh on `127.0.0.1:3333`, and a real SRBMiner-MULTI `progpow_zano` session submitting repeatedly accepted shares through the verified Stratum path. It is merged to `main`.
+
+## Milestone 0.5
+
+Current work builds the node-to-node P2P foundation. Completed checkpoints now include:
+
+- deterministic `ZP2P` v1 binary framing with a strict 64 KiB payload limit;
+- network/version/node-ID handshake and capability negotiation;
+- configurable TCP listener/client sessions with bounded stream framing;
+- canonical `ShareAnnounce` gossip using the existing 165-byte `Share` serialization;
+- locally trusted work-context lookup before peer work can be hashed/admitted;
+- duplicate peer-share suppression before expensive ProgPoWZ verification;
+- `ShareRequest` / `ShareResponse` synchronization by exact `ShareId`;
+- explicit not-found responses and response-ID binding;
+- exact-Zano orphan recovery: child-first reception, parent fetch, local parent rehash, and deterministic orphan promotion;
+- handshake and later `TipAnnounce` best-share hints containing only `ShareId + height`;
+- unknown advertised tips are fetched by exact ID, while known-height mismatches are flagged and peer-claimed height/work never selects the local tip.
+
+Checkpoint 5 brings the test suite to 18 tests. Normal and exact-Zano CI are green; local exact-Zano confirmation is the remaining checkpoint gate. Best-share hints are synchronization hints only. Local verified cumulative work remains the sole best-tip selection input.
+
+A key remaining design constraint is mining-context synchronization. Independent `zanod getblocktemplate` calls can produce different mining headers at the same Zano height, so true multi-node P2Pool mining needs a shared or reconstructable mining context rather than trusting arbitrary peer headers.
 
 ## Requirements
 

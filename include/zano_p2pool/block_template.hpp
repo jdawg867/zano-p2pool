@@ -13,6 +13,10 @@ struct BlockTemplate {
     std::string blocktemplate_blob;
     std::string difficulty;
     std::uint64_t height{};
+    // Canonical compact JSON for Zano's RPC miner_tx_tgc object when present.
+    // This context contains miner-transaction generation data, not wallet spend
+    // keys. It is retained so later P2P validation can audit a proposed template.
+    std::string miner_tx_tgc_json;
     std::string prev_hash;
     std::string seed;
     std::string status;

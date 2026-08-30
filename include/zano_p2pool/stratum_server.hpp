@@ -7,6 +7,8 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
+#include <memory>
 #include <mutex>
 #include <set>
 #include <string>
@@ -23,13 +25,26 @@ struct StratumServerConfig {
     StratumSessionConfig sessions{};
 };
 
+using StratumAcceptedShareHandler =
+    std::function<void(const Share& share, bool block_candidate)>;
+
 // Development Stratum listener. It defaults to loopback only. The transport is
 // newline-delimited JSON-RPC 2.0, matching current Zano miner expectations.
 // Session/share-chain state is serialized behind a mutex even though clients are
 // handled concurrently, keeping consensus-facing mutations deterministic.
 class StratumTcpServer {
 public:
-    explicit StratumTcpServer(StratumServerConfig config = {});
+    // When shared_chain is null the server preserves the standalone behavior
+    // and owns an internal chain. A full P2Pool node supplies its node-wide
+    // ShareChain and the mutex protecting that chain so Stratum and P2P operate
+    // on exactly the same verified, serialized consensus state. accepted_share
+    // runs only after a successful share is connected and all consensus locks
+    // have been released.
+    explicit StratumTcpServer(
+        StratumServerConfig config = {},
+        ShareChain* shared_chain = nullptr,
+        std::mutex* shared_chain_mutex = nullptr,
+        StratumAcceptedShareHandler accepted_share = {});
     ~StratumTcpServer();
 
     StratumTcpServer(const StratumTcpServer&) = delete;
@@ -72,8 +87,11 @@ private:
     StratumServerConfig config_{};
     mutable std::mutex state_mutex_;
     StratumSessionRegistry sessions_;
-    ShareChain share_chain_;
+    std::unique_ptr<ShareChain> owned_share_chain_;
+    ShareChain* share_chain_{nullptr};
+    std::mutex* shared_chain_mutex_{nullptr};
     StratumSubmissionRouter submissions_;
+    StratumAcceptedShareHandler accepted_share_handler_;
 
     std::atomic<bool> running_{false};
     std::atomic<std::uint16_t> bound_port_{0};

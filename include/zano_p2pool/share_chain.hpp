@@ -25,9 +25,6 @@ inline constexpr std::uint64_t kShareMaxParentBackstepSeconds = 60;
     const ChainWork& right,
     ChainWork& result) noexcept;
 
-// Locally trusted Zano work context. Production admission requires the share's
-// committed mining fields to match this context before its ProgPoWZ result can
-// contribute sidechain work.
 struct ShareWorkContext {
     std::uint64_t zano_height{0};
     Hash256 mining_header_hash{};
@@ -74,11 +71,6 @@ struct ConnectedShare {
     std::optional<CandidateValidation> pow_validation;
 };
 
-// In-memory share-chain core. submit_share() is the production-facing admission
-// path: it enforces trusted Zano work context, timestamp policy and exact local
-// ProgPoWZ verification before claimed difficulty can contribute chain work.
-// add_share_unchecked() exists only for deterministic structural tests/internal
-// construction and MUST NOT be used for untrusted miner or peer shares.
 class ShareChain {
 public:
     [[nodiscard]] AddShareResult submit_share(
@@ -90,6 +82,7 @@ public:
     [[nodiscard]] AddShareResult add_share_unchecked(const Share& share);
 
     [[nodiscard]] const ConnectedShare* find(const ShareId& id) const noexcept;
+    [[nodiscard]] const Share* find_orphan_share(const ShareId& id) const noexcept;
     [[nodiscard]] const ConnectedShare* best_tip() const noexcept;
 
     [[nodiscard]] bool contains(const ShareId& id) const noexcept;

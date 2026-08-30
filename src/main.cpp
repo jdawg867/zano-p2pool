@@ -1,13 +1,21 @@
+#include "zano_p2pool/block_submitter.hpp"
 #include "zano_p2pool/crypto_hash.hpp"
 #include "zano_p2pool/mining_header.hpp"
+#include "zano_p2pool/p2p_mining_context.hpp"
+#include "zano_p2pool/p2p_node.hpp"
+#include "zano_p2pool/p2p_runtime.hpp"
+#include "zano_p2pool/p2p_share.hpp"
+#include "zano_p2pool/p2p_tip.hpp"
 #include "zano_p2pool/pow_target.hpp"
 #include "zano_p2pool/progpowz.hpp"
 #include "zano_p2pool/rpc_client.hpp"
 #include "zano_p2pool/share.hpp"
 #include "zano_p2pool/stratum_server.hpp"
 #include "zano_p2pool/template_refresh.hpp"
+#include "zano_p2pool/zano_address.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <csignal>
 #include <cstdint>
@@ -15,11 +23,15 @@
 #include <exception>
 #include <iostream>
 #include <limits>
+#include <memory>
+#include <mutex>
+#include <random>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -37,9 +49,14 @@ constexpr std::uint64_t kDefaultStratumDifficulty = 100000000;
 constexpr std::uint64_t kDefaultTemplateRefreshSeconds = 5;
 
 volatile std::sig_atomic_t g_stop_requested = 0;
+std::atomic<bool> g_template_refresh_requested{false};
 
 void handle_signal(int) noexcept {
     g_stop_requested = 1;
+}
+
+void request_template_refresh() noexcept {
+    g_template_refresh_requested.store(true, std::memory_order_release);
 }
 
 struct Options {
@@ -51,6 +68,11 @@ struct Options {
     std::uint16_t stratum_port{kDefaultStratumPort};
     std::uint64_t stratum_difficulty{kDefaultStratumDifficulty};
     std::uint64_t template_refresh_seconds{kDefaultTemplateRefreshSeconds};
+
+    bool p2p{false};
+    std::string p2p_bind{"127.0.0.1"};
+    std::uint16_t p2p_port{0};
+    std::vector<zano_p2pool::P2pEndpoint> p2p_peers;
 };
 
 struct LiveTemplate {
@@ -66,6 +88,12 @@ const char* network_name(Network network) {
 
 const char* default_rpc_url(Network network) {
     return network == Network::Testnet ? kTestnetRpcUrl : kMainnetRpcUrl;
+}
+
+zano_p2pool::P2pNetwork p2p_network(Network network) {
+    return network == Network::Testnet
+        ? zano_p2pool::P2pNetwork::Testnet
+        : zano_p2pool::P2pNetwork::Mainnet;
 }
 
 Network parse_network(const std::string& value) {
@@ -84,7 +112,8 @@ std::uint64_t parse_u64_option(
     std::string_view option,
     const std::string& value) {
     if (value.empty() || value.front() == '-') {
-        throw std::runtime_error(std::string(option) + " requires an unsigned integer");
+        throw std::runtime_error(
+            std::string(option) + " requires an unsigned integer");
     }
 
     std::size_t parsed = 0;
@@ -92,20 +121,65 @@ std::uint64_t parse_u64_option(
     try {
         result = std::stoull(value, &parsed, 10);
     } catch (const std::exception&) {
-        throw std::runtime_error(std::string(option) + " requires an unsigned integer");
+        throw std::runtime_error(
+            std::string(option) + " requires an unsigned integer");
     }
     if (parsed != value.size()) {
-        throw std::runtime_error(std::string(option) + " requires an unsigned integer");
+        throw std::runtime_error(
+            std::string(option) + " requires an unsigned integer");
     }
     return result;
 }
 
-std::uint16_t parse_port(const std::string& value) {
-    const std::uint64_t port = parse_u64_option("--stratum-port", value);
-    if (port == 0 || port > std::numeric_limits<std::uint16_t>::max()) {
-        throw std::runtime_error("--stratum-port must be between 1 and 65535");
+std::uint16_t parse_port(
+    std::string_view option,
+    const std::string& value,
+    bool allow_zero = false) {
+    const std::uint64_t port = parse_u64_option(option, value);
+    if ((!allow_zero && port == 0) ||
+        port > std::numeric_limits<std::uint16_t>::max()) {
+        throw std::runtime_error(
+            std::string(option) +
+            (allow_zero
+                 ? " must be between 0 and 65535"
+                 : " must be between 1 and 65535"));
     }
     return static_cast<std::uint16_t>(port);
+}
+
+zano_p2pool::P2pEndpoint parse_p2p_endpoint(const std::string& value) {
+    if (value.empty()) {
+        throw std::runtime_error("--p2p-peer requires HOST:PORT");
+    }
+
+    std::string host;
+    std::string port_text;
+    if (value.front() == '[') {
+        const std::size_t close = value.find(']');
+        if (close == std::string::npos ||
+            close + 1 >= value.size() ||
+            value[close + 1] != ':') {
+            throw std::runtime_error(
+                "--p2p-peer IPv6 endpoints must use [HOST]:PORT");
+        }
+        host = value.substr(1, close - 1);
+        port_text = value.substr(close + 2);
+    } else {
+        const std::size_t colon = value.rfind(':');
+        if (colon == std::string::npos) {
+            throw std::runtime_error("--p2p-peer requires HOST:PORT");
+        }
+        host = value.substr(0, colon);
+        port_text = value.substr(colon + 1);
+    }
+
+    if (host.empty()) {
+        throw std::runtime_error("--p2p-peer host must not be empty");
+    }
+    return zano_p2pool::P2pEndpoint{
+        host,
+        parse_port("--p2p-peer port", port_text),
+    };
 }
 
 zano_p2pool::Hash256 parse_hash256(std::string_view hex) {
@@ -122,6 +196,24 @@ zano_p2pool::Hash256 parse_hash256(std::string_view hex) {
     return hash;
 }
 
+zano_p2pool::NodeId generate_node_id() {
+    std::random_device random;
+    zano_p2pool::NodeId id{};
+    for (std::uint8_t& byte : id) {
+        byte = static_cast<std::uint8_t>(random() & 0xffU);
+    }
+    if (zano_p2pool::is_zero_node_id(id)) {
+        id.back() = 1;
+    }
+    return id;
+}
+
+std::uint64_t unix_time_seconds() noexcept {
+    const auto now = std::chrono::system_clock::now().time_since_epoch();
+    return static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::seconds>(now).count());
+}
+
 void print_usage(const char* program) {
     std::cout
         << "Usage: " << program
@@ -132,6 +224,10 @@ void print_usage(const char* program) {
         << " [--stratum-bind IPv4]"
         << " [--stratum-port PORT]"
         << " [--stratum-difficulty DIFFICULTY]"
+        << " [--p2p]"
+        << " [--p2p-bind ADDRESS]"
+        << " [--p2p-port PORT]"
+        << " [--p2p-peer HOST:PORT]..."
         << " [--template-refresh-seconds SECONDS]\n\n"
         << "Defaults:\n"
         << "  network: testnet\n"
@@ -140,7 +236,10 @@ void print_usage(const char* program) {
         << "  Stratum bind: 127.0.0.1\n"
         << "  Stratum port: " << kDefaultStratumPort << '\n'
         << "  Stratum difficulty: " << kDefaultStratumDifficulty << '\n'
-        << "  template refresh: " << kDefaultTemplateRefreshSeconds << " seconds\n";
+        << "  P2P bind: 127.0.0.1\n"
+        << "  P2P port: 0 (ephemeral development port)\n"
+        << "  template refresh: " << kDefaultTemplateRefreshSeconds
+        << " seconds\n";
 }
 
 Options parse_args(int argc, char** argv) {
@@ -195,19 +294,51 @@ Options parse_args(int argc, char** argv) {
             if (++i >= argc) {
                 throw std::runtime_error("--stratum-port requires a value");
             }
-            options.stratum_port = parse_port(argv[i]);
+            options.stratum_port = parse_port("--stratum-port", argv[i]);
             continue;
         }
 
         if (arg == "--stratum-difficulty") {
             if (++i >= argc) {
-                throw std::runtime_error("--stratum-difficulty requires a value");
+                throw std::runtime_error(
+                    "--stratum-difficulty requires a value");
             }
             options.stratum_difficulty =
                 parse_u64_option("--stratum-difficulty", argv[i]);
             if (options.stratum_difficulty == 0) {
-                throw std::runtime_error("--stratum-difficulty must be nonzero");
+                throw std::runtime_error(
+                    "--stratum-difficulty must be nonzero");
             }
+            continue;
+        }
+
+        if (arg == "--p2p") {
+            options.p2p = true;
+            continue;
+        }
+
+        if (arg == "--p2p-bind") {
+            if (++i >= argc) {
+                throw std::runtime_error("--p2p-bind requires a value");
+            }
+            options.p2p_bind = argv[i];
+            continue;
+        }
+
+        if (arg == "--p2p-port") {
+            if (++i >= argc) {
+                throw std::runtime_error("--p2p-port requires a value");
+            }
+            options.p2p_port = parse_port("--p2p-port", argv[i], true);
+            continue;
+        }
+
+        if (arg == "--p2p-peer") {
+            if (++i >= argc) {
+                throw std::runtime_error("--p2p-peer requires HOST:PORT");
+            }
+            options.p2p = true;
+            options.p2p_peers.push_back(parse_p2p_endpoint(argv[i]));
             continue;
         }
 
@@ -269,19 +400,43 @@ void print_template(const LiveTemplate& live) {
     std::cout << "Block reward:    " << live.block.block_reward << '\n';
     std::cout << "ProgPoWZ seed:   " << live.block.seed << '\n';
     std::cout << "Blob bytes:      " << live.block.blob_bytes() << '\n';
-    std::cout << "Regular txs:     " << live.mining_work.tx_hashes.hashes.size() << '\n';
-    std::cout << "Mining blob:     " << live.mining_work.hashing_blob.size()
-              << " bytes\n";
+    std::cout << "Regular txs:     "
+              << live.mining_work.tx_hashes.hashes.size() << '\n';
+    std::cout << "Mining blob:     "
+              << live.mining_work.hashing_blob.size() << " bytes\n";
     std::cout << "Mining header:   "
-              << zano_p2pool::hash_to_hex(live.mining_work.header_hash) << '\n';
+              << zano_p2pool::hash_to_hex(live.mining_work.header_hash)
+              << '\n';
 }
 
 void wait_for_refresh(std::uint64_t seconds) {
     constexpr auto kSlice = std::chrono::milliseconds(100);
     const std::uint64_t slices = seconds * 10;
     for (std::uint64_t i = 0; i < slices && !g_stop_requested; ++i) {
+        if (g_template_refresh_requested.exchange(
+                false,
+                std::memory_order_acq_rel)) {
+            return;
+        }
         std::this_thread::sleep_for(kSlice);
     }
+}
+
+zano_p2pool::ShareWorkContext trusted_context_from_live(
+    const LiveTemplate& live) {
+    return zano_p2pool::ShareWorkContext{
+        live.block.height,
+        live.mining_work.header_hash,
+        live.network_difficulty,
+    };
+}
+
+void set_local_p2p_context(
+    zano_p2pool::P2pNodeProtocol& protocol,
+    const LiveTemplate& live) {
+    protocol.set_local_mining_context(
+        zano_p2pool::p2p_mining_anchor_from_template(live.block),
+        zano_p2pool::p2p_mining_context_proposal_from_template(live.block));
 }
 
 }  // namespace
@@ -305,9 +460,10 @@ int main(int argc, char** argv) {
                    "recommended for production mining.\n";
         }
 
-        if (options.stratum && !zano_p2pool::progpowz_available()) {
+        if ((options.stratum || options.p2p) &&
+            !zano_p2pool::progpowz_available()) {
             throw std::runtime_error(
-                "Stratum mode requires the exact Zano ProgPoWZ backend; "
+                "Stratum/P2P runtime requires the exact Zano ProgPoWZ backend; "
                 "configure with ZANO_P2POOL_ZANO_SOURCE_DIR");
         }
 
@@ -315,37 +471,242 @@ int main(int argc, char** argv) {
         LiveTemplate live = fetch_live_template(rpc, options);
         print_template(live);
 
-        if (!options.stratum) {
+        if (!options.stratum && !options.p2p) {
             return 0;
         }
 
-        zano_p2pool::StratumServerConfig server_config;
-        server_config.bind_address = options.stratum_bind;
-        server_config.port = options.stratum_port;
-        server_config.sessions.default_share_difficulty =
-            options.stratum_difficulty;
-        server_config.sessions.maximum_share_difficulty = std::max(
-            server_config.sessions.maximum_share_difficulty,
-            options.stratum_difficulty);
+        std::signal(SIGINT, handle_signal);
+        std::signal(SIGTERM, handle_signal);
 
-        zano_p2pool::StratumTcpServer server(server_config);
-        std::uint64_t template_version = server.publish_template(
-            live.mining_work.header_hash,
-            live.seed_hash,
-            live.block.height,
-            live.network_difficulty);
-        server.start();
+        zano_p2pool::ShareChain node_chain;
+        zano_p2pool::P2pTrustedWorkRegistry trusted_work;
+        std::mutex node_state_mutex;
+        zano_p2pool::P2pNodeProtocol p2p_protocol(
+            node_chain, trusted_work, node_state_mutex);
+        p2p_protocol.remember_trusted_work(trusted_context_from_live(live));
+        set_local_p2p_context(p2p_protocol, live);
 
-        std::cout << "\nStratum listening: "
-                  << server_config.bind_address << ':' << server.bound_port() << '\n';
-        std::cout << "Default share difficulty: "
-                  << options.stratum_difficulty << '\n';
+        const zano_p2pool::ZanoAddressDecodeResult payout_address =
+            zano_p2pool::decode_zano_standard_address(options.wallet);
+        if (payout_address.status ==
+            zano_p2pool::ZanoAddressDecodeStatus::Valid) {
+            p2p_protocol.set_expected_payout(payout_address.payout);
+        } else if (options.p2p) {
+            std::cerr
+                << "WARNING: P2P mining-context trust disabled for this wallet "
+                << "address ("
+                << zano_p2pool::zano_address_decode_status_name(
+                       payout_address.status)
+                << "). Only classic standard Zx addresses are supported by the "
+                   "current public-key decoder.\n";
+        }
+
+        std::unique_ptr<zano_p2pool::P2pRuntime> p2p_runtime;
+        if (options.p2p) {
+            zano_p2pool::P2pHandshake handshake;
+            handshake.network = p2p_network(options.network);
+            handshake.node_id = generate_node_id();
+            handshake.capabilities = zano_p2pool::kP2pCapabilitiesV1;
+            const zano_p2pool::P2pTipHint tip = p2p_protocol.local_tip();
+            handshake.best_share_id = tip.share_id;
+            handshake.best_share_height = tip.share_height;
+
+            p2p_runtime = std::make_unique<zano_p2pool::P2pRuntime>(
+                zano_p2pool::P2pRuntimeConfig{
+                    zano_p2pool::P2pEndpoint{
+                        options.p2p_bind,
+                        options.p2p_port,
+                    },
+                    handshake,
+                },
+                [&](const zano_p2pool::P2pHandshake& peer,
+                    const zano_p2pool::P2pEnvelope& envelope) {
+                    if (!p2p_runtime) {
+                        return;
+                    }
+                    try {
+                        const auto result = p2p_protocol.handle(
+                            *p2p_runtime,
+                            peer,
+                            envelope,
+                            unix_time_seconds(),
+                            zano_p2pool::ProgPowZContextMode::Light);
+                        if (result.status ==
+                            zano_p2pool::P2pNodeMessageStatus::
+                                MiningContextProcessed) {
+                            std::cout
+                                << "P2P mining context: "
+                                << zano_p2pool::
+                                       p2p_mining_context_trust_status_name(
+                                           result.mining_context_status)
+                                << (result.mining_context_registry_inserted
+                                        ? " (trusted work inserted)"
+                                        : "")
+                                << '\n';
+
+                            if (result.mining_context_registry_inserted) {
+                                if (const auto local =
+                                        p2p_protocol.
+                                            local_mining_context_envelope();
+                                    local.has_value()) {
+                                    static_cast<void>(p2p_runtime->send_to(
+                                        peer.node_id,
+                                        *local));
+                                }
+                            }
+                        } else if (
+                            result.status ==
+                            zano_p2pool::P2pNodeMessageStatus::
+                                MiningContextDeferred) {
+                            std::cerr
+                                << "P2P mining context deferred: expected payout "
+                                   "identity is not available\n";
+                        }
+                    } catch (const std::exception& e) {
+                        std::cerr
+                            << "P2P message rejected: " << e.what() << '\n';
+                    }
+                });
+            p2p_runtime->start();
+
+            std::cout << "\nP2P listening: "
+                      << options.p2p_bind << ':'
+                      << p2p_runtime->listen_port() << '\n';
+            std::cout << "P2P node id:    "
+                      << zano_p2pool::hash_to_hex(
+                             p2p_runtime->local_handshake().node_id)
+                      << '\n';
+            std::cout << "Mining-context trust: "
+                      << (p2p_protocol.mining_context_trust_ready()
+                              ? "ready"
+                              : "deferred")
+                      << '\n';
+
+            for (const auto& peer : options.p2p_peers) {
+                try {
+                    p2p_runtime->connect_peer(peer);
+                    std::cout << "P2P connected:  "
+                              << peer.host << ':' << peer.port << '\n';
+                } catch (const std::exception& e) {
+                    std::cerr
+                        << "P2P connect failed for "
+                        << peer.host << ':' << peer.port
+                        << ": " << e.what() << '\n';
+                }
+            }
+
+            if (const auto local =
+                    p2p_protocol.local_mining_context_envelope();
+                local.has_value()) {
+                p2p_runtime->broadcast(*local);
+            }
+        }
+
+        std::unique_ptr<zano_p2pool::BlockCandidateSubmitter> block_submitter;
+        if (options.stratum) {
+            block_submitter =
+                std::make_unique<zano_p2pool::BlockCandidateSubmitter>(
+                    [&](const std::string& block_blob_hex) {
+                        rpc.submit_block(block_blob_hex);
+                    },
+                    [&](const zano_p2pool::BlockSubmitEvent& event) {
+                        if (event.status ==
+                            zano_p2pool::BlockSubmitStatus::Submitted) {
+                            std::cout
+                                << "Zano block submitted: height="
+                                << event.candidate.zano_height
+                                << " nonce=" << event.candidate.nonce
+                                << " header="
+                                << zano_p2pool::hash_to_hex(
+                                       event.candidate.mining_header_hash)
+                                << '\n';
+                            request_template_refresh();
+                            return;
+                        }
+
+                        std::cerr
+                            << "Zano block submission "
+                            << zano_p2pool::block_submit_status_name(
+                                   event.status)
+                            << ": height=" << event.candidate.zano_height
+                            << " nonce=" << event.candidate.nonce;
+                        if (!event.error.empty()) {
+                            std::cerr << " error=" << event.error;
+                        }
+                        std::cerr << '\n';
+                        request_template_refresh();
+                    },
+                    8,
+                    16);
+            block_submitter->remember_template(
+                live.mining_work.header_hash,
+                live.block.blocktemplate_blob);
+            block_submitter->start();
+        }
+
+        std::unique_ptr<zano_p2pool::StratumTcpServer> server;
+        std::uint64_t template_version = 0;
+        if (options.stratum) {
+            zano_p2pool::StratumServerConfig server_config;
+            server_config.bind_address = options.stratum_bind;
+            server_config.port = options.stratum_port;
+            server_config.sessions.default_share_difficulty =
+                options.stratum_difficulty;
+            server_config.sessions.maximum_share_difficulty = std::max(
+                server_config.sessions.maximum_share_difficulty,
+                options.stratum_difficulty);
+
+            zano_p2pool::StratumAcceptedShareHandler accepted_share =
+                [&](const zano_p2pool::Share& share,
+                    bool block_candidate) {
+                    if (p2p_runtime && p2p_runtime->running()) {
+                        p2p_runtime->broadcast(
+                            zano_p2pool::make_p2p_share_announce_envelope(
+                                share));
+                        p2p_runtime->broadcast(
+                            zano_p2pool::make_p2p_tip_announce_envelope(
+                                p2p_protocol.local_tip()));
+                    }
+
+                    if (block_candidate && block_submitter) {
+                        const bool queued = block_submitter->enqueue(
+                            zano_p2pool::BlockCandidate{
+                                share.zano_height,
+                                share.mining_header_hash,
+                                share.nonce,
+                            });
+                        if (!queued) {
+                            std::cerr
+                                << "Zano block candidate dropped: submit queue "
+                                   "is unavailable or full\n";
+                        }
+                    }
+                };
+
+            server = std::make_unique<zano_p2pool::StratumTcpServer>(
+                server_config,
+                options.p2p ? &node_chain : nullptr,
+                options.p2p ? &node_state_mutex : nullptr,
+                std::move(accepted_share));
+
+            template_version = server->publish_template(
+                live.mining_work.header_hash,
+                live.seed_hash,
+                live.block.height,
+                live.network_difficulty);
+            server->start();
+
+            std::cout << "\nStratum listening: "
+                      << server_config.bind_address << ':'
+                      << server->bound_port() << '\n';
+            std::cout << "Default share difficulty: "
+                      << options.stratum_difficulty << '\n';
+            std::cout << "Block submission: enabled\n";
+        }
+
         std::cout << "Template refresh: "
                   << options.template_refresh_seconds << " seconds\n";
         std::cout << "Press Ctrl+C to stop.\n";
-
-        std::signal(SIGINT, handle_signal);
-        std::signal(SIGTERM, handle_signal);
 
         while (!g_stop_requested) {
             wait_for_refresh(options.template_refresh_seconds);
@@ -363,30 +724,66 @@ int main(int argc, char** argv) {
                     continue;
                 }
 
-                const std::uint64_t next_version = server.publish_template(
-                    next.mining_work.header_hash,
-                    next.seed_hash,
-                    next.block.height,
-                    next.network_difficulty);
-                if (next_version != template_version) {
-                    template_version = next_version;
-                    std::cout << "Stratum template v" << template_version
-                              << ": height=" << next.block.height
-                              << " header="
-                              << zano_p2pool::hash_to_hex(
-                                     next.mining_work.header_hash)
-                              << " difficulty=" << next.block.difficulty
-                              << '\n';
+                if (block_submitter) {
+                    block_submitter->remember_template(
+                        next.mining_work.header_hash,
+                        next.block.blocktemplate_blob);
+                }
+
+                p2p_protocol.remember_trusted_work(
+                    trusted_context_from_live(next));
+                set_local_p2p_context(p2p_protocol, next);
+
+                if (server) {
+                    const std::uint64_t next_version =
+                        server->publish_template(
+                            next.mining_work.header_hash,
+                            next.seed_hash,
+                            next.block.height,
+                            next.network_difficulty);
+                    if (next_version != template_version) {
+                        template_version = next_version;
+                        std::cout
+                            << "Stratum template v" << template_version
+                            << ": height=" << next.block.height
+                            << " header="
+                            << zano_p2pool::hash_to_hex(
+                                   next.mining_work.header_hash)
+                            << " difficulty=" << next.block.difficulty
+                            << '\n';
+                    }
+                }
+
+                if (p2p_runtime) {
+                    if (const auto local =
+                            p2p_protocol.local_mining_context_envelope();
+                        local.has_value()) {
+                        p2p_runtime->broadcast(*local);
+                    }
                 }
                 live = std::move(next);
             } catch (const std::exception& e) {
-                std::cerr << "template refresh failed: " << e.what() << '\n';
+                std::cerr
+                    << "template refresh failed: " << e.what() << '\n';
             }
         }
 
-        server.stop();
-        std::cout << "Stratum stopped. Verified shares in memory: "
-                  << server.connected_share_count() << '\n';
+        if (server) {
+            server->stop();
+            std::cout
+                << "Stratum stopped. Verified shares in memory: "
+                << server->connected_share_count() << '\n';
+        }
+        if (block_submitter) {
+            block_submitter->stop();
+            std::cout << "Block submitter stopped.\n";
+        }
+        if (p2p_runtime) {
+            p2p_runtime->stop();
+            std::cout
+                << "P2P stopped. Connected shares in memory: "
+                << p2p_protocol.connected_share_count() << '\n';
+        }
         return 0;
     } catch (const std::exception& e) {
         std::cerr << "error: " << e.what() << '\n';
