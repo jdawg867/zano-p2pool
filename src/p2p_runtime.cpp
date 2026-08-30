@@ -94,7 +94,10 @@ void P2pRuntime::connect_peer(const P2pEndpoint& endpoint) {
     }
 
     P2pTcpConnection connection = connect_p2p_peer(endpoint, config_.handshake);
-    add_peer(std::move(connection));
+    if (!add_peer(std::move(connection))) {
+        throw std::runtime_error(
+            "P2P peer rejected: self-connection or duplicate live node id");
+    }
 }
 
 bool P2pRuntime::send_to(
@@ -179,7 +182,7 @@ void P2pRuntime::accept_loop() noexcept {
                 connection.close();
                 break;
             }
-            add_peer(std::move(connection));
+            static_cast<void>(add_peer(std::move(connection)));
         } catch (...) {
             if (!running_.load()) {
                 break;
@@ -188,10 +191,29 @@ void P2pRuntime::accept_loop() noexcept {
     }
 }
 
-void P2pRuntime::add_peer(P2pTcpConnection connection) {
+bool P2pRuntime::add_peer(P2pTcpConnection connection) {
+    const NodeId peer_node_id = connection.peer_handshake().node_id;
+    if (peer_node_id == config_.handshake.node_id) {
+        connection.close();
+        return false;
+    }
+
     auto peer = std::make_shared<Peer>(std::move(connection));
     {
         std::lock_guard lock(peers_mutex_);
+        const bool duplicate = std::any_of(
+            peers_.begin(),
+            peers_.end(),
+            [&](const std::shared_ptr<Peer>& existing) {
+                return existing->alive.load() &&
+                       existing->connection.peer_handshake().node_id ==
+                           peer_node_id;
+            });
+        if (duplicate) {
+            peer->alive.store(false);
+            peer->connection.close();
+            return false;
+        }
         peers_.push_back(peer);
     }
 
@@ -202,6 +224,7 @@ void P2pRuntime::add_peer(P2pTcpConnection connection) {
         peer->connection.close();
         throw;
     }
+    return true;
 }
 
 void P2pRuntime::peer_loop(const std::shared_ptr<Peer>& peer) noexcept {
