@@ -77,7 +77,7 @@ shares through the verified Stratum path.
 - [x] shared/reconstructable mining-context synchronization
 - [x] outbound reconnect/backoff
 - [x] peer scoring/bans
-- [ ] consensus/reorg integration tests
+- [x] consensus/reorg integration tests
 - [ ] protocol fuzzing
 - [x] two-node live testnet validation
 
@@ -142,6 +142,18 @@ disconnect, ban-window reconnect gating, expiry and recovery; `p2p_node_test` co
 automatic protocol classification and scoring. On 2026-08-30 the exact-Zano Release
 suite passed 31/31 locally in 3.22 seconds, and branch CI passed both `build-and-test`
 and `progpowz-compat`.
+
+Checkpoint 9 adds a networked consensus/reorg convergence test over real P2P
+sockets. Two collectors receive the same competing share branches in opposite
+orders from separate providers. One collector first adopts branch A, then receives
+a weaker prefix of branch B, and finally performs a real reorg when branch B gains
+strictly greater locally verified cumulative work. The other collector sees the
+winning branch first and later receives the losing branch. Both converge on the
+same best tip independent of arrival order, while all received shares cross the
+normal P2P protocol and exact ProgPoWZ admission path in exact-Zano builds.
+`p2p_consensus_reorg_test` brings the suite to 32 tests. On 2026-08-30 the exact-Zano
+Release suite passed 32/32 locally in 3.69 seconds, and branch CI passed both
+`build-and-test` and `progpowz-compat`.
 
 ### Live two-node P2P validation
 
