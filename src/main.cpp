@@ -10,6 +10,7 @@
 #include "zano_p2pool/progpowz.hpp"
 #include "zano_p2pool/rpc_client.hpp"
 #include "zano_p2pool/share.hpp"
+#include "zano_p2pool/sidechain_params.hpp"
 #include "zano_p2pool/stratum_server.hpp"
 #include "zano_p2pool/template_refresh.hpp"
 #include "zano_p2pool/zano_address.hpp"
@@ -94,6 +95,12 @@ zano_p2pool::P2pNetwork p2p_network(Network network) {
     return network == Network::Testnet
         ? zano_p2pool::P2pNetwork::Testnet
         : zano_p2pool::P2pNetwork::Mainnet;
+}
+
+zano_p2pool::SidechainParentNetwork sidechain_parent_network(Network network) {
+    return network == Network::Testnet
+        ? zano_p2pool::SidechainParentNetwork::Testnet
+        : zano_p2pool::SidechainParentNetwork::Mainnet;
 }
 
 Network parse_network(const std::string& value) {
@@ -478,7 +485,10 @@ int main(int argc, char** argv) {
         std::signal(SIGINT, handle_signal);
         std::signal(SIGTERM, handle_signal);
 
-        zano_p2pool::ShareChain node_chain;
+        const zano_p2pool::SidechainParameters sidechain_parameters =
+            zano_p2pool::canonical_sidechain_parameters(
+                sidechain_parent_network(options.network));
+        zano_p2pool::ShareChain node_chain(sidechain_parameters);
         zano_p2pool::P2pTrustedWorkRegistry trusted_work;
         std::mutex node_state_mutex;
         zano_p2pool::P2pNodeProtocol p2p_protocol(
@@ -505,6 +515,7 @@ int main(int argc, char** argv) {
         if (options.p2p) {
             zano_p2pool::P2pHandshake handshake;
             handshake.network = p2p_network(options.network);
+            handshake.sidechain_id = zano_p2pool::sidechain_id(sidechain_parameters);
             handshake.node_id = generate_node_id();
             handshake.capabilities = zano_p2pool::kP2pCapabilitiesV1;
             const zano_p2pool::P2pTipHint tip = p2p_protocol.local_tip();
@@ -650,11 +661,14 @@ int main(int argc, char** argv) {
             zano_p2pool::StratumServerConfig server_config;
             server_config.bind_address = options.stratum_bind;
             server_config.port = options.stratum_port;
-            server_config.sessions.default_share_difficulty =
-                options.stratum_difficulty;
-            server_config.sessions.maximum_share_difficulty = std::max(
-                server_config.sessions.maximum_share_difficulty,
-                options.stratum_difficulty);
+
+            if (options.stratum_difficulty !=
+                sidechain_parameters.minimum_share_difficulty) {
+                std::cerr
+                    << "WARNING: --stratum-difficulty is ignored in sidechain "
+                       "consensus mode; miner targets follow the branch-relative "
+                       "retarget policy.\n";
+            }
 
             zano_p2pool::StratumAcceptedShareHandler accepted_share =
                 [&](const zano_p2pool::Share& share,
@@ -685,8 +699,8 @@ int main(int argc, char** argv) {
 
             server = std::make_unique<zano_p2pool::StratumTcpServer>(
                 server_config,
-                options.p2p ? &node_chain : nullptr,
-                options.p2p ? &node_state_mutex : nullptr,
+                &node_chain,
+                &node_state_mutex,
                 std::move(accepted_share));
 
             template_version = server->publish_template(
@@ -699,8 +713,11 @@ int main(int argc, char** argv) {
             std::cout << "\nStratum listening: "
                       << server_config.bind_address << ':'
                       << server->bound_port() << '\n';
-            std::cout << "Default share difficulty: "
-                      << options.stratum_difficulty << '\n';
+            std::cout << "Sidechain target interval: "
+                      << sidechain_parameters.target_share_seconds
+                      << " seconds\n";
+            std::cout << "Minimum share difficulty: "
+                      << sidechain_parameters.minimum_share_difficulty << '\n';
             std::cout << "Block submission: enabled\n";
         }
 

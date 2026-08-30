@@ -133,15 +133,16 @@ Checkpoint 8 adds deterministic peer scoring and temporary bans keyed by validat
 public node ID. Explicit protocol-level violations accumulate toward a configurable
 threshold; reaching it disconnects that identity immediately and suppresses managed
 outbound reconnects until the ban expires, while ordinary socket disconnects remain
-neutral. Automatic scoring is applied only to unambiguous protocol abuse: malformed
-payload exceptions, unexpected in-session handshakes, capability misuse,
-inconsistent tip heights, rejected proof-bearing mining contexts, and similarly
-invalid peer data. Duplicate shares, unknown work contexts, and asynchronous
-mining-context anchor mismatches remain neutral. `p2p_runtime_test` covers threshold,
-disconnect, ban-window reconnect gating, expiry and recovery; `p2p_node_test` covers
-automatic protocol classification and scoring. On 2026-08-30 the exact-Zano Release
-suite passed 31/31 locally in 3.22 seconds, and branch CI passed both `build-and-test`
-and `progpowz-compat`.
+neutral. Automatic scoring is applied only to explicit, unambiguous protocol abuse:
+unexpected in-session handshakes, capability misuse, inconsistent tip heights,
+rejected proof-bearing mining contexts, and similarly typed invalid peer data.
+Generic parser/validation exceptions remain reputation-neutral until attributable
+failures are typed explicitly. Duplicate shares, unknown work contexts, and
+asynchronous mining-context anchor mismatches remain neutral. `p2p_runtime_test`
+covers threshold, disconnect, ban-window reconnect gating, expiry and recovery;
+`p2p_node_test` covers automatic protocol classification and scoring. On 2026-08-30
+the exact-Zano Release suite passed 31/31 locally in 3.22 seconds, and branch CI
+passed both `build-and-test` and `progpowz-compat`.
 
 Checkpoint 9 adds a networked consensus/reorg convergence test over real P2P
 sockets. Two collectors receive the same competing share branches in opposite
@@ -249,7 +250,7 @@ exact-Zano Release suite passed 33/33 in 3.76 seconds, and branch CI #409 passed
 
 ## Phase 7 — public network hardening
 
-- [ ] mainnet-compatible sidechain parameters
+- [x] mainnet-compatible sidechain parameters
 - [ ] seed nodes
 - [ ] observability/metrics
 - [ ] rate limits
@@ -257,3 +258,37 @@ exact-Zano Release suite passed 33/33 in 3.76 seconds, and branch CI #409 passed
 - [ ] adversarial tests
 - [ ] release builds
 - [ ] protocol specification
+
+Checkpoint 1 establishes canonical sidechain identity. `SidechainParameters` has a
+deterministic domain-separated serialization and 32-byte `SidechainId`; P2P protocol
+v2 carries that ID in every handshake and rejects peers whose parent Zano network
+matches but whose P2Pool consensus profile differs. Runtime handshake normalization
+ensures the stored local identity exactly matches the wire identity rather than
+silently retaining an all-zero placeholder.
+
+Checkpoint 2 completes the current mainnet-compatible economic sidechain profile.
+Both mainnet and testnet profiles commit to a 10-second target share interval, a
+100,000,000 minimum share difficulty, a 2160-share difficulty-estimation history,
+a 32-share direct-payout PPLNS history cap, and a PPLNS work cap of twice the current
+Zano network difficulty. The next-share difficulty is derived from the selected
+parent branch's own cumulative-work/timestamp history, trims the oldest/newest 10%
+by timestamp before estimating work rate, floors at the configured minimum, and is
+capped at current parent-network difficulty. Configured `ShareChain` admission
+rejects a share whose claimed difficulty differs from that branch-relative result,
+including orphan promotion, while Stratum publishes the same consensus target so
+local miners cannot drift from the sidechain rule.
+
+The policy-level PPLNS builder deterministically uses the lesser of the work present
+in the newest 32 best-chain shares and twice current Zano network difficulty. This
+keeps bootstrap payout windows complete once verified history exists, preserves
+partial-oldest-share accounting, follows reorg-selected best-chain history, and
+guarantees no more than 32 credited share identities can enter the direct HF6
+coinbase plan. On 2026-08-30 the local exact-Zano Release suite passed 33/33 in 3.76
+seconds, and CI #449 passed both `build-and-test` and `progpowz-compat`.
+
+Live multi-recipient PPLNS template replacement remains a separate follow-up
+checkpoint. The current P2P mining-context payout verifier still validates every
+miner-transaction output against one locally expected payout identity; it must be
+upgraded to verify the deterministic sidechain-derived multi-recipient payout set
+before the executable can safely replace the daemon's single-wallet miner transaction
+without honest peers rejecting the resulting mining context.

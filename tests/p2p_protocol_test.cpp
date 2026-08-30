@@ -2,6 +2,7 @@
 
 #include "zano_p2pool/crypto_hash.hpp"
 #include "zano_p2pool/p2p_protocol.hpp"
+#include "zano_p2pool/sidechain_difficulty.hpp"
 #include "zano_p2pool/sidechain_params.hpp"
 
 #include <algorithm>
@@ -9,6 +10,7 @@
 #include <functional>
 #include <iostream>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace {
@@ -20,6 +22,7 @@ using zano_p2pool::P2pHandshakeStatus;
 using zano_p2pool::P2pMessageType;
 using zano_p2pool::P2pNetwork;
 using zano_p2pool::ShareId;
+using zano_p2pool::SidechainDifficultySample;
 using zano_p2pool::SidechainParentNetwork;
 
 [[nodiscard]] bool throws_runtime_error(const std::function<void()>& fn) {
@@ -46,6 +49,29 @@ using zano_p2pool::SidechainParentNetwork;
     return handshake;
 }
 
+[[nodiscard]] SidechainDifficultySample difficulty_sample(
+    std::uint64_t timestamp,
+    std::uint64_t cumulative_work) {
+    return SidechainDifficultySample{
+        timestamp,
+        zano_p2pool::share_work(zano_p2pool::difficulty128_from_decimal(
+            std::to_string(cumulative_work))),
+    };
+}
+
+[[nodiscard]] std::vector<SidechainDifficultySample> steady_history(
+    std::uint64_t spacing_seconds) {
+    std::vector<SidechainDifficultySample> history;
+    history.reserve(11);
+    for (std::uint64_t i = 0; i < 11; ++i) {
+        history.push_back(difficulty_sample(
+            1'000 + i * spacing_seconds,
+            (i + 1) * 100));
+    }
+    std::reverse(history.begin(), history.end());
+    return history;
+}
+
 }  // namespace
 
 int main() {
@@ -65,22 +91,31 @@ int main() {
           zano_p2pool::kShareMaxFutureSeconds);
     CHECK(testnet_params.max_parent_backstep_seconds ==
           zano_p2pool::kShareMaxParentBackstepSeconds);
+    CHECK(testnet_params.target_share_seconds == 10);
+    CHECK(testnet_params.minimum_share_difficulty == 100000000);
+    CHECK(testnet_params.difficulty_window_shares == 2160);
+    CHECK(testnet_params.pplns_window_shares == 32);
+    CHECK(testnet_params.pplns_max_network_difficulty_multiplier == 2);
 
     const auto testnet_params_bytes =
         zano_p2pool::serialize_sidechain_parameters(testnet_params);
     const auto mainnet_params_bytes =
         zano_p2pool::serialize_sidechain_parameters(mainnet_params);
     CHECK(zano_p2pool::bytes_to_hex(testnet_params_bytes) ==
-          "5a50325349445631010102000000000000003c000000000000003c");
+          "5a50325349445632010102000000000000003c000000000000003c"
+          "000000000000000a0000000005f5e1000000000000000870"
+          "00000000000000200000000000000002");
     CHECK(zano_p2pool::bytes_to_hex(mainnet_params_bytes) ==
-          "5a50325349445631020102000000000000003c000000000000003c");
+          "5a50325349445632020102000000000000003c000000000000003c"
+          "000000000000000a0000000005f5e1000000000000000870"
+          "00000000000000200000000000000002");
 
     const auto testnet_sidechain_id = zano_p2pool::sidechain_id(testnet_params);
     const auto mainnet_sidechain_id = zano_p2pool::sidechain_id(mainnet_params);
     CHECK(zano_p2pool::hash_to_hex(testnet_sidechain_id) ==
-          "fbf26192fae53245968e3c83e1153eac613415eeed6581440944efecc353b8fa");
+          "8fa702b5b875e51cb925949ec01ed103d6f0f29b357dbf0452326ff787abf72a");
     CHECK(zano_p2pool::hash_to_hex(mainnet_sidechain_id) ==
-          "fad216aee63f8c0f1747b7d92b4cb9bdb71f2cee5cc004fa40ef72f4cb5eb3ed");
+          "cdba59fbce2b4abb2778266a36f829c6fb3a247fa79be0fa1bd1082d0d5a430f");
     CHECK(!zano_p2pool::is_zero_sidechain_id(testnet_sidechain_id));
     CHECK(!zano_p2pool::is_zero_sidechain_id(mainnet_sidechain_id));
     CHECK(testnet_sidechain_id != mainnet_sidechain_id);
@@ -91,14 +126,69 @@ int main() {
           mainnet_sidechain_id);
 
     auto changed_params = testnet_params;
-    ++changed_params.max_future_seconds;
+    ++changed_params.target_share_seconds;
     CHECK(zano_p2pool::sidechain_id(changed_params) != testnet_sidechain_id);
+
+    // Pin the branch-relative retarget independently from share admission. The
+    // test profile uses small numbers so the expected arithmetic is obvious.
+    auto retarget_params = testnet_params;
+    retarget_params.minimum_share_difficulty = 100;
+    const auto network_1m = zano_p2pool::difficulty128_from_decimal("1000000");
+
+    const std::vector<SidechainDifficultySample> empty_history;
+    CHECK(zano_p2pool::difficulty128_to_decimal(
+              zano_p2pool::calculate_next_sidechain_difficulty(
+                  empty_history, retarget_params, network_1m)) == "100");
+
+    const std::vector<SidechainDifficultySample> one_sample{
+        difficulty_sample(1'000, 100),
+    };
+    CHECK(zano_p2pool::difficulty128_to_decimal(
+              zano_p2pool::calculate_next_sidechain_difficulty(
+                  one_sample, retarget_params, network_1m)) == "100");
+
+    const auto steady = steady_history(10);
+    CHECK(zano_p2pool::difficulty128_to_decimal(
+              zano_p2pool::calculate_next_sidechain_difficulty(
+                  steady, retarget_params, network_1m)) == "100");
+
+    const auto fast = steady_history(5);
+    CHECK(zano_p2pool::difficulty128_to_decimal(
+              zano_p2pool::calculate_next_sidechain_difficulty(
+                  fast, retarget_params, network_1m)) == "200");
+
+    const auto slow = steady_history(20);
+    CHECK(zano_p2pool::difficulty128_to_decimal(
+              zano_p2pool::calculate_next_sidechain_difficulty(
+                  slow, retarget_params, network_1m)) == "100");
+
+    auto timestamp_outlier = steady;
+    timestamp_outlier.front().timestamp = 100'000;
+    CHECK(zano_p2pool::difficulty128_to_decimal(
+              zano_p2pool::calculate_next_sidechain_difficulty(
+                  timestamp_outlier, retarget_params, network_1m)) == "100");
+
+    auto two_sample_params = retarget_params;
+    two_sample_params.difficulty_window_shares = 2;
+    const std::vector<SidechainDifficultySample> long_history{
+        difficulty_sample(1'020, 1'000),
+        difficulty_sample(1'010, 900),
+        difficulty_sample(1'000, 100),
+    };
+    CHECK(zano_p2pool::difficulty128_to_decimal(
+              zano_p2pool::calculate_next_sidechain_difficulty(
+                  long_history, two_sample_params, network_1m)) == "100");
+
+    const auto network_150 = zano_p2pool::difficulty128_from_decimal("150");
+    CHECK(zano_p2pool::difficulty128_to_decimal(
+              zano_p2pool::calculate_next_sidechain_difficulty(
+                  fast, retarget_params, network_150)) == "150");
 
     const P2pHandshake handshake = make_handshake();
 
     const std::string expected_payload_hex =
         "01"
-        "fbf26192fae53245968e3c83e1153eac613415eeed6581440944efecc353b8fa"
+        "8fa702b5b875e51cb925949ec01ed103d6f0f29b357dbf0452326ff787abf72a"
         "101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f"
         "0000000000000007"
         "0d06"
@@ -119,7 +209,7 @@ int main() {
     const std::string expected_frame_hex =
         "5a5032500201000000000073"
         "01"
-        "fbf26192fae53245968e3c83e1153eac613415eeed6581440944efecc353b8fa"
+        "8fa702b5b875e51cb925949ec01ed103d6f0f29b357dbf0452326ff787abf72a"
         "101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f"
         "0000000000000007"
         "0d06"

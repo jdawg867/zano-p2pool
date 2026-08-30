@@ -107,6 +107,7 @@ int main() {
     CHECK(window.complete);
     CHECK(window.requested_work == work("750"));
     CHECK(window.covered_work == work("750"));
+    CHECK(window.included_shares == 3);
     CHECK(window.miners.size() == 3);
     CHECK(window.miners[0].miner_id == miner_a);
     CHECK(window.miners[1].miner_id == miner_b);
@@ -128,11 +129,11 @@ int main() {
     CHECK(payouts[2].amount == 533);
     CHECK(payouts[0].amount + payouts[1].amount + payouts[2].amount == 1000);
 
-    // A window larger than chain history is explicitly incomplete, and repeated
-    // shares from the same miner aggregate deterministically.
+    // A raw work window larger than chain history remains explicitly incomplete.
     const PplnsWindow bootstrap = build_pplns_window(chain, work("2000"));
     CHECK(!bootstrap.complete);
     CHECK(bootstrap.covered_work == work("1000"));
+    CHECK(bootstrap.included_shares == 4);
     CHECK(find_work(bootstrap, miner_a)->work == work("400"));
     CHECK(find_work(bootstrap, miner_b)->work == work("200"));
     CHECK(find_work(bootstrap, miner_c)->work == work("400"));
@@ -208,12 +209,69 @@ int main() {
     CHECK(payout_row->payout.has_value());
     CHECK(*payout_row->payout == payout_keys);
 
+    // Canonical sidechain payout policy uses whichever limit is smaller: work
+    // in the newest capped share history, or 2x current parent-network work.
+    SidechainParameters policy = canonical_sidechain_parameters(
+        SidechainParentNetwork::Testnet);
+    policy.pplns_window_shares = 3;
+    const PplnsWindow share_capped = build_sidechain_pplns_window(
+        chain, policy, difficulty128_from_decimal("500"));
+    CHECK(share_capped.complete);
+    CHECK(share_capped.requested_work == work("900"));
+    CHECK(share_capped.covered_work == work("900"));
+    CHECK(share_capped.included_shares == 3);
+    CHECK(find_work(share_capped, miner_a)->work == work("300"));
+    CHECK(find_work(share_capped, miner_b)->work == work("200"));
+    CHECK(find_work(share_capped, miner_c)->work == work("400"));
+
+    policy.pplns_window_shares = 4;
+    const PplnsWindow work_capped = build_sidechain_pplns_window(
+        chain, policy, difficulty128_from_decimal("300"));
+    CHECK(work_capped.complete);
+    CHECK(work_capped.requested_work == work("600"));
+    CHECK(work_capped.covered_work == work("600"));
+    CHECK(work_capped.included_shares == 2);
+    CHECK(find_work(work_capped, miner_a)->work == work("200"));
+    CHECK(find_work(work_capped, miner_b) == nullptr);
+    CHECK(find_work(work_capped, miner_c)->work == work("400"));
+
+    // A long history with one distinct miner per share is still bounded by the
+    // HF6-safe 32-share policy, so it can never require more than 32 recipients.
+    ShareChain many_miners;
+    ShareId many_parent{};
+    for (std::uint64_t height = 0; height < 40; ++height) {
+        many_parent = append_share(
+            many_miners,
+            many_parent,
+            height,
+            "1",
+            miner(static_cast<std::uint8_t>(height + 1)));
+    }
+    policy.pplns_window_shares = 32;
+    const PplnsWindow bounded = build_sidechain_pplns_window(
+        many_miners, policy, difficulty128_from_decimal("1000"));
+    CHECK(bounded.complete);
+    CHECK(bounded.requested_work == work("32"));
+    CHECK(bounded.covered_work == work("32"));
+    CHECK(bounded.included_shares == 32);
+    CHECK(bounded.miners.size() == 32);
+    CHECK(find_work(bounded, miner(0x08)) == nullptr);
+    CHECK(find_work(bounded, miner(0x09)) != nullptr);
+    CHECK(find_work(bounded, miner(0x28)) != nullptr);
+
     ShareChain empty;
     const PplnsWindow empty_window = build_pplns_window(empty, work("100"));
     CHECK(!empty_window.complete);
     CHECK(empty_window.covered_work == ChainWork{});
+    CHECK(empty_window.included_shares == 0);
     CHECK(empty_window.miners.empty());
     CHECK(allocate_pplns_reward(empty_window, 1000).empty());
+
+    const PplnsWindow empty_policy = build_sidechain_pplns_window(
+        empty, policy, difficulty128_from_decimal("1000"));
+    CHECK(!empty_policy.complete);
+    CHECK(empty_policy.requested_work == ChainWork{});
+    CHECK(empty_policy.included_shares == 0);
 
     bool zero_threw = false;
     try {
@@ -222,6 +280,15 @@ int main() {
         zero_threw = true;
     }
     CHECK(zero_threw);
+
+    bool zero_network_threw = false;
+    try {
+        static_cast<void>(build_sidechain_pplns_window(
+            chain, policy, Difficulty128{}));
+    } catch (const std::invalid_argument&) {
+        zero_network_threw = true;
+    }
+    CHECK(zero_network_threw);
 
     return 0;
 }

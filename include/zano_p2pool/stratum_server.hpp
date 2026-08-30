@@ -80,6 +80,11 @@ private:
         std::uint64_t session_id,
         const StratumRequest& request);
 
+    // Called while state_mutex_ is held. If a consensus-configured shared chain
+    // is present, this also snapshots that chain under its consensus mutex and
+    // passes the exact branch-derived difficulty into the session work target.
+    [[nodiscard]] StratumIssuedWork issue_work(std::uint64_t session_id);
+
     void register_client_fd(int fd);
     void unregister_client_fd(int fd) noexcept;
     void close_all_clients() noexcept;

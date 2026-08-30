@@ -133,7 +133,8 @@ std::uint64_t StratumSessionRegistry::publish_template(
 }
 
 StratumIssuedWork StratumSessionRegistry::issue_work(
-    std::uint64_t session_id) {
+    std::uint64_t session_id,
+    std::optional<Difficulty128> consensus_share_difficulty) {
     StratumSession& session = require_session(session_id);
     if (!session.logged_in) {
         throw std::runtime_error("Stratum session is not logged in");
@@ -142,8 +143,24 @@ StratumIssuedWork StratumSessionRegistry::issue_work(
         throw std::runtime_error("no Stratum template is available");
     }
 
-    const Difficulty128 share_difficulty =
-        effective_share_difficulty(session, *current_template_);
+    Difficulty128 share_difficulty{};
+    if (consensus_share_difficulty.has_value()) {
+        if (difficulty128_is_zero(*consensus_share_difficulty)) {
+            throw std::runtime_error(
+                "consensus Stratum share difficulty must be nonzero");
+        }
+        if (difficulty_less(
+                current_template_->network_difficulty,
+                *consensus_share_difficulty)) {
+            throw std::runtime_error(
+                "consensus Stratum share difficulty exceeds network difficulty");
+        }
+        share_difficulty = *consensus_share_difficulty;
+    } else {
+        share_difficulty = effective_share_difficulty(
+            session,
+            *current_template_);
+    }
 
     if (session.current_work.has_value() &&
         session.current_work->job_version == current_template_->version &&

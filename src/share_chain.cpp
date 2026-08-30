@@ -1,10 +1,13 @@
 #include "zano_p2pool/share_chain.hpp"
 
 #include "zano_p2pool/progpowz.hpp"
+#include "zano_p2pool/sidechain_difficulty.hpp"
+#include "zano_p2pool/sidechain_params.hpp"
 
 #include <algorithm>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 namespace zano_p2pool {
 
@@ -44,6 +47,70 @@ bool add_chain_work_checked(
         carry = sum >> 8;
     }
     return carry == 0;
+}
+
+ShareChain::ShareChain(const SidechainParameters& sidechain_parameters) {
+    // Reuse the canonical parameter serializer as the single validation gate.
+    static_cast<void>(serialize_sidechain_parameters(sidechain_parameters));
+    difficulty_policy_ = DifficultyPolicy{
+        sidechain_parameters.target_share_seconds,
+        sidechain_parameters.minimum_share_difficulty,
+        sidechain_parameters.difficulty_window_shares,
+    };
+}
+
+Difficulty128 ShareChain::expected_next_share_difficulty(
+    const Difficulty128& network_difficulty) const {
+    ShareId parent_id{};
+    if (const ConnectedShare* tip = best_tip(); tip != nullptr) {
+        parent_id = tip->id;
+    }
+    return expected_child_share_difficulty(parent_id, network_difficulty);
+}
+
+Difficulty128 ShareChain::expected_child_share_difficulty(
+    const ShareId& parent_id,
+    const Difficulty128& network_difficulty) const {
+    if (!difficulty_policy_.has_value()) {
+        throw std::logic_error("sidechain difficulty policy is not configured");
+    }
+
+    std::vector<SidechainDifficultySample> history;
+    history.reserve(static_cast<std::size_t>(
+        difficulty_policy_->difficulty_window_shares));
+
+    const ConnectedShare* current = nullptr;
+    if (!is_zero_share_id(parent_id)) {
+        current = find(parent_id);
+        if (current == nullptr) {
+            throw std::invalid_argument(
+                "sidechain difficulty parent is not connected");
+        }
+    }
+
+    while (current != nullptr &&
+           history.size() < difficulty_policy_->difficulty_window_shares) {
+        history.push_back(SidechainDifficultySample{
+            current->share.timestamp,
+            current->cumulative_work,
+        });
+
+        if (is_zero_share_id(current->share.parent_id)) {
+            break;
+        }
+        current = find(current->share.parent_id);
+        if (current == nullptr) {
+            throw std::logic_error(
+                "connected sidechain share has a missing parent");
+        }
+    }
+
+    return calculate_next_sidechain_difficulty(
+        history,
+        difficulty_policy_->target_share_seconds,
+        difficulty_policy_->minimum_share_difficulty,
+        difficulty_policy_->difficulty_window_shares,
+        network_difficulty);
 }
 
 ShareRejectReason ShareChain::structural_reject_reason(
@@ -108,6 +175,27 @@ ShareRejectReason ShareChain::parent_timestamp_reject_reason(
     return ShareRejectReason::None;
 }
 
+ShareRejectReason ShareChain::expected_difficulty_reject_reason(
+    const Share& share) const {
+    if (!difficulty_policy_.has_value()) {
+        return ShareRejectReason::None;
+    }
+
+    // An orphan cannot be evaluated against branch-relative history until its
+    // parent arrives. The exact same check is repeated in connect_share() when
+    // that orphan is promoted.
+    if (!is_zero_share_id(share.parent_id) && !contains(share.parent_id)) {
+        return ShareRejectReason::None;
+    }
+
+    const Difficulty128 expected = expected_child_share_difficulty(
+        share.parent_id,
+        share.network_difficulty);
+    return share.share_difficulty == expected
+        ? ShareRejectReason::None
+        : ShareRejectReason::UnexpectedShareDifficulty;
+}
+
 bool ShareChain::better_tip(
     const ConnectedShare& candidate,
     const ConnectedShare& current) const noexcept {
@@ -124,6 +212,7 @@ ShareRejectReason ShareChain::connect_share(
     const Share& share,
     const ShareId& id,
     std::optional<CandidateValidation> pow_validation,
+    bool enforce_sidechain_difficulty,
     bool& best_tip_changed) {
     ChainWork cumulative = share_work(share.share_difficulty);
 
@@ -144,7 +233,18 @@ ShareRejectReason ShareChain::connect_share(
         if (timestamp_reason != ShareRejectReason::None) {
             return timestamp_reason;
         }
+    }
 
+    if (enforce_sidechain_difficulty) {
+        const ShareRejectReason difficulty_reason =
+            expected_difficulty_reject_reason(share);
+        if (difficulty_reason != ShareRejectReason::None) {
+            return difficulty_reason;
+        }
+    }
+
+    if (!is_zero_share_id(share.parent_id)) {
+        const ConnectedShare& parent = connected_.find(share.parent_id)->second;
         ChainWork summed{};
         if (!add_chain_work_checked(
                 parent.cumulative_work,
@@ -201,10 +301,13 @@ void ShareChain::promote_children(
         const Share child = orphan_it->second.share;
         std::optional<CandidateValidation> validation =
             std::move(orphan_it->second.pow_validation);
+        const bool enforce_sidechain_difficulty =
+            orphan_it->second.enforce_sidechain_difficulty;
         const ShareRejectReason reason = connect_share(
             child,
             child_id,
             std::move(validation),
+            enforce_sidechain_difficulty,
             best_tip_changed);
         orphans_.erase(orphan_it);
 
@@ -217,7 +320,8 @@ void ShareChain::promote_children(
 
 AddShareResult ShareChain::add_prevalidated_share(
     const Share& share,
-    std::optional<CandidateValidation> pow_validation) {
+    std::optional<CandidateValidation> pow_validation,
+    bool enforce_sidechain_difficulty) {
     AddShareResult result;
     result.id = share_id(share);
 
@@ -236,7 +340,12 @@ AddShareResult ShareChain::add_prevalidated_share(
         !connected_.contains(share.parent_id)) {
         orphans_.emplace(
             result.id,
-            OrphanShare{share, result.id, std::move(pow_validation)});
+            OrphanShare{
+                share,
+                result.id,
+                std::move(pow_validation),
+                enforce_sidechain_difficulty,
+            });
         orphans_by_parent_[share.parent_id].push_back(result.id);
         result.disposition = ShareDisposition::Orphan;
         return result;
@@ -247,6 +356,7 @@ AddShareResult ShareChain::add_prevalidated_share(
         share,
         result.id,
         std::move(pow_validation),
+        enforce_sidechain_difficulty,
         result.best_tip_changed);
     if (result.reject_reason != ShareRejectReason::None) {
         result.disposition = ShareDisposition::Rejected;
@@ -263,7 +373,7 @@ AddShareResult ShareChain::add_prevalidated_share(
 }
 
 AddShareResult ShareChain::add_share_unchecked(const Share& share) {
-    return add_prevalidated_share(share, std::nullopt);
+    return add_prevalidated_share(share, std::nullopt, false);
 }
 
 AddShareResult ShareChain::submit_share(
@@ -317,6 +427,12 @@ AddShareResult ShareChain::submit_share(
         }
     }
 
+    rejected.reject_reason = expected_difficulty_reject_reason(share);
+    if (rejected.reject_reason != ShareRejectReason::None) {
+        rejected.disposition = ShareDisposition::Rejected;
+        return rejected;
+    }
+
     if (!progpowz_available()) {
         rejected.reject_reason = ShareRejectReason::PowBackendUnavailable;
         rejected.disposition = ShareDisposition::Rejected;
@@ -338,7 +454,10 @@ AddShareResult ShareChain::submit_share(
         return rejected;
     }
 
-    return add_prevalidated_share(share, validation);
+    return add_prevalidated_share(
+        share,
+        validation,
+        difficulty_policy_.has_value());
 }
 
 const ConnectedShare* ShareChain::find(const ShareId& id) const noexcept {
@@ -416,6 +535,8 @@ const char* share_reject_reason_name(ShareRejectReason reason) noexcept {
         return "zero-network-difficulty";
     case ShareRejectReason::ShareDifficultyAboveNetwork:
         return "share-difficulty-above-network";
+    case ShareRejectReason::UnexpectedShareDifficulty:
+        return "unexpected-share-difficulty";
     case ShareRejectReason::InvalidRootHeight:
         return "invalid-root-height";
     case ShareRejectReason::InvalidNonRootHeight:
