@@ -3,6 +3,8 @@
 #include "zano_p2pool/p2p_transport.hpp"
 
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <functional>
 #include <memory>
@@ -15,6 +17,8 @@ namespace zano_p2pool {
 struct P2pRuntimeConfig {
     P2pEndpoint listen_endpoint{"127.0.0.1", 0};
     P2pHandshake handshake{};
+    std::chrono::milliseconds outbound_reconnect_initial{250};
+    std::chrono::milliseconds outbound_reconnect_max{5000};
 };
 
 using P2pMessageHandler = std::function<void(
@@ -39,8 +43,10 @@ public:
     void stop() noexcept;
 
     // Establish one outbound peer using the same validated handshake path as
-    // inbound connections, then start its managed reader loop. Self-connections
-    // and duplicate live node ids are rejected.
+    // inbound connections. The initial dial remains synchronous so callers get
+    // immediate success/failure feedback, but the endpoint is retained as a
+    // managed outbound target. Startup failures and later disconnects are retried
+    // in the background with bounded exponential backoff until stop().
     void connect_peer(const P2pEndpoint& endpoint);
 
     // Send to live connections advertising the exact public node id. Returns
@@ -67,9 +73,12 @@ public:
 
 private:
     struct Peer;
+    struct OutboundTarget;
 
     void accept_loop() noexcept;
-    [[nodiscard]] bool add_peer(P2pTcpConnection connection);
+    void reconnect_loop() noexcept;
+    [[nodiscard]] std::shared_ptr<Peer> add_peer(P2pTcpConnection connection);
+    void reap_dead_peers() noexcept;
     void peer_loop(const std::shared_ptr<Peer>& peer) noexcept;
     [[nodiscard]] bool send_peer(
         const std::shared_ptr<Peer>& peer,
@@ -81,9 +90,14 @@ private:
     std::atomic<bool> running_{false};
     std::unique_ptr<P2pTcpListener> listener_;
     std::thread accept_thread_;
+    std::thread reconnect_thread_;
 
     mutable std::mutex peers_mutex_;
     std::vector<std::shared_ptr<Peer>> peers_;
+
+    mutable std::mutex reconnect_mutex_;
+    std::condition_variable reconnect_cv_;
+    std::vector<std::shared_ptr<OutboundTarget>> outbound_targets_;
 };
 
 }  // namespace zano_p2pool
