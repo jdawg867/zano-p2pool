@@ -197,6 +197,29 @@ std::uint64_t StratumTcpServer::publish_template(
         header_hash, seed_hash, height, network_difficulty);
 }
 
+StratumIssuedWork StratumTcpServer::issue_work(std::uint64_t session_id) {
+    if (!share_chain_->enforces_sidechain_difficulty()) {
+        return sessions_.issue_work(session_id);
+    }
+
+    const StratumTemplate* work_template = sessions_.current_template();
+    if (work_template == nullptr) {
+        // Preserve the session registry's existing error text for no-template
+        // requests rather than introducing a second failure mode here.
+        return sessions_.issue_work(session_id);
+    }
+
+    std::unique_lock<std::mutex> chain_lock;
+    if (shared_chain_mutex_ != nullptr) {
+        chain_lock = std::unique_lock<std::mutex>(*shared_chain_mutex_);
+    }
+
+    const Difficulty128 consensus_difficulty =
+        share_chain_->expected_next_share_difficulty(
+            work_template->network_difficulty);
+    return sessions_.issue_work(session_id, consensus_difficulty);
+}
+
 std::size_t StratumTcpServer::connected_share_count() const noexcept {
     if (shared_chain_mutex_ != nullptr) {
         std::lock_guard lock(*shared_chain_mutex_);
@@ -340,12 +363,12 @@ std::string StratumTcpServer::handle_request(
         case StratumMethod::SubmitLogin: {
             const StratumLogin login = parse_stratum_login(request);
             sessions_.login(session_id, login);
-            const StratumIssuedWork work = sessions_.issue_work(session_id);
+            const StratumIssuedWork work = issue_work(session_id);
             return stratum_success_json(request.id) +
                    stratum_work_notification_json(work.wire_work);
         }
         case StratumMethod::GetWork: {
-            const StratumIssuedWork work = sessions_.issue_work(session_id);
+            const StratumIssuedWork work = issue_work(session_id);
             return stratum_work_json(request.id, work.wire_work);
         }
         case StratumMethod::SubmitHashrate: {
