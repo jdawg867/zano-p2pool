@@ -1,5 +1,6 @@
 #include "zano_p2pool/crypto_hash.hpp"
 #include "zano_p2pool/mining_header.hpp"
+#include "zano_p2pool/p2p_miner_tx_binding.hpp"
 #include "zano_p2pool/zano_address.hpp"
 #include "zano_p2pool/zano_miner_tx.hpp"
 #include "test_check.hpp"
@@ -77,6 +78,7 @@ int main() {
     CHECK(result.block_reward == plan.reward_atomic);
     CHECK(result.block_reward_without_fee == plan.reward_atomic);
     CHECK(!result.tx_blob_hex.empty());
+    CHECK(!result.miner_tx_tgc_json.empty());
 
     const auto tx_bytes = hex_to_bytes(result.tx_blob_hex);
     const ParsedMinerTxPrefix parsed = parse_hf6_miner_tx_prefix(tx_bytes);
@@ -84,6 +86,10 @@ int main() {
     CHECK(parsed.hardfork_id == 6);
     CHECK(parsed.vin_count == 1);
     CHECK(parsed.vout_count == 2);
+
+    const P2pMinerTxBindingResult binding =
+        verify_miner_tx_tgc_key_binding(tx_bytes, result.miner_tx_tgc_json);
+    CHECK(binding.status == P2pMinerTxBindingStatus::Verified);
 
     return 0;
 #endif

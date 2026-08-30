@@ -10,6 +10,7 @@
 #ifdef ZANO_P2POOL_HAVE_ZANO_MINER_TX
 #include "currency_core/currency_format_utils.h"
 #include "serialization/binary_utils.h"
+#include "serialization/keyvalue_serialization.h"
 #endif
 
 namespace zano_p2pool {
@@ -126,9 +127,17 @@ ZanoMinerTxResult build_zano_hf6_pplns_miner_tx(
         throw std::runtime_error("failed to serialize canonical Zano miner tx");
     }
 
+    const std::string miner_tx_tgc_json =
+        epee::serialization::store_t_to_json(generation_context);
+    if (miner_tx_tgc_json.empty()) {
+        throw std::runtime_error(
+            "failed to serialize canonical Zano miner tx generation context");
+    }
+
     std::vector<std::uint8_t> bytes(blob.begin(), blob.end());
     return ZanoMinerTxResult{
         bytes_to_hex(bytes),
+        miner_tx_tgc_json,
         block_reward_without_fee,
         block_reward,
     };

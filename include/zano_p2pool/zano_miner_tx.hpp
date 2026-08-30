@@ -12,6 +12,7 @@ inline constexpr std::size_t kZanoFullRewardZoneBytes = 125000;
 
 struct ZanoMinerTxResult {
     std::string tx_blob_hex;
+    std::string miner_tx_tgc_json;
     std::uint64_t block_reward_without_fee{0};
     std::uint64_t block_reward{0};
 };
@@ -23,6 +24,11 @@ struct ZanoMinerTxResult {
 // direct PPLNS destination plan. This first adapter is intentionally limited to
 // candidates inside the 125 kB full-reward zone; callers must independently
 // verify the final assembled block remains inside that zone before mining it.
+//
+// The returned miner_tx_tgc_json is Zano's canonical KV serialization of the
+// exact tx_generation_context produced by construct_miner_tx(). It must travel
+// with tx_blob_hex when the transaction is embedded into a mining template so
+// peers can independently verify its key binding and confidential proofs.
 //
 // expected_block_reward is the reward advertised by the daemon template. The
 // adapter refuses output unless Zano's own constructor computes exactly the same
