@@ -2,6 +2,7 @@
 
 #include "zano_p2pool/crypto_hash.hpp"
 #include "zano_p2pool/p2p_protocol.hpp"
+#include "zano_p2pool/sidechain_params.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -19,6 +20,7 @@ using zano_p2pool::P2pHandshakeStatus;
 using zano_p2pool::P2pMessageType;
 using zano_p2pool::P2pNetwork;
 using zano_p2pool::ShareId;
+using zano_p2pool::SidechainParentNetwork;
 
 [[nodiscard]] bool throws_runtime_error(const std::function<void()>& fn) {
     try {
@@ -45,6 +47,43 @@ using zano_p2pool::ShareId;
 }  // namespace
 
 int main() {
+    // Sidechain identity is derived from a canonical, transport-independent
+    // parameter encoding. Mainnet and testnet must never share an identity, and
+    // any consensus-relevant parameter change must produce a different ID.
+    const auto testnet_params = zano_p2pool::canonical_sidechain_parameters(
+        SidechainParentNetwork::Testnet);
+    const auto mainnet_params = zano_p2pool::canonical_sidechain_parameters(
+        SidechainParentNetwork::Mainnet);
+
+    CHECK(testnet_params.parameter_version ==
+          zano_p2pool::kSidechainParameterVersion);
+    CHECK(testnet_params.minimum_share_version == zano_p2pool::kShareVersion1);
+    CHECK(testnet_params.maximum_share_version == zano_p2pool::kShareVersion2);
+    CHECK(testnet_params.max_future_seconds ==
+          zano_p2pool::kShareMaxFutureSeconds);
+    CHECK(testnet_params.max_parent_backstep_seconds ==
+          zano_p2pool::kShareMaxParentBackstepSeconds);
+
+    const auto testnet_params_bytes =
+        zano_p2pool::serialize_sidechain_parameters(testnet_params);
+    const auto mainnet_params_bytes =
+        zano_p2pool::serialize_sidechain_parameters(mainnet_params);
+    CHECK(zano_p2pool::bytes_to_hex(testnet_params_bytes) ==
+          "5a50325349445631010102000000000000003c000000000000003c");
+    CHECK(zano_p2pool::bytes_to_hex(mainnet_params_bytes) ==
+          "5a50325349445631020102000000000000003c000000000000003c");
+
+    const auto testnet_sidechain_id = zano_p2pool::sidechain_id(testnet_params);
+    const auto mainnet_sidechain_id = zano_p2pool::sidechain_id(mainnet_params);
+    CHECK(!zano_p2pool::is_zero_sidechain_id(testnet_sidechain_id));
+    CHECK(!zano_p2pool::is_zero_sidechain_id(mainnet_sidechain_id));
+    CHECK(testnet_sidechain_id != mainnet_sidechain_id);
+    CHECK(zano_p2pool::sidechain_id(testnet_params) == testnet_sidechain_id);
+
+    auto changed_params = testnet_params;
+    ++changed_params.max_future_seconds;
+    CHECK(zano_p2pool::sidechain_id(changed_params) != testnet_sidechain_id);
+
     const P2pHandshake handshake = make_handshake();
 
     const std::string expected_payload_hex =
