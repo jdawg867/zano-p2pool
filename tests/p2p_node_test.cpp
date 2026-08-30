@@ -277,6 +277,59 @@ int main() {
     CHECK(!requester_relayed_tip.load());
 #endif
 
+    // Benign synchronization/trust states must not accrue reputation damage.
+    P2pNodeMessageResult neutral_result;
+    neutral_result.status = P2pNodeMessageStatus::MiningContextProcessed;
+    neutral_result.mining_context_status =
+        P2pMiningContextTrustStatus::AnchorMismatch;
+    CHECK(p2p_node_message_penalty(neutral_result) == 0);
+    neutral_result.status = P2pNodeMessageStatus::ShareProcessed;
+    neutral_result.share_status = P2pShareReceiveStatus::Duplicate;
+    CHECK(p2p_node_message_penalty(neutral_result) == 0);
+    neutral_result.share_status = P2pShareReceiveStatus::UnknownWorkContext;
+    CHECK(p2p_node_message_penalty(neutral_result) == 0);
+
+    // A parsed but impossible in-session handshake is an unambiguous protocol
+    // violation. P2pNodeProtocol must report it to the runtime automatically.
+    const P2pHandshake scored_peer = make_handshake(0x33);
+    P2pEnvelope unexpected_handshake;
+    unexpected_handshake.type = P2pMessageType::Handshake;
+    for (std::uint32_t i = 1; i <= 4; ++i) {
+        const P2pNodeMessageResult result = requester_protocol.handle(
+            requester_runtime,
+            scored_peer,
+            unexpected_handshake,
+            child.timestamp,
+            ProgPowZContextMode::Light);
+        CHECK(result.status == P2pNodeMessageStatus::UnexpectedHandshake);
+        CHECK(requester_runtime.peer_score(scored_peer.node_id) ==
+              i * kP2pProtocolViolationPenalty);
+    }
+    CHECK(requester_runtime.peer_banned(scored_peer.node_id));
+
+    // Malformed payloads throw during parsing/structural validation. Those
+    // exceptions must still charge the validated peer identity before being
+    // propagated to the caller.
+    const P2pHandshake malformed_peer = make_handshake(0x44);
+    P2pEnvelope malformed_tip;
+    malformed_tip.type = P2pMessageType::TipAnnounce;
+    malformed_tip.payload = {0x01};
+    bool malformed_threw = false;
+    try {
+        static_cast<void>(requester_protocol.handle(
+            requester_runtime,
+            malformed_peer,
+            malformed_tip,
+            child.timestamp,
+            ProgPowZContextMode::Light));
+    } catch (...) {
+        malformed_threw = true;
+    }
+    CHECK(malformed_threw);
+    CHECK(requester_runtime.peer_score(malformed_peer.node_id) ==
+          kP2pProtocolViolationPenalty);
+    CHECK(!requester_runtime.peer_banned(malformed_peer.node_id));
+
     leaf_runtime.stop();
     requester_runtime.stop();
     provider_runtime.stop();
