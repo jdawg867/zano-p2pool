@@ -74,12 +74,12 @@ shares through the verified Stratum path.
 - [x] missing-parent request/response synchronization
 - [x] exact-Zano orphan promotion after parent synchronization
 - [x] best-tip handshake and `TipAnnounce` sync hints
-- [ ] shared/reconstructable mining-context synchronization
+- [x] shared/reconstructable mining-context synchronization
 - [ ] outbound reconnect/backoff
 - [ ] peer scoring/bans
 - [ ] consensus/reorg integration tests
 - [ ] protocol fuzzing
-- [ ] two-node live testnet validation
+- [x] two-node live testnet validation
 
 Checkpoint 1 pins the P2P v1 envelope and handshake byte-for-byte. Frames use a
 12-byte big-endian header (`ZP2P`, protocol version, message type, reserved flags,
@@ -108,9 +108,37 @@ handshake and later 40-byte `TipAnnounce` messages (`ShareId + height`). No peer
 cumulative-work value is transmitted or trusted. Unknown tip IDs are fetched by
 exact ID; known tips with inconsistent advertised heights are flagged. If a known
 tip is already an orphan, the planner requests its missing parent. Local verified
-cumulative work remains the only best-tip selection input. `p2p_tip_test` brings
-the suite to 18 tests; normal and exact-Zano CI are green and local confirmation is
-pending.
+cumulative work remains the only best-tip selection input. Normal and exact-Zano
+CI are green and local exact-Zano confirmation is complete.
+
+Checkpoint 6B.5 closes the runtime mining-context trust path. A connected peer can
+announce an independently anchored HF6 mining context; the receiving node verifies
+its payout policy plus balance/range proofs, promotes only the locally derived
+mining header into `P2pTrustedWorkRegistry`, and can then locally rehash and admit a
+share mined against that foreign header. `p2p_mining_context_runtime_test` exercises
+this over real loopback P2P sockets. On 2026-08-30 the exact-Zano Release suite passed
+31/31 locally, and branch CI passed both the normal `build-and-test` job and the
+exact-Zano `progpowz-compat` job.
+
+### Live two-node P2P validation
+
+On 2026-08-30 two independent `zano-p2pool` processes were run against the same
+synchronized Zano testnet daemon while each fetched and refreshed its own block
+template. Node B connected to Node A over the P2P runtime, both sides repeatedly
+accepted independently verified peer mining contexts, and temporary
+`anchor-mismatch` results during asynchronous daemon-height refreshes recovered on
+later matching anchors without weakening the trust gate.
+
+SRBMiner-MULTI 3.6.0 then mined through Node A's `progpow_zano` Stratum endpoint.
+Real GPU shares were accepted by Node A and relayed across the P2P connection. On
+clean Node B shutdown, the runtime reported:
+
+- `Stratum stopped. Verified shares in memory: 1737`
+- `P2P stopped. Connected shares in memory: 1737`
+
+This validates the live two-node path:
+
+`SRBMiner -> Node A Stratum -> exact ProgPoWZ validation -> Node A share chain -> P2P ShareAnnounce -> Node B trusted foreign mining context -> Node B exact ProgPoWZ revalidation -> Node B connected share chain`.
 
 ### Live block-submission validation
 
@@ -130,10 +158,10 @@ This validates the complete single-node path:
 
 `SRBMiner -> Stratum -> ProgPoWZ verification -> share chain -> block candidate -> canonical block reconstruction -> zanod submitblock`.
 
-Important remaining constraint: independent `zanod getblocktemplate` calls can
-produce different mining headers at the same Zano height. A true multi-node P2Pool
-therefore still needs a shared or reconstructable mining-context mechanism rather
-than trusting arbitrary peer headers.
+Independent `zanod getblocktemplate` calls can produce different mining headers at
+the same Zano height. The protocol/runtime now has an independently verified
+mining-context exchange path for those foreign headers, and the live two-node run
+has confirmed real share propagation across that trust boundary.
 
 ## Phase 6 — PPLNS and payouts
 
