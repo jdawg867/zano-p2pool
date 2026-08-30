@@ -78,7 +78,7 @@ shares through the verified Stratum path.
 - [x] outbound reconnect/backoff
 - [x] peer scoring/bans
 - [x] consensus/reorg integration tests
-- [ ] protocol fuzzing
+- [x] protocol fuzzing
 - [x] two-node live testnet validation
 
 Checkpoint 1 pins the P2P v1 envelope and handshake byte-for-byte. Frames use a
@@ -154,6 +154,19 @@ normal P2P protocol and exact ProgPoWZ admission path in exact-Zano builds.
 `p2p_consensus_reorg_test` brings the suite to 32 tests. On 2026-08-30 the exact-Zano
 Release suite passed 32/32 locally in 3.69 seconds, and branch CI passed both
 `build-and-test` and `progpowz-compat`.
+
+Checkpoint 10 adds deterministic protocol fuzzing across every peer-controlled P2P
+message parser. `p2p_protocol_fuzz_test` starts from canonical handshake, share
+announce, share request/response, tip announce and mining-context frames; it
+systematically truncates, appends and bit-flips every seed, attacks payload-length
+boundaries, directly feeds thousands of arbitrary payloads into each semantic
+parser, and runs 20,000 additional structured mutations derived from valid frames.
+Successful parses must reserialize byte-for-byte canonically; malformed inputs may
+fail closed through the parser's expected exceptions but must not crash, hang or
+bypass the 64 KiB payload bound. The test brings the suite to 33 tests. On
+2026-08-30 the exact-Zano Release suite passed 33/33 locally in 3.76 seconds, and
+branch CI passed both `build-and-test` and `progpowz-compat`. With this checkpoint,
+all Phase 5 P2P-network roadmap items are complete.
 
 ### Live two-node P2P validation
 
