@@ -79,7 +79,7 @@ shares through the verified Stratum path.
 - [ ] peer scoring/bans
 - [ ] consensus/reorg integration tests
 - [ ] protocol fuzzing
-- [ ] two-node live testnet validation
+- [x] two-node live testnet validation
 
 Checkpoint 1 pins the P2P v1 envelope and handshake byte-for-byte. Frames use a
 12-byte big-endian header (`ZP2P`, protocol version, message type, reserved flags,
@@ -120,6 +120,26 @@ this over real loopback P2P sockets. On 2026-08-30 the exact-Zano Release suite 
 31/31 locally, and branch CI passed both the normal `build-and-test` job and the
 exact-Zano `progpowz-compat` job.
 
+### Live two-node P2P validation
+
+On 2026-08-30 two independent `zano-p2pool` processes were run against the same
+synchronized Zano testnet daemon while each fetched and refreshed its own block
+template. Node B connected to Node A over the P2P runtime, both sides repeatedly
+accepted independently verified peer mining contexts, and temporary
+`anchor-mismatch` results during asynchronous daemon-height refreshes recovered on
+later matching anchors without weakening the trust gate.
+
+SRBMiner-MULTI 3.6.0 then mined through Node A's `progpow_zano` Stratum endpoint.
+Real GPU shares were accepted by Node A and relayed across the P2P connection. On
+clean Node B shutdown, the runtime reported:
+
+- `Stratum stopped. Verified shares in memory: 1737`
+- `P2P stopped. Connected shares in memory: 1737`
+
+This validates the live two-node path:
+
+`SRBMiner -> Node A Stratum -> exact ProgPoWZ validation -> Node A share chain -> P2P ShareAnnounce -> Node B trusted foreign mining context -> Node B exact ProgPoWZ revalidation -> Node B connected share chain`.
+
 ### Live block-submission validation
 
 On 2026-08-30 the current `feature/p2p-foundation` implementation was validated
@@ -140,9 +160,8 @@ This validates the complete single-node path:
 
 Independent `zanod getblocktemplate` calls can produce different mining headers at
 the same Zano height. The protocol/runtime now has an independently verified
-mining-context exchange path for those foreign headers; the remaining proof is a
-live two-node testnet run with independently fetched daemon templates and real share
-gossip across the P2P connection.
+mining-context exchange path for those foreign headers, and the live two-node run
+has confirmed real share propagation across that trust boundary.
 
 ## Phase 6 — PPLNS and payouts
 
