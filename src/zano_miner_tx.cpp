@@ -23,18 +23,47 @@ bool zano_miner_tx_builder_available() noexcept {
 #endif
 }
 
+std::uint64_t extract_zano_hf6_coinbase_cumulative_size(
+    std::span<const std::uint8_t> tx_blob) {
+#ifndef ZANO_P2POOL_HAVE_ZANO_MINER_TX
+    (void)tx_blob;
+    throw std::runtime_error(
+        "exact Zano miner-tx parser is not enabled; configure with "
+        "ZANO_P2POOL_ZANO_SOURCE_DIR");
+#else
+    if (tx_blob.empty()) {
+        throw std::invalid_argument("daemon miner transaction is empty");
+    }
+
+    const std::string blob(tx_blob.begin(), tx_blob.end());
+    currency::transaction tx{};
+    if (!currency::parse_and_validate_tx_from_blob(blob, tx)) {
+        throw std::runtime_error("failed to parse daemon Zano miner transaction");
+    }
+
+    currency::etc_coinbase_block_cumulative_size cumulative_size{};
+    if (!currency::get_type_in_variant_container(tx.extra, cumulative_size)) {
+        throw std::runtime_error(
+            "daemon HF6 miner transaction is missing cumulative block size");
+    }
+    return cumulative_size.v;
+#endif
+}
+
 ZanoMinerTxResult build_zano_hf6_pplns_miner_tx(
     std::uint64_t height,
     std::uint64_t fee,
     std::uint64_t expected_block_reward,
     const PplnsCoinbasePlan& plan,
-    std::string_view extra_text) {
+    std::string_view extra_text,
+    std::uint64_t coinbase_block_cumulative_size) {
 #ifndef ZANO_P2POOL_HAVE_ZANO_MINER_TX
     (void)height;
     (void)fee;
     (void)expected_block_reward;
     (void)plan;
     (void)extra_text;
+    (void)coinbase_block_cumulative_size;
     throw std::runtime_error(
         "exact Zano miner-tx builder is not enabled; configure with "
         "ZANO_P2POOL_ZANO_SOURCE_DIR");
@@ -117,7 +146,15 @@ ZanoMinerTxResult build_zano_hf6_pplns_miner_tx(
             destinations.front().addr.front());
     const currency::account_public_address stakeholder_address = miner_address;
 
+    // Zano HF6 consensus requires etc_coinbase_block_cumulative_size to be
+    // present in coinbase extra. construct_miner_tx() intentionally preserves
+    // pre-seeded extra fields, which is also how Zano's own template builder
+    // supplies this value before constructing the rest of the transaction.
     currency::transaction tx{};
+    currency::etc_coinbase_block_cumulative_size cumulative_size_entry{};
+    cumulative_size_entry.v = coinbase_block_cumulative_size;
+    tx.extra.push_back(cumulative_size_entry);
+
     std::uint64_t block_reward_without_fee = 0;
     std::uint64_t block_reward = 0;
     currency::tx_generation_context generation_context{};
