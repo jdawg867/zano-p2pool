@@ -48,6 +48,16 @@ struct P2pMiningContextTrustResult {
     const P2pMiningAnchor& local_anchor,
     const P2pPayoutAddress& expected_payout);
 
+// Canonical PPLNS trust crossing. The expected coinbase plan must be derived
+// locally from the sidechain state for this parent-chain template; no payout
+// destination or amount supplied by the peer is trusted.
+[[nodiscard]] P2pMiningContextTrustResult promote_p2p_mining_context(
+    P2pTrustedWorkRegistry& trusted_work,
+    const P2pHandshake& peer,
+    const P2pEnvelope& envelope,
+    const P2pMiningAnchor& local_anchor,
+    const PplnsCoinbasePlan& expected_plan);
+
 [[nodiscard]] const char* p2p_mining_context_trust_status_name(
     P2pMiningContextTrustStatus status) noexcept;
 
