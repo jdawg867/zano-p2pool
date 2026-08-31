@@ -303,16 +303,11 @@ struct ParsedRangeProof {
         balance_tag_offset - range_begin);
 }
 
-}  // namespace
-
-P2pMinerTxProofResult verify_p2p_mining_context_balance_proof(
+[[nodiscard]] P2pMinerTxProofResult verify_balance_after_payout(
     const P2pMiningContextProposal& proposal,
     const P2pMiningContextCheckResult& anchored_check,
-    const P2pPayoutAddress& expected_payout) noexcept {
+    const P2pPayoutPolicyResult& payout) noexcept {
     P2pMinerTxProofResult result;
-
-    const auto payout = verify_p2p_mining_context_payout_policy(
-        proposal, anchored_check, expected_payout);
     result.payout_status = payout.status;
     if (payout.status != P2pPayoutPolicyStatus::Verified) {
         if (payout.status == P2pPayoutPolicyStatus::NotAnchored) {
@@ -376,12 +371,10 @@ P2pMinerTxProofResult verify_p2p_mining_context_balance_proof(
     }
 }
 
-P2pMinerTxProofResult verify_p2p_mining_context_proofs(
+[[nodiscard]] P2pMinerTxProofResult verify_range_after_balance(
     const P2pMiningContextProposal& proposal,
     const P2pMiningContextCheckResult& anchored_check,
-    const P2pPayoutAddress& expected_payout) noexcept {
-    P2pMinerTxProofResult result = verify_p2p_mining_context_balance_proof(
-        proposal, anchored_check, expected_payout);
+    P2pMinerTxProofResult result) noexcept {
     if (result.status != P2pMinerTxProofStatus::BalanceVerifiedRangePending) {
         return result;
     }
@@ -419,6 +412,52 @@ P2pMinerTxProofResult verify_p2p_mining_context_proofs(
         result.status = P2pMinerTxProofStatus::MalformedBlock;
         return result;
     }
+}
+
+}  // namespace
+
+P2pMinerTxProofResult verify_p2p_mining_context_balance_proof(
+    const P2pMiningContextProposal& proposal,
+    const P2pMiningContextCheckResult& anchored_check,
+    const P2pPayoutAddress& expected_payout) noexcept {
+    return verify_balance_after_payout(
+        proposal,
+        anchored_check,
+        verify_p2p_mining_context_payout_policy(
+            proposal, anchored_check, expected_payout));
+}
+
+P2pMinerTxProofResult verify_p2p_mining_context_balance_proof(
+    const P2pMiningContextProposal& proposal,
+    const P2pMiningContextCheckResult& anchored_check,
+    const PplnsCoinbasePlan& expected_plan) noexcept {
+    return verify_balance_after_payout(
+        proposal,
+        anchored_check,
+        verify_p2p_mining_context_payout_policy(
+            proposal, anchored_check, expected_plan));
+}
+
+P2pMinerTxProofResult verify_p2p_mining_context_proofs(
+    const P2pMiningContextProposal& proposal,
+    const P2pMiningContextCheckResult& anchored_check,
+    const P2pPayoutAddress& expected_payout) noexcept {
+    return verify_range_after_balance(
+        proposal,
+        anchored_check,
+        verify_p2p_mining_context_balance_proof(
+            proposal, anchored_check, expected_payout));
+}
+
+P2pMinerTxProofResult verify_p2p_mining_context_proofs(
+    const P2pMiningContextProposal& proposal,
+    const P2pMiningContextCheckResult& anchored_check,
+    const PplnsCoinbasePlan& expected_plan) noexcept {
+    return verify_range_after_balance(
+        proposal,
+        anchored_check,
+        verify_p2p_mining_context_balance_proof(
+            proposal, anchored_check, expected_plan));
 }
 
 const char* p2p_miner_tx_proof_status_name(
