@@ -85,7 +85,7 @@ int main() {
 
     CHECK(testnet_params.parameter_version ==
           zano_p2pool::kSidechainParameterVersion);
-    CHECK(testnet_params.minimum_share_version == zano_p2pool::kShareVersion1);
+    CHECK(testnet_params.minimum_share_version == zano_p2pool::kShareVersion2);
     CHECK(testnet_params.maximum_share_version == zano_p2pool::kShareVersion2);
     CHECK(testnet_params.max_future_seconds ==
           zano_p2pool::kShareMaxFutureSeconds);
@@ -102,20 +102,20 @@ int main() {
     const auto mainnet_params_bytes =
         zano_p2pool::serialize_sidechain_parameters(mainnet_params);
     CHECK(zano_p2pool::bytes_to_hex(testnet_params_bytes) ==
-          "5a50325349445632010102000000000000003c000000000000003c"
+          "5a50325349445633010202000000000000003c000000000000003c"
           "000000000000000a0000000005f5e1000000000000000870"
           "00000000000000200000000000000002");
     CHECK(zano_p2pool::bytes_to_hex(mainnet_params_bytes) ==
-          "5a50325349445632020102000000000000003c000000000000003c"
+          "5a50325349445633020202000000000000003c000000000000003c"
           "000000000000000a0000000005f5e1000000000000000870"
           "00000000000000200000000000000002");
 
     const auto testnet_sidechain_id = zano_p2pool::sidechain_id(testnet_params);
     const auto mainnet_sidechain_id = zano_p2pool::sidechain_id(mainnet_params);
     CHECK(zano_p2pool::hash_to_hex(testnet_sidechain_id) ==
-          "8fa702b5b875e51cb925949ec01ed103d6f0f29b357dbf0452326ff787abf72a");
+          "4ac0cdc2a86e9617f18035428e103017d545c4ad7ebfb74d283e60256396e8e8");
     CHECK(zano_p2pool::hash_to_hex(mainnet_sidechain_id) ==
-          "cdba59fbce2b4abb2778266a36f829c6fb3a247fa79be0fa1bd1082d0d5a430f");
+          "8cfa674d782bfc0a3824d654617c814da98ea2ec64b5701a41ddd40a522225bf");
     CHECK(!zano_p2pool::is_zero_sidechain_id(testnet_sidechain_id));
     CHECK(!zano_p2pool::is_zero_sidechain_id(mainnet_sidechain_id));
     CHECK(testnet_sidechain_id != mainnet_sidechain_id);
@@ -188,7 +188,7 @@ int main() {
 
     const std::string expected_payload_hex =
         "01"
-        "8fa702b5b875e51cb925949ec01ed103d6f0f29b357dbf0452326ff787abf72a"
+        "4ac0cdc2a86e9617f18035428e103017d545c4ad7ebfb74d283e60256396e8e8"
         "101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f"
         "0000000000000007"
         "0d06"
@@ -209,7 +209,7 @@ int main() {
     const std::string expected_frame_hex =
         "5a5032500201000000000073"
         "01"
-        "8fa702b5b875e51cb925949ec01ed103d6f0f29b357dbf0452326ff787abf72a"
+        "4ac0cdc2a86e9617f18035428e103017d545c4ad7ebfb74d283e60256396e8e8"
         "101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f"
         "0000000000000007"
         "0d06"
