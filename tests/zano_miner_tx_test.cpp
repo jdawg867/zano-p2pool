@@ -165,6 +165,50 @@ int main() {
               P2pPayoutPolicyStatus::PayoutPlanMismatch)) ==
           "payout-plan-mismatch");
 
+    // Zano requires at least two outputs for a post-HF4 PoW coinbase. A PPLNS
+    // window with one logical recipient therefore expands to two physical
+    // outputs to the same payout identity, while verification still binds the
+    // aggregate amount to the unchanged one-recipient plan.
+    PplnsCoinbasePlan single_plan;
+    single_plan.status = PplnsCoinbasePlanStatus::Ready;
+    single_plan.reward_atomic = 1000000000000ULL;
+    single_plan.destinations = {
+        PplnsCoinbaseDestination{
+            miner_id_from_payout(payout_a),
+            payout_a,
+            single_plan.reward_atomic,
+        },
+    };
+
+    const ZanoMinerTxResult single_result = build_zano_hf6_pplns_miner_tx(
+        166331,
+        0,
+        single_plan.reward_atomic,
+        single_plan,
+        "single-recipient-test");
+    const auto single_tx_bytes = hex_to_bytes(single_result.tx_blob_hex);
+    const ParsedMinerTxPrefix single_parsed =
+        parse_hf6_miner_tx_prefix(single_tx_bytes);
+    CHECK(single_parsed.version == 4);
+    CHECK(single_parsed.hardfork_id == 6);
+    CHECK(single_parsed.vin_count == 1);
+    CHECK(single_parsed.vout_count == 2);
+    CHECK(verify_miner_tx_tgc_key_binding(
+              single_tx_bytes,
+              single_result.miner_tx_tgc_json).status ==
+          P2pMinerTxBindingStatus::Verified);
+
+    const P2pPayoutPolicyResult single_policy = verify_miner_tx_payout_policy(
+        single_parsed.serialized,
+        single_result.miner_tx_tgc_json,
+        single_result.block_reward_without_fee,
+        single_result.block_reward,
+        0,
+        single_plan);
+    CHECK(single_policy.status == P2pPayoutPolicyStatus::Verified);
+    CHECK(single_policy.output_count == 2);
+    CHECK(single_policy.verified_reward == single_plan.reward_atomic);
+
     // Build a daemon-style full block with a different valid miner transaction,
     // then replace that entire transaction from verified sidechain history.
     PplnsCoinbasePlan daemon_plan = plan;
