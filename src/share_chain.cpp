@@ -53,6 +53,8 @@ ShareChain::ShareChain(const SidechainParameters& sidechain_parameters) {
     // Reuse the canonical parameter serializer as the single validation gate.
     static_cast<void>(serialize_sidechain_parameters(sidechain_parameters));
     difficulty_policy_ = DifficultyPolicy{
+        sidechain_parameters.minimum_share_version,
+        sidechain_parameters.maximum_share_version,
         sidechain_parameters.target_share_seconds,
         sidechain_parameters.minimum_share_difficulty,
         sidechain_parameters.difficulty_window_shares,
@@ -115,6 +117,11 @@ Difficulty128 ShareChain::expected_child_share_difficulty(
 
 ShareRejectReason ShareChain::structural_reject_reason(
     const Share& share) const noexcept {
+    if (difficulty_policy_.has_value() &&
+        (share.version < difficulty_policy_->minimum_share_version ||
+         share.version > difficulty_policy_->maximum_share_version)) {
+        return ShareRejectReason::UnexpectedShareVersion;
+    }
     if (difficulty128_is_zero(share.share_difficulty)) {
         return ShareRejectReason::ZeroShareDifficulty;
     }
@@ -529,6 +536,8 @@ const char* share_reject_reason_name(ShareRejectReason reason) noexcept {
     switch (reason) {
     case ShareRejectReason::None:
         return "none";
+    case ShareRejectReason::UnexpectedShareVersion:
+        return "unexpected-share-version";
     case ShareRejectReason::ZeroShareDifficulty:
         return "zero-share-difficulty";
     case ShareRejectReason::ZeroNetworkDifficulty:
