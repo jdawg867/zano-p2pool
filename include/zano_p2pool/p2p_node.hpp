@@ -64,7 +64,12 @@ public:
     void set_local_mining_context(
         const P2pMiningAnchor& anchor,
         const P2pMiningContextProposal& proposal);
+
+    // Exactly one payout expectation is active at a time. Bootstrap/legacy
+    // daemon templates use the single public payout identity; canonical PPLNS
+    // templates install the complete deterministic destination plan instead.
     void set_expected_payout(const P2pPayoutAddress& payout);
+    void set_expected_payout_plan(const PplnsCoinbasePlan& plan);
     void clear_expected_payout() noexcept;
 
     [[nodiscard]] std::size_t trusted_work_count() const noexcept;
@@ -81,6 +86,7 @@ private:
     std::optional<P2pMiningAnchor> local_mining_anchor_;
     std::optional<P2pMiningContextProposal> local_mining_context_;
     std::optional<P2pPayoutAddress> expected_payout_;
+    std::optional<PplnsCoinbasePlan> expected_payout_plan_;
 };
 
 [[nodiscard]] const char* p2p_node_message_status_name(
