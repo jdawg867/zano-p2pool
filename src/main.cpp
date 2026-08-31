@@ -8,12 +8,12 @@
 #include "zano_p2pool/p2p_tip.hpp"
 #include "zano_p2pool/pow_target.hpp"
 #include "zano_p2pool/progpowz.hpp"
+#include "zano_p2pool/pplns_template.hpp"
 #include "zano_p2pool/rpc_client.hpp"
 #include "zano_p2pool/share.hpp"
 #include "zano_p2pool/sidechain_params.hpp"
 #include "zano_p2pool/stratum_server.hpp"
 #include "zano_p2pool/template_refresh.hpp"
-#include "zano_p2pool/zano_address.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -26,6 +26,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <random>
 #include <stdexcept>
 #include <string>
@@ -81,6 +82,7 @@ struct LiveTemplate {
     zano_p2pool::MiningHeaderWork mining_work;
     zano_p2pool::Hash256 seed_hash{};
     zano_p2pool::Difficulty128 network_difficulty{};
+    std::optional<zano_p2pool::PplnsCoinbasePlan> payout_plan;
 };
 
 const char* network_name(Network network) {
@@ -393,6 +395,38 @@ LiveTemplate fetch_live_template(
     return result;
 }
 
+bool apply_canonical_pplns_template(
+    LiveTemplate& live,
+    zano_p2pool::ShareChain& chain,
+    std::mutex& state_mutex,
+    const zano_p2pool::SidechainParameters& params) {
+    std::lock_guard lock(state_mutex);
+    if (chain.connected_size() == 0) {
+        live.payout_plan.reset();
+        return false;
+    }
+
+    zano_p2pool::PplnsTemplateResult rebuilt =
+        zano_p2pool::build_canonical_pplns_template(
+            live.block,
+            chain,
+            params,
+            "zano-p2pool");
+    if (rebuilt.status != zano_p2pool::PplnsTemplateStatus::Ready) {
+        std::string error = "canonical PPLNS template unavailable: ";
+        error += zano_p2pool::pplns_template_status_name(rebuilt.status);
+        if (!rebuilt.error.empty()) {
+            error += " (" + rebuilt.error + ")";
+        }
+        throw std::runtime_error(error);
+    }
+
+    live.block = std::move(rebuilt.block);
+    live.mining_work = std::move(rebuilt.mining_work);
+    live.payout_plan = std::move(rebuilt.plan);
+    return true;
+}
+
 void print_template(const LiveTemplate& live) {
     const auto target =
         zano_p2pool::difficulty_to_target(live.block.difficulty);
@@ -416,17 +450,18 @@ void print_template(const LiveTemplate& live) {
               << '\n';
 }
 
-void wait_for_refresh(std::uint64_t seconds) {
+bool wait_for_refresh(std::uint64_t seconds) {
     constexpr auto kSlice = std::chrono::milliseconds(100);
     const std::uint64_t slices = seconds * 10;
     for (std::uint64_t i = 0; i < slices && !g_stop_requested; ++i) {
         if (g_template_refresh_requested.exchange(
                 false,
                 std::memory_order_acq_rel)) {
-            return;
+            return true;
         }
         std::this_thread::sleep_for(kSlice);
     }
+    return false;
 }
 
 zano_p2pool::ShareWorkContext trusted_context_from_live(
@@ -441,9 +476,21 @@ zano_p2pool::ShareWorkContext trusted_context_from_live(
 void set_local_p2p_context(
     zano_p2pool::P2pNodeProtocol& protocol,
     const LiveTemplate& live) {
-    protocol.set_local_mining_context(
-        zano_p2pool::p2p_mining_anchor_from_template(live.block),
-        zano_p2pool::p2p_mining_context_proposal_from_template(live.block));
+    const zano_p2pool::P2pMiningAnchor anchor =
+        zano_p2pool::p2p_mining_anchor_from_template(live.block);
+    const zano_p2pool::P2pMiningContextProposal proposal =
+        zano_p2pool::p2p_mining_context_proposal_from_template(live.block);
+
+    if (live.payout_plan.has_value()) {
+        protocol.set_local_mining_context(anchor, proposal, *live.payout_plan);
+        return;
+    }
+
+    // Empty-sidechain bootstrap has no deterministic historical PPLNS plan yet.
+    // Keep peer trust deferred rather than treating the node operator wallet as a
+    // consensus payout identity shared by every peer.
+    protocol.clear_expected_payout();
+    protocol.set_local_mining_context(anchor, proposal);
 }
 
 }  // namespace
@@ -473,6 +520,11 @@ int main(int argc, char** argv) {
                 "Stratum/P2P runtime requires the exact Zano ProgPoWZ backend; "
                 "configure with ZANO_P2POOL_ZANO_SOURCE_DIR");
         }
+        if (options.stratum && !zano_p2pool::zano_miner_tx_builder_available()) {
+            throw std::runtime_error(
+                "Stratum runtime requires the exact Zano miner-tx backend for "
+                "canonical PPLNS block construction");
+        }
 
         const zano_p2pool::RpcClient rpc(options.rpc_url);
         LiveTemplate live = fetch_live_template(rpc, options);
@@ -491,25 +543,17 @@ int main(int argc, char** argv) {
         zano_p2pool::ShareChain node_chain(sidechain_parameters);
         zano_p2pool::P2pTrustedWorkRegistry trusted_work;
         std::mutex node_state_mutex;
+
+        static_cast<void>(apply_canonical_pplns_template(
+            live,
+            node_chain,
+            node_state_mutex,
+            sidechain_parameters));
+
         zano_p2pool::P2pNodeProtocol p2p_protocol(
             node_chain, trusted_work, node_state_mutex);
         p2p_protocol.remember_trusted_work(trusted_context_from_live(live));
         set_local_p2p_context(p2p_protocol, live);
-
-        const zano_p2pool::ZanoAddressDecodeResult payout_address =
-            zano_p2pool::decode_zano_standard_address(options.wallet);
-        if (payout_address.status ==
-            zano_p2pool::ZanoAddressDecodeStatus::Valid) {
-            p2p_protocol.set_expected_payout(payout_address.payout);
-        } else if (options.p2p) {
-            std::cerr
-                << "WARNING: P2P mining-context trust disabled for this wallet "
-                << "address ("
-                << zano_p2pool::zano_address_decode_status_name(
-                       payout_address.status)
-                << "). Only classic standard Zx addresses are supported by the "
-                   "current public-key decoder.\n";
-        }
 
         std::unique_ptr<zano_p2pool::P2pRuntime> p2p_runtime;
         if (options.p2p) {
@@ -542,6 +586,16 @@ int main(int argc, char** argv) {
                             envelope,
                             unix_time_seconds(),
                             zano_p2pool::ProgPowZContextMode::Light);
+
+                        if ((result.status ==
+                                 zano_p2pool::P2pNodeMessageStatus::ShareProcessed ||
+                             result.status ==
+                                 zano_p2pool::P2pNodeMessageStatus::ShareResponseProcessed) &&
+                            result.share_status ==
+                                zano_p2pool::P2pShareReceiveStatus::Connected) {
+                            request_template_refresh();
+                        }
+
                         if (result.status ==
                             zano_p2pool::P2pNodeMessageStatus::
                                 MiningContextProcessed) {
@@ -570,8 +624,8 @@ int main(int argc, char** argv) {
                             zano_p2pool::P2pNodeMessageStatus::
                                 MiningContextDeferred) {
                             std::cerr
-                                << "P2P mining context deferred: expected payout "
-                                   "identity is not available\n";
+                                << "P2P mining context deferred: canonical payout "
+                                   "plan is not currently established\n";
                         }
                     } catch (const std::exception& e) {
                         std::cerr
@@ -590,7 +644,7 @@ int main(int argc, char** argv) {
             std::cout << "Mining-context trust: "
                       << (p2p_protocol.mining_context_trust_ready()
                               ? "ready"
-                              : "deferred")
+                              : "deferred until canonical PPLNS payout history exists")
                       << '\n';
 
             for (const auto& peer : options.p2p_peers) {
@@ -649,9 +703,11 @@ int main(int argc, char** argv) {
                     },
                     8,
                     16);
-            block_submitter->remember_template(
-                live.mining_work.header_hash,
-                live.block.blocktemplate_blob);
+            if (live.payout_plan.has_value()) {
+                block_submitter->remember_template(
+                    live.mining_work.header_hash,
+                    live.block.blocktemplate_blob);
+            }
             block_submitter->start();
         }
 
@@ -673,6 +729,11 @@ int main(int argc, char** argv) {
             zano_p2pool::StratumAcceptedShareHandler accepted_share =
                 [&](const zano_p2pool::Share& share,
                     bool block_candidate) {
+                    // The accepted share changed the local payout history. Until
+                    // the main refresh installs the rebuilt plan, peer contexts
+                    // must defer rather than be checked against a stale plan.
+                    p2p_protocol.clear_expected_payout();
+
                     if (p2p_runtime && p2p_runtime->running()) {
                         p2p_runtime->broadcast(
                             zano_p2pool::make_p2p_share_announce_envelope(
@@ -683,18 +744,27 @@ int main(int argc, char** argv) {
                     }
 
                     if (block_candidate && block_submitter) {
-                        const bool queued = block_submitter->enqueue(
-                            zano_p2pool::BlockCandidate{
-                                share.zano_height,
-                                share.mining_header_hash,
-                                share.nonce,
-                            });
-                        if (!queued) {
+                        const zano_p2pool::BlockCandidateQueueResult queued =
+                            block_submitter->enqueue(
+                                zano_p2pool::BlockCandidate{
+                                    share.zano_height,
+                                    share.mining_header_hash,
+                                    share.nonce,
+                                });
+                        if (queued ==
+                            zano_p2pool::BlockCandidateQueueStatus::StaleTemplate) {
+                            std::cerr
+                                << "Zano block candidate not submitted: header is "
+                                   "stale or was bootstrap work without a canonical "
+                                   "PPLNS payout template\n";
+                        } else if (!queued) {
                             std::cerr
                                 << "Zano block candidate dropped: submit queue "
                                    "is unavailable or full\n";
                         }
                     }
+
+                    request_template_refresh();
                 };
 
             server = std::make_unique<zano_p2pool::StratumTcpServer>(
@@ -718,7 +788,16 @@ int main(int argc, char** argv) {
                       << " seconds\n";
             std::cout << "Minimum share difficulty: "
                       << sidechain_parameters.minimum_share_difficulty << '\n';
-            std::cout << "Block submission: enabled\n";
+            std::cout << "Payout mode: "
+                      << (live.payout_plan.has_value()
+                              ? "canonical PPLNS"
+                              : "bootstrap share establishment")
+                      << '\n';
+            std::cout << "Block submission: "
+                      << (live.payout_plan.has_value()
+                              ? "enabled for canonical PPLNS work"
+                              : "deferred until the first sidechain share")
+                      << '\n';
         }
 
         std::cout << "Template refresh: "
@@ -726,22 +805,31 @@ int main(int argc, char** argv) {
         std::cout << "Press Ctrl+C to stop.\n";
 
         while (!g_stop_requested) {
-            wait_for_refresh(options.template_refresh_seconds);
+            const bool forced_refresh =
+                wait_for_refresh(options.template_refresh_seconds);
             if (g_stop_requested) {
                 break;
             }
 
             try {
                 LiveTemplate next = fetch_live_template(rpc, options);
-                if (!zano_p2pool::should_refresh_stratum_template(
+                const bool daemon_changed =
+                    zano_p2pool::should_refresh_stratum_template(
                         live.block,
                         live.mining_work,
                         next.block,
-                        next.mining_work)) {
+                        next.mining_work);
+                if (!forced_refresh && !daemon_changed) {
                     continue;
                 }
 
-                if (block_submitter) {
+                const bool canonical_pplns = apply_canonical_pplns_template(
+                    next,
+                    node_chain,
+                    node_state_mutex,
+                    sidechain_parameters);
+
+                if (block_submitter && canonical_pplns) {
                     block_submitter->remember_template(
                         next.mining_work.header_hash,
                         next.block.blocktemplate_blob);
@@ -767,6 +855,12 @@ int main(int argc, char** argv) {
                             << zano_p2pool::hash_to_hex(
                                    next.mining_work.header_hash)
                             << " difficulty=" << next.block.difficulty
+                            << " payout="
+                            << (canonical_pplns ? "PPLNS" : "bootstrap")
+                            << (next.payout_plan.has_value()
+                                    ? " recipients=" + std::to_string(
+                                          next.payout_plan->destinations.size())
+                                    : std::string{})
                             << '\n';
                     }
                 }
