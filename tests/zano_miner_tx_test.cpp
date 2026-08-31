@@ -2,6 +2,7 @@
 #include "zano_p2pool/mining_header.hpp"
 #include "zano_p2pool/p2p_miner_tx_binding.hpp"
 #include "zano_p2pool/p2p_payout_policy.hpp"
+#include "zano_p2pool/pplns_template.hpp"
 #include "zano_p2pool/zano_address.hpp"
 #include "zano_p2pool/zano_miner_tx.hpp"
 #include "test_check.hpp"
@@ -9,6 +10,7 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -21,6 +23,41 @@ PayoutPublicKeys decode_payout(const char* address) {
         decoded.payout.spend_public_key,
         decoded.payout.view_public_key,
     };
+}
+
+std::vector<std::uint8_t> make_block_blob(
+    const std::vector<std::uint8_t>& miner_tx) {
+    std::vector<std::uint8_t> blob;
+    blob.push_back(0x03);              // block major version
+    blob.insert(blob.end(), 8, 0);     // zero template nonce
+    blob.insert(blob.end(), 32, 0x11); // previous block hash
+    blob.push_back(0x00);              // minor version
+    blob.push_back(0x01);              // timestamp
+    blob.push_back(0x00);              // PoW flags
+    blob.insert(blob.end(), miner_tx.begin(), miner_tx.end());
+    blob.push_back(0x00);              // zero regular transaction hashes
+    return blob;
+}
+
+Share make_payout_share(
+    const PayoutPublicKeys& payout,
+    std::uint64_t share_height,
+    std::uint64_t timestamp,
+    std::uint64_t difficulty,
+    const ShareId& parent = {}) {
+    Share share;
+    share.version = kShareVersion2;
+    share.parent_id = parent;
+    share.share_height = share_height;
+    share.timestamp = timestamp;
+    share.zano_height = 166331;
+    share.mining_header_hash.fill(0x22);
+    share.share_difficulty = difficulty128_from_decimal(
+        std::to_string(difficulty));
+    share.network_difficulty = difficulty128_from_decimal("1000000");
+    share.payout = payout;
+    share.miner_id = miner_id_from_payout(payout);
+    return share;
 }
 
 }  // namespace
@@ -127,6 +164,84 @@ int main() {
     CHECK(std::string(p2p_payout_policy_status_name(
               P2pPayoutPolicyStatus::PayoutPlanMismatch)) ==
           "payout-plan-mismatch");
+
+    // Build a daemon-style full block with a different valid miner transaction,
+    // then replace that entire transaction from verified sidechain history.
+    PplnsCoinbasePlan daemon_plan = plan;
+    daemon_plan.destinations[0].amount = 500000000000ULL;
+    daemon_plan.destinations[1].amount = 500000000000ULL;
+    const ZanoMinerTxResult daemon_miner_tx = build_zano_hf6_pplns_miner_tx(
+        166331,
+        0,
+        daemon_plan.reward_atomic,
+        daemon_plan,
+        "daemon-template");
+
+    BlockTemplate daemon_template;
+    daemon_template.block_reward = plan.reward_atomic;
+    daemon_template.block_reward_without_fee = plan.reward_atomic;
+    daemon_template.blocktemplate_blob = bytes_to_hex(
+        make_block_blob(hex_to_bytes(daemon_miner_tx.tx_blob_hex)));
+    daemon_template.difficulty = "1000000";
+    daemon_template.height = 166331;
+    daemon_template.miner_tx_tgc_json = daemon_miner_tx.miner_tx_tgc_json;
+    daemon_template.status = "OK";
+    daemon_template.txs_fee = 0;
+
+    ShareChain chain;
+    const Share first = make_payout_share(payout_a, 0, 1'000, 40);
+    const AddShareResult first_added = chain.add_share_unchecked(first);
+    CHECK(first_added.disposition == ShareDisposition::Connected);
+    const Share second = make_payout_share(
+        payout_b, 1, 1'010, 60, first_added.id);
+    const AddShareResult second_added = chain.add_share_unchecked(second);
+    CHECK(second_added.disposition == ShareDisposition::Connected);
+
+    const MiningHeaderWork daemon_work = derive_mining_header_work(
+        hex_to_bytes(daemon_template.blocktemplate_blob));
+    const PplnsTemplateResult rebuilt = build_canonical_pplns_template(
+        daemon_template,
+        chain,
+        canonical_sidechain_parameters(SidechainParentNetwork::Testnet),
+        "p2pool-test");
+    CHECK(rebuilt.status == PplnsTemplateStatus::Ready);
+    CHECK(rebuilt.plan.status == PplnsCoinbasePlanStatus::Ready);
+    CHECK(rebuilt.plan.destinations.size() == 2);
+    CHECK(rebuilt.block.blocktemplate_blob != daemon_template.blocktemplate_blob);
+    CHECK(!rebuilt.block.miner_tx_tgc_json.empty());
+    CHECK(rebuilt.mining_work.block_header.serialized ==
+          daemon_work.block_header.serialized);
+    CHECK(rebuilt.mining_work.tx_hashes.hashes == daemon_work.tx_hashes.hashes);
+
+    std::uint64_t payout_a_amount = 0;
+    std::uint64_t payout_b_amount = 0;
+    for (const auto& destination : rebuilt.plan.destinations) {
+        if (destination.payout == payout_a) {
+            payout_a_amount += destination.amount;
+        }
+        if (destination.payout == payout_b) {
+            payout_b_amount += destination.amount;
+        }
+    }
+    CHECK(payout_a_amount == 400000000000ULL);
+    CHECK(payout_b_amount == 600000000000ULL);
+
+    const auto rebuilt_policy = verify_miner_tx_payout_policy(
+        rebuilt.mining_work.miner_tx_prefix.serialized,
+        rebuilt.block.miner_tx_tgc_json,
+        rebuilt.block.block_reward_without_fee,
+        rebuilt.block.block_reward,
+        rebuilt.block.txs_fee,
+        rebuilt.plan);
+    CHECK(rebuilt_policy.status == P2pPayoutPolicyStatus::Verified);
+    CHECK(rebuilt_policy.verified_reward == rebuilt.block.block_reward);
+
+    ShareChain empty_chain;
+    const auto no_history = build_canonical_pplns_template(
+        daemon_template,
+        empty_chain,
+        canonical_sidechain_parameters(SidechainParentNetwork::Testnet));
+    CHECK(no_history.status == PplnsTemplateStatus::PayoutPlanUnavailable);
 
     return 0;
 #endif
