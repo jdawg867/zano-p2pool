@@ -82,12 +82,21 @@ struct PplnsTemplateResult {
             return result;
         }
 
+        // Zano HF6 requires etc_coinbase_block_cumulative_size in coinbase
+        // extra. Its value is derived from the daemon's selected regular
+        // transactions, whose full blobs are not present in blocktemplate_blob.
+        // Preserve the daemon's authoritative value when replacing miner_tx.
+        const std::uint64_t coinbase_block_cumulative_size =
+            extract_zano_hf6_coinbase_cumulative_size(
+                daemon_work.miner_tx_prefix.serialized);
+
         const ZanoMinerTxResult miner_tx = build_zano_hf6_pplns_miner_tx(
             daemon_template.height,
             daemon_template.txs_fee,
             daemon_template.block_reward,
             result.plan,
-            extra_text);
+            extra_text,
+            coinbase_block_cumulative_size);
         const std::vector<std::uint8_t> miner_tx_bytes =
             hex_to_bytes(miner_tx.tx_blob_hex);
 
