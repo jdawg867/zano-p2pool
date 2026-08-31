@@ -192,9 +192,51 @@ std::uint64_t StratumTcpServer::publish_template(
     const Hash256& seed_hash,
     std::uint64_t height,
     const Difficulty128& network_difficulty) {
-    std::lock_guard lock(state_mutex_);
-    return sessions_.publish_template(
-        header_hash, seed_hash, height, network_difficulty);
+    std::vector<std::pair<int, std::string>> notifications;
+    std::uint64_t version = 0;
+
+    {
+        std::unique_lock state_lock(state_mutex_);
+        version = sessions_.publish_template(
+            header_hash, seed_hash, height, network_difficulty);
+
+        try {
+            std::lock_guard clients_lock(clients_mutex_);
+            notifications.reserve(client_sessions_.size());
+            for (const auto& [fd, session_id] : client_sessions_) {
+                const StratumSession* session = sessions_.find_session(session_id);
+                if (session == nullptr || !session->logged_in) {
+                    continue;
+                }
+
+                const StratumIssuedWork work = issue_work(session_id);
+                std::string notification =
+                    stratum_work_notification_json(work.wire_work);
+                const int notification_fd = ::dup(fd);
+                if (notification_fd < 0) {
+                    continue;
+                }
+                notifications.emplace_back(
+                    notification_fd, std::move(notification));
+            }
+        } catch (...) {
+            for (const auto& [fd, payload] : notifications) {
+                static_cast<void>(payload);
+                ::close(fd);
+            }
+            throw;
+        }
+    }
+
+    // Never hold Stratum or consensus locks while writing to miner sockets. A
+    // duplicated descriptor keeps the connection stable even if the client
+    // disconnects concurrently and the original descriptor number is reused.
+    for (const auto& [fd, payload] : notifications) {
+        static_cast<void>(send_all(fd, payload));
+        ::close(fd);
+    }
+
+    return version;
 }
 
 StratumIssuedWork StratumTcpServer::issue_work(std::uint64_t session_id) {
@@ -262,7 +304,7 @@ void StratumTcpServer::accept_loop() {
                 std::lock_guard lock(state_mutex_);
                 session_id = sessions_.create_session();
             }
-            register_client_fd(client_fd);
+            register_client_fd(client_fd, session_id);
             client_threads_.emplace_back(
                 &StratumTcpServer::client_loop, this, client_fd, session_id);
         } catch (...) {
@@ -438,19 +480,22 @@ std::string StratumTcpServer::handle_request(
         request.id, kStratumErrorMethodNotFound, "unknown method");
 }
 
-void StratumTcpServer::register_client_fd(int fd) {
+void StratumTcpServer::register_client_fd(
+    int fd,
+    std::uint64_t session_id) {
     std::lock_guard lock(clients_mutex_);
-    client_fds_.insert(fd);
+    client_sessions_[fd] = session_id;
 }
 
 void StratumTcpServer::unregister_client_fd(int fd) noexcept {
     std::lock_guard lock(clients_mutex_);
-    client_fds_.erase(fd);
+    client_sessions_.erase(fd);
 }
 
 void StratumTcpServer::close_all_clients() noexcept {
     std::lock_guard lock(clients_mutex_);
-    for (const int fd : client_fds_) {
+    for (const auto& [fd, session_id] : client_sessions_) {
+        static_cast<void>(session_id);
         ::shutdown(fd, SHUT_RDWR);
     }
 }
