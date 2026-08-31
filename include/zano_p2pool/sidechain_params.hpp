@@ -13,9 +13,9 @@ namespace zano_p2pool {
 
 using SidechainId = Hash256;
 
-inline constexpr std::uint8_t kSidechainParameterVersion = 2;
+inline constexpr std::uint8_t kSidechainParameterVersion = 3;
 inline constexpr std::array<std::uint8_t, 8> kSidechainIdDomain{
-    'Z', 'P', '2', 'S', 'I', 'D', 'V', '2'};
+    'Z', 'P', '2', 'S', 'I', 'D', 'V', '3'};
 
 // Values deliberately match the existing P2P network tags. The sidechain
 // parameter layer is independent of the transport protocol so its identity can
@@ -28,7 +28,10 @@ enum class SidechainParentNetwork : std::uint8_t {
 struct SidechainParameters {
     std::uint8_t parameter_version{kSidechainParameterVersion};
     SidechainParentNetwork parent_network{SidechainParentNetwork::Testnet};
-    std::uint8_t minimum_share_version{kShareVersion1};
+    // Public PPLNS consensus requires payout-capable v2 shares. V1 remains a
+    // serialization compatibility format for legacy tests/tools but is not
+    // admissible on the canonical sidechain profile.
+    std::uint8_t minimum_share_version{kShareVersion2};
     std::uint8_t maximum_share_version{kShareVersion2};
     std::uint64_t max_future_seconds{kShareMaxFutureSeconds};
     std::uint64_t max_parent_backstep_seconds{kShareMaxParentBackstepSeconds};
@@ -79,9 +82,9 @@ inline void append_u64_be(
 }  // namespace detail
 
 // Canonical parameter encoding used only to derive SidechainId. It is separate
-// from the P2P wire protocol. Version 2 extends the v1 identity with the
-// consensus-relevant sidechain cadence, difficulty and direct-payout window
-// policy. Future consensus changes must use another parameter version/domain.
+// from the P2P wire protocol. Version 3 extends the economic v2 identity by
+// making payout-capable share v2 mandatory for canonical PPLNS reconstruction.
+// Future consensus changes must use another parameter version/domain.
 [[nodiscard]] inline std::vector<std::uint8_t> serialize_sidechain_parameters(
     const SidechainParameters& params) {
     if (params.parameter_version != kSidechainParameterVersion) {
