@@ -125,6 +125,7 @@ int main() {
     CHECK(parsed.hardfork_id == 6);
     CHECK(parsed.vin_count == 1);
     CHECK(parsed.vout_count == 2);
+    CHECK(extract_zano_hf6_coinbase_cumulative_size(tx_bytes) == 0);
 
     const P2pMinerTxBindingResult binding =
         verify_miner_tx_tgc_key_binding(tx_bytes, result.miner_tx_tgc_json);
@@ -193,6 +194,7 @@ int main() {
     CHECK(single_parsed.hardfork_id == 6);
     CHECK(single_parsed.vin_count == 1);
     CHECK(single_parsed.vout_count == 2);
+    CHECK(extract_zano_hf6_coinbase_cumulative_size(single_tx_bytes) == 0);
     CHECK(verify_miner_tx_tgc_key_binding(
               single_tx_bytes,
               single_result.miner_tx_tgc_json).status ==
@@ -210,16 +212,23 @@ int main() {
     CHECK(single_policy.verified_reward == single_plan.reward_atomic);
 
     // Build a daemon-style full block with a different valid miner transaction,
-    // then replace that entire transaction from verified sidechain history.
+    // then replace that entire transaction from verified sidechain history. A
+    // nonzero cumulative-size sentinel proves the PPLNS rebuild carries the
+    // daemon's mandatory HF6 coinbase extra into the replacement transaction.
     PplnsCoinbasePlan daemon_plan = plan;
     daemon_plan.destinations[0].amount = 500000000000ULL;
     daemon_plan.destinations[1].amount = 500000000000ULL;
+    constexpr std::uint64_t kDaemonCumulativeSize = 4242;
     const ZanoMinerTxResult daemon_miner_tx = build_zano_hf6_pplns_miner_tx(
         166331,
         0,
         daemon_plan.reward_atomic,
         daemon_plan,
-        "daemon-template");
+        "daemon-template",
+        kDaemonCumulativeSize);
+    CHECK(extract_zano_hf6_coinbase_cumulative_size(
+              hex_to_bytes(daemon_miner_tx.tx_blob_hex)) ==
+          kDaemonCumulativeSize);
 
     BlockTemplate daemon_template;
     daemon_template.block_reward = plan.reward_atomic;
@@ -256,6 +265,9 @@ int main() {
     CHECK(rebuilt.mining_work.block_header.serialized ==
           daemon_work.block_header.serialized);
     CHECK(rebuilt.mining_work.tx_hashes.hashes == daemon_work.tx_hashes.hashes);
+    CHECK(extract_zano_hf6_coinbase_cumulative_size(
+              rebuilt.mining_work.miner_tx_prefix.serialized) ==
+          kDaemonCumulativeSize);
 
     std::uint64_t payout_a_amount = 0;
     std::uint64_t payout_b_amount = 0;
