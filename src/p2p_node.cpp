@@ -204,6 +204,28 @@ void P2pNodeProtocol::set_local_mining_context(
     local_mining_context_ = proposal;
 }
 
+void P2pNodeProtocol::set_local_mining_context(
+    const P2pMiningAnchor& anchor,
+    const P2pMiningContextProposal& proposal,
+    const P2pPayoutAddress& payout) {
+    std::lock_guard lock(state_mutex_);
+    local_mining_anchor_ = anchor;
+    local_mining_context_ = proposal;
+    expected_payout_ = payout;
+    expected_payout_plan_.reset();
+}
+
+void P2pNodeProtocol::set_local_mining_context(
+    const P2pMiningAnchor& anchor,
+    const P2pMiningContextProposal& proposal,
+    const PplnsCoinbasePlan& plan) {
+    std::lock_guard lock(state_mutex_);
+    local_mining_anchor_ = anchor;
+    local_mining_context_ = proposal;
+    expected_payout_plan_ = plan;
+    expected_payout_.reset();
+}
+
 void P2pNodeProtocol::set_expected_payout(
     const P2pPayoutAddress& payout) {
     std::lock_guard lock(state_mutex_);
