@@ -430,6 +430,172 @@ P2pPayoutPolicyResult verify_miner_tx_payout_policy(
     return result;
 }
 
+P2pPayoutPolicyResult verify_miner_tx_payout_policy(
+    std::span<const std::uint8_t> miner_tx_prefix,
+    std::string_view miner_tx_tgc_json,
+    std::uint64_t block_reward_without_fee,
+    std::uint64_t block_reward,
+    std::uint64_t txs_fee,
+    const PplnsCoinbasePlan& expected_plan) noexcept {
+    P2pPayoutPolicyResult result;
+
+    const auto binding = verify_miner_tx_tgc_key_binding(
+        miner_tx_prefix, miner_tx_tgc_json);
+    result.binding_status = binding.status;
+    if (binding.status != P2pMinerTxBindingStatus::Verified) {
+        result.status = binding.status == P2pMinerTxBindingStatus::BackendUnavailable
+            ? P2pPayoutPolicyStatus::BackendUnavailable
+            : P2pPayoutPolicyStatus::KeyBindingFailed;
+        return result;
+    }
+
+    if (!zano_curve_backend_available()) {
+        result.status = P2pPayoutPolicyStatus::BackendUnavailable;
+        return result;
+    }
+
+    static_cast<void>(txs_fee);
+    if (block_reward_without_fee == 0 ||
+        block_reward != block_reward_without_fee) {
+        result.status = P2pPayoutPolicyStatus::RewardMetadataMismatch;
+        return result;
+    }
+
+    if (expected_plan.status != PplnsCoinbasePlanStatus::Ready ||
+        expected_plan.reward_atomic != block_reward ||
+        expected_plan.destinations.empty() ||
+        expected_plan.destinations.size() > kCurrentMinerMaxOutputs) {
+        result.status = P2pPayoutPolicyStatus::PayoutPlanMismatch;
+        return result;
+    }
+
+    std::uint64_t expected_sum = 0;
+    for (std::size_t i = 0; i < expected_plan.destinations.size(); ++i) {
+        const auto& destination = expected_plan.destinations[i];
+        if (destination.amount == 0 ||
+            miner_id_from_payout(destination.payout) != destination.miner_id ||
+            destination.amount >
+                std::numeric_limits<std::uint64_t>::max() - expected_sum) {
+            result.status = P2pPayoutPolicyStatus::PayoutPlanMismatch;
+            return result;
+        }
+        for (std::size_t j = 0; j < i; ++j) {
+            if (expected_plan.destinations[j].payout == destination.payout) {
+                result.status = P2pPayoutPolicyStatus::PayoutPlanMismatch;
+                return result;
+            }
+        }
+        expected_sum += destination.amount;
+    }
+    if (expected_sum != expected_plan.reward_atomic) {
+        result.status = P2pPayoutPolicyStatus::PayoutPlanMismatch;
+        return result;
+    }
+
+    std::vector<ParsedPayoutOutput> outputs;
+    try {
+        outputs = parse_current_outputs(miner_tx_prefix);
+    } catch (...) {
+        result.status = P2pPayoutPolicyStatus::MalformedMinerTxPrefix;
+        return result;
+    }
+    result.output_count = outputs.size();
+    if (outputs.size() < kCurrentMinerMinOutputs ||
+        outputs.size() > kCurrentMinerMaxOutputs) {
+        result.status = P2pPayoutPolicyStatus::InvalidOutputCount;
+        return result;
+    }
+
+    ParsedTgcPayoutData tgc;
+    try {
+        tgc = parse_tgc_payout_data(miner_tx_tgc_json);
+    } catch (...) {
+        result.status = P2pPayoutPolicyStatus::MalformedTgc;
+        return result;
+    }
+
+    if (tgc.amounts.size() != outputs.size() ||
+        tgc.amount_blinding_masks.size() != outputs.size() ||
+        tgc.asset_id_blinding_masks.size() != outputs.size()) {
+        result.status = P2pPayoutPolicyStatus::TgcOutputCountMismatch;
+        return result;
+    }
+
+    std::vector<std::uint64_t> credited(
+        expected_plan.destinations.size(), 0);
+    std::uint64_t reward_sum = 0;
+
+    for (std::size_t i = 0; i < outputs.size(); ++i) {
+        const auto& output = outputs[i];
+        if (output.blinded_asset_id != kNativeCoinAssetId1Div8 ||
+            !is_zero_key(tgc.asset_id_blinding_masks[i])) {
+            result.status = P2pPayoutPolicyStatus::NonNativeAsset;
+            return result;
+        }
+
+        std::size_t matched_destination = expected_plan.destinations.size();
+        for (std::size_t j = 0; j < expected_plan.destinations.size(); ++j) {
+            const auto& payout = expected_plan.destinations[j].payout;
+            ZanoCurveKey expected_stealth{};
+            if (!zano_derive_output_public_key(
+                    tgc.tx_secret_key,
+                    payout.spend_public_key,
+                    payout.view_public_key,
+                    i,
+                    expected_stealth)) {
+                result.status = P2pPayoutPolicyStatus::DestinationMismatch;
+                return result;
+            }
+            if (expected_stealth == output.stealth_address) {
+                if (matched_destination != expected_plan.destinations.size()) {
+                    result.status = P2pPayoutPolicyStatus::PayoutPlanMismatch;
+                    return result;
+                }
+                matched_destination = j;
+            }
+        }
+        if (matched_destination == expected_plan.destinations.size()) {
+            result.status = P2pPayoutPolicyStatus::DestinationMismatch;
+            return result;
+        }
+
+        if (!zano_amount_commitment_matches(
+                tgc.amounts[i],
+                tgc.amount_blinding_masks[i],
+                output.blinded_asset_id,
+                output.amount_commitment)) {
+            result.status = P2pPayoutPolicyStatus::AmountCommitmentMismatch;
+            return result;
+        }
+
+        if (tgc.amounts[i] >
+                std::numeric_limits<std::uint64_t>::max() - reward_sum ||
+            tgc.amounts[i] >
+                std::numeric_limits<std::uint64_t>::max() -
+                    credited[matched_destination]) {
+            result.status = P2pPayoutPolicyStatus::RewardSumMismatch;
+            return result;
+        }
+        reward_sum += tgc.amounts[i];
+        credited[matched_destination] += tgc.amounts[i];
+    }
+
+    result.verified_reward = reward_sum;
+    if (reward_sum != block_reward) {
+        result.status = P2pPayoutPolicyStatus::RewardSumMismatch;
+        return result;
+    }
+    for (std::size_t i = 0; i < expected_plan.destinations.size(); ++i) {
+        if (credited[i] != expected_plan.destinations[i].amount) {
+            result.status = P2pPayoutPolicyStatus::PayoutPlanMismatch;
+            return result;
+        }
+    }
+
+    result.status = P2pPayoutPolicyStatus::Verified;
+    return result;
+}
+
 P2pPayoutPolicyResult verify_p2p_mining_context_payout_policy(
     const P2pMiningContextProposal& proposal,
     const P2pMiningContextCheckResult& anchored_check,
@@ -455,6 +621,37 @@ P2pPayoutPolicyResult verify_p2p_mining_context_payout_policy(
             proposal.block_reward,
             proposal.txs_fee,
             expected_payout);
+    } catch (...) {
+        result.status = P2pPayoutPolicyStatus::MalformedMinerTxPrefix;
+        return result;
+    }
+}
+
+P2pPayoutPolicyResult verify_p2p_mining_context_payout_policy(
+    const P2pMiningContextProposal& proposal,
+    const P2pMiningContextCheckResult& anchored_check,
+    const PplnsCoinbasePlan& expected_plan) noexcept {
+    P2pPayoutPolicyResult result;
+    if (anchored_check.status !=
+            P2pMiningContextCheckStatus::AnchoredUnverifiedMinerTx ||
+        anchored_check.proposal_id != p2p_mining_context_id(proposal)) {
+        result.status = P2pPayoutPolicyStatus::NotAnchored;
+        return result;
+    }
+
+    try {
+        const auto work = derive_mining_header_work(proposal.block_template_blob);
+        if (work.header_hash != anchored_check.mining_header_hash) {
+            result.status = P2pPayoutPolicyStatus::NotAnchored;
+            return result;
+        }
+        return verify_miner_tx_payout_policy(
+            work.miner_tx_prefix.serialized,
+            proposal.miner_tx_tgc_json,
+            proposal.block_reward_without_fee,
+            proposal.block_reward,
+            proposal.txs_fee,
+            expected_plan);
     } catch (...) {
         result.status = P2pPayoutPolicyStatus::MalformedMinerTxPrefix;
         return result;
@@ -490,6 +687,8 @@ const char* p2p_payout_policy_status_name(
         return "amount-commitment-mismatch";
     case P2pPayoutPolicyStatus::RewardSumMismatch:
         return "reward-sum-mismatch";
+    case P2pPayoutPolicyStatus::PayoutPlanMismatch:
+        return "payout-plan-mismatch";
     }
     return "unknown";
 }
