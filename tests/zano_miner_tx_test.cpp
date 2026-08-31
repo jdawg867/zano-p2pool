@@ -1,12 +1,14 @@
 #include "zano_p2pool/crypto_hash.hpp"
 #include "zano_p2pool/mining_header.hpp"
 #include "zano_p2pool/p2p_miner_tx_binding.hpp"
+#include "zano_p2pool/p2p_payout_policy.hpp"
 #include "zano_p2pool/zano_address.hpp"
 #include "zano_p2pool/zano_miner_tx.hpp"
 #include "test_check.hpp"
 
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 namespace {
 
@@ -90,6 +92,41 @@ int main() {
     const P2pMinerTxBindingResult binding =
         verify_miner_tx_tgc_key_binding(tx_bytes, result.miner_tx_tgc_json);
     CHECK(binding.status == P2pMinerTxBindingStatus::Verified);
+
+    const P2pPayoutPolicyResult payout_policy = verify_miner_tx_payout_policy(
+        parsed.serialized,
+        result.miner_tx_tgc_json,
+        result.block_reward_without_fee,
+        result.block_reward,
+        0,
+        plan);
+    CHECK(payout_policy.status == P2pPayoutPolicyStatus::Verified);
+    CHECK(payout_policy.output_count == 2);
+    CHECK(payout_policy.verified_reward == plan.reward_atomic);
+
+    PplnsCoinbasePlan reordered_plan = plan;
+    std::swap(reordered_plan.destinations[0], reordered_plan.destinations[1]);
+    CHECK(verify_miner_tx_payout_policy(
+              parsed.serialized,
+              result.miner_tx_tgc_json,
+              result.block_reward_without_fee,
+              result.block_reward,
+              0,
+              reordered_plan).status == P2pPayoutPolicyStatus::Verified);
+
+    PplnsCoinbasePlan wrong_split = plan;
+    wrong_split.destinations[0].amount += 1;
+    wrong_split.destinations[1].amount -= 1;
+    CHECK(verify_miner_tx_payout_policy(
+              parsed.serialized,
+              result.miner_tx_tgc_json,
+              result.block_reward_without_fee,
+              result.block_reward,
+              0,
+              wrong_split).status == P2pPayoutPolicyStatus::PayoutPlanMismatch);
+    CHECK(std::string(p2p_payout_policy_status_name(
+              P2pPayoutPolicyStatus::PayoutPlanMismatch)) ==
+          "payout-plan-mismatch");
 
     return 0;
 #endif
