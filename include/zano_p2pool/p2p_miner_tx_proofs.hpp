@@ -37,6 +37,14 @@ struct P2pMinerTxProofResult {
     const P2pMiningContextCheckResult& anchored_check,
     const P2pPayoutAddress& expected_payout) noexcept;
 
+// Canonical PPLNS variant. The balance proof is identical; only the preceding
+// payout-policy gate changes from one public payout identity to the complete
+// deterministic multi-recipient coinbase plan.
+[[nodiscard]] P2pMinerTxProofResult verify_p2p_mining_context_balance_proof(
+    const P2pMiningContextProposal& proposal,
+    const P2pMiningContextCheckResult& anchored_check,
+    const PplnsCoinbasePlan& expected_plan) noexcept;
+
 // Checkpoint 6B.3b: requires the 6B.3a balance gate and then parses/verifies the
 // current-HF6 tag-47 Bulletproof+ plus its UG aggregation proof. Success means
 // all miner-tx proof gates are valid, but still does NOT promote trusted work.
@@ -44,6 +52,14 @@ struct P2pMinerTxProofResult {
     const P2pMiningContextProposal& proposal,
     const P2pMiningContextCheckResult& anchored_check,
     const P2pPayoutAddress& expected_payout) noexcept;
+
+// Canonical PPLNS variant. Destination/amount verification uses expected_plan;
+// the balance and range proofs still run through exactly the same cryptographic
+// verification code as the single-payout compatibility path.
+[[nodiscard]] P2pMinerTxProofResult verify_p2p_mining_context_proofs(
+    const P2pMiningContextProposal& proposal,
+    const P2pMiningContextCheckResult& anchored_check,
+    const PplnsCoinbasePlan& expected_plan) noexcept;
 
 [[nodiscard]] const char* p2p_miner_tx_proof_status_name(
     P2pMinerTxProofStatus status) noexcept;
