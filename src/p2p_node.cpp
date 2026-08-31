@@ -89,18 +89,29 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
         }
         case P2pMessageType::MiningContextAnnounce: {
             std::lock_guard lock(state_mutex_);
-            if (!local_mining_anchor_.has_value() || !expected_payout_.has_value()) {
+            if (!local_mining_anchor_.has_value() ||
+                (!expected_payout_.has_value() &&
+                 !expected_payout_plan_.has_value())) {
                 result.status = P2pNodeMessageStatus::MiningContextDeferred;
                 break;
             }
 
-            const P2pMiningContextTrustResult trust =
-                promote_p2p_mining_context(
+            P2pMiningContextTrustResult trust;
+            if (expected_payout_plan_.has_value()) {
+                trust = promote_p2p_mining_context(
+                    trusted_work_,
+                    peer,
+                    envelope,
+                    *local_mining_anchor_,
+                    *expected_payout_plan_);
+            } else {
+                trust = promote_p2p_mining_context(
                     trusted_work_,
                     peer,
                     envelope,
                     *local_mining_anchor_,
                     *expected_payout_);
+            }
             result.status = P2pNodeMessageStatus::MiningContextProcessed;
             result.mining_context_status = trust.status;
             result.mining_context_registry_inserted = trust.registry_inserted;
@@ -210,11 +221,20 @@ void P2pNodeProtocol::set_expected_payout(
     const P2pPayoutAddress& payout) {
     std::lock_guard lock(state_mutex_);
     expected_payout_ = payout;
+    expected_payout_plan_.reset();
+}
+
+void P2pNodeProtocol::set_expected_payout_plan(
+    const PplnsCoinbasePlan& plan) {
+    std::lock_guard lock(state_mutex_);
+    expected_payout_plan_ = plan;
+    expected_payout_.reset();
 }
 
 void P2pNodeProtocol::clear_expected_payout() noexcept {
     std::lock_guard lock(state_mutex_);
     expected_payout_.reset();
+    expected_payout_plan_.reset();
 }
 
 std::size_t P2pNodeProtocol::trusted_work_count() const noexcept {
@@ -236,7 +256,7 @@ bool P2pNodeProtocol::mining_context_trust_ready() const noexcept {
     std::lock_guard lock(state_mutex_);
     return local_mining_anchor_.has_value() &&
            local_mining_context_.has_value() &&
-           expected_payout_.has_value();
+           (expected_payout_.has_value() || expected_payout_plan_.has_value());
 }
 
 std::optional<P2pEnvelope>
