@@ -89,6 +89,7 @@ if(ZANO_P2POOL_ZANO_SOURCE_DIR)
 
     enable_language(C)
     find_package(Boost REQUIRED COMPONENTS serialization)
+    find_package(ZLIB REQUIRED)
 
     add_subdirectory(
         "${_zano_libethash_dir}"
@@ -170,6 +171,7 @@ if(ZANO_P2POOL_ZANO_SOURCE_DIR)
                 zano_p2pool_zano_curve
                 Boost::serialization
                 Threads::Threads
+                ZLIB::ZLIB
         )
 
         target_compile_definitions(zano_p2pool_core PUBLIC
