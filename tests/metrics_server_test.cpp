@@ -1,4 +1,5 @@
 #include "zano_p2pool/metrics_server.hpp"
+#include "zano_p2pool/metrics_snapshot.hpp"
 #include "test_check.hpp"
 
 #include <arpa/inet.h>
@@ -75,6 +76,54 @@ void expect_throw(Fn&& fn) {
 int main() {
     using namespace zano_p2pool;
 
+    MetricsSnapshot snapshot;
+    snapshot.zano_height = 42;
+    snapshot.sidechain_connected_shares = 7;
+    snapshot.sidechain_orphan_shares = 2;
+    snapshot.sidechain_tip_height = 6;
+    snapshot.p2p_peers = 3;
+    snapshot.p2p_trusted_work_contexts = 4;
+    snapshot.stratum_connections = 5;
+    snapshot.stratum_template_version = 9;
+    snapshot.stratum_accepted_shares_total = 11;
+    snapshot.p2p_admitted_shares_total = 12;
+    snapshot.block_candidates_total = 13;
+    snapshot.blocks_submitted_total = 14;
+    snapshot.block_submission_failures_total = 15;
+    snapshot.template_refresh_failures_total = 16;
+    snapshot.persistence_ok = false;
+
+    const std::string rendered = render_prometheus_metrics(snapshot);
+    CHECK(rendered.find("zano_p2pool_up 1\n") != std::string::npos);
+    CHECK(rendered.find("zano_p2pool_zano_height 42\n") != std::string::npos);
+    CHECK(rendered.find("zano_p2pool_sidechain_connected_shares 7\n") !=
+          std::string::npos);
+    CHECK(rendered.find("zano_p2pool_sidechain_orphan_shares 2\n") !=
+          std::string::npos);
+    CHECK(rendered.find("zano_p2pool_sidechain_tip_height 6\n") !=
+          std::string::npos);
+    CHECK(rendered.find("zano_p2pool_p2p_peers 3\n") != std::string::npos);
+    CHECK(rendered.find("zano_p2pool_p2p_trusted_work_contexts 4\n") !=
+          std::string::npos);
+    CHECK(rendered.find("zano_p2pool_stratum_connections 5\n") !=
+          std::string::npos);
+    CHECK(rendered.find("zano_p2pool_stratum_template_version 9\n") !=
+          std::string::npos);
+    CHECK(rendered.find("zano_p2pool_stratum_accepted_shares_total 11\n") !=
+          std::string::npos);
+    CHECK(rendered.find("zano_p2pool_p2p_admitted_shares_total 12\n") !=
+          std::string::npos);
+    CHECK(rendered.find("zano_p2pool_block_candidates_total 13\n") !=
+          std::string::npos);
+    CHECK(rendered.find("zano_p2pool_blocks_submitted_total 14\n") !=
+          std::string::npos);
+    CHECK(rendered.find("zano_p2pool_block_submission_failures_total 15\n") !=
+          std::string::npos);
+    CHECK(rendered.find("zano_p2pool_template_refresh_failures_total 16\n") !=
+          std::string::npos);
+    CHECK(rendered.find("zano_p2pool_persistence_ok 0\n") !=
+          std::string::npos);
+
     std::atomic<std::uint64_t> snapshots{0};
     MetricsServerConfig config;
     config.bind_address = "127.0.0.1";
@@ -83,10 +132,7 @@ int main() {
 
     MetricsHttpServer server(config, [&] {
         snapshots.fetch_add(1);
-        return std::string(
-            "# TYPE zano_p2pool_up gauge\n"
-            "zano_p2pool_up 1\n"
-            "zano_p2pool_sidechain_connected_shares 7");
+        return render_prometheus_metrics(snapshot);
     });
     server.start();
     CHECK(server.running());
