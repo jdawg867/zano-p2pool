@@ -16,9 +16,6 @@ struct MetricsSnapshot {
     // Monotonic process-local work publication sequence. This is not a
     // zano-p2pool, P2P protocol, sidechain share, or wire-protocol version.
     std::uint64_t stratum_job_sequence{0};
-    // Temporary internal compatibility field while runtime call sites are
-    // renamed. It is never exported under a "template_version" metric name.
-    std::uint64_t stratum_template_version{0};
     std::uint64_t stratum_accepted_shares_total{0};
     std::uint64_t p2p_admitted_shares_total{0};
     std::uint64_t block_candidates_total{0};
@@ -110,16 +107,12 @@ inline void append_metric(
         "gauge",
         "Currently connected Stratum clients.",
         snapshot.stratum_connections);
-
-    const std::uint64_t job_sequence = snapshot.stratum_job_sequence != 0
-        ? snapshot.stratum_job_sequence
-        : snapshot.stratum_template_version;
     detail::append_metric(
         out,
         "zano_p2pool_stratum_job_sequence",
         "gauge",
         "Current process-local Stratum work publication sequence.",
-        job_sequence);
+        snapshot.stratum_job_sequence);
     detail::append_metric(
         out,
         "zano_p2pool_stratum_accepted_shares_total",
