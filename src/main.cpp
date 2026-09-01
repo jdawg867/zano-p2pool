@@ -887,7 +887,7 @@ int main(int argc, char** argv) {
         }
 
         std::unique_ptr<zano_p2pool::StratumTcpServer> server;
-        std::uint64_t template_version = 0;
+        std::uint64_t job_sequence = 0;
         if (options.stratum) {
             zano_p2pool::StratumServerConfig server_config;
             server_config.bind_address = options.stratum_bind;
@@ -958,7 +958,7 @@ int main(int argc, char** argv) {
                 &node_state_mutex,
                 std::move(accepted_share));
 
-            template_version = server->publish_template(
+            job_sequence = server->publish_template(
                 live.mining_work.header_hash,
                 live.seed_hash,
                 live.block.height,
@@ -1019,7 +1019,7 @@ int main(int argc, char** argv) {
                     snapshot.stratum_connections = server
                         ? server->client_count()
                         : 0;
-                    snapshot.stratum_template_version = server
+                    snapshot.stratum_job_sequence = server
                         ? server->current_template_version()
                         : 0;
                     snapshot.stratum_accepted_shares_total =
@@ -1098,10 +1098,10 @@ int main(int argc, char** argv) {
                             next.seed_hash,
                             next.block.height,
                             next.network_difficulty);
-                    if (next_version != template_version) {
-                        template_version = next_version;
+                    if (next_version != job_sequence) {
+                        job_sequence = next_version;
                         std::cout
-                            << "Stratum template v" << template_version
+                            << "Stratum job #" << job_sequence
                             << ": height=" << next.block.height
                             << " header="
                             << zano_p2pool::hash_to_hex(
