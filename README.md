@@ -181,6 +181,21 @@ Stratum development mode is opt-in and defaults to loopback:
 
 Expected startup output includes the independently derived mining header and the local Stratum listener.
 
+Runtime observability is also opt-in and defaults to loopback. Enable the Prometheus-style metrics and health endpoints with:
+
+```bash
+./build-zano/zano-p2pool \
+  --network testnet \
+  --wallet YOUR_TESTNET_ZANO_ADDRESS \
+  --stratum \
+  --p2p \
+  --metrics \
+  --metrics-bind 127.0.0.1 \
+  --metrics-port 37890
+```
+
+The server exposes `GET /metrics` and `GET /healthz`. Metrics are intentionally label-free and do not expose wallet addresses, node IDs, share IDs, peer identities, or other payout-identifying values. The Stratum work publication counter is named `zano_p2pool_stratum_job_sequence`; runtime logs use `Stratum job #N` so this process-local sequence cannot be confused with the zano-p2pool, P2P, or sidechain-share protocol version.
+
 ## Current Zano network defaults
 
 From the current Zano source:
