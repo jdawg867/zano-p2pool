@@ -73,8 +73,16 @@ public:
 
     // Read-only observability snapshots. These methods never issue work or
     // mutate session/consensus state.
-    [[nodiscard]] std::size_t client_count() const;
-    [[nodiscard]] std::uint64_t current_template_version() const;
+    [[nodiscard]] std::size_t client_count() const {
+        std::lock_guard lock(clients_mutex_);
+        return client_sessions_.size();
+    }
+
+    [[nodiscard]] std::uint64_t current_template_version() const {
+        std::lock_guard lock(state_mutex_);
+        const StratumTemplate* current = sessions_.current_template();
+        return current != nullptr ? current->version : 0;
+    }
 
 private:
     void accept_loop();
