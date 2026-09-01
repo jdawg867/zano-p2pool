@@ -210,6 +210,24 @@ int main() {
     CHECK(duplicate.find("duplicate work") != std::string::npos);
     CHECK(callback_count.load() <= 1);
 
+    const Hash256 refreshed_header = hash_from_hex(
+        "00112233445566778899aabbccddeeffffeeddccbbaa99887766554433221100");
+    Hash256 refreshed_seed = seed;
+    refreshed_seed[30] = 2;
+    CHECK(server.publish_template(
+              refreshed_header,
+              refreshed_seed,
+              1,
+              difficulty128_from_decimal("4")) == 2);
+
+    // A logged-in miner must receive refreshed work without polling getWork.
+    const std::string pushed_work = read_line(client);
+    CHECK(pushed_work.find(R"("jsonrpc":"2.0")") != std::string::npos);
+    CHECK(pushed_work.find(R"("id":)") == std::string::npos);
+    CHECK(pushed_work.find(
+        "0x00112233445566778899aabbccddeeffffeeddccbbaa99887766554433221100") !=
+        std::string::npos);
+
     ::shutdown(client, SHUT_RDWR);
     ::close(client);
     server.stop();

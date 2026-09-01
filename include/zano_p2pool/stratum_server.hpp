@@ -8,9 +8,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
-#include <set>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -61,7 +61,8 @@ public:
         return config_;
     }
 
-    // Publish trusted, locally derived work for subsequent login/getWork calls.
+    // Publish trusted, locally derived work and proactively push a fresh work
+    // notification to every currently logged-in miner connection.
     [[nodiscard]] std::uint64_t publish_template(
         const Hash256& header_hash,
         const Hash256& seed_hash,
@@ -85,7 +86,7 @@ private:
     // passes the exact branch-derived difficulty into the session work target.
     [[nodiscard]] StratumIssuedWork issue_work(std::uint64_t session_id);
 
-    void register_client_fd(int fd);
+    void register_client_fd(int fd, std::uint64_t session_id);
     void unregister_client_fd(int fd) noexcept;
     void close_all_clients() noexcept;
 
@@ -104,7 +105,7 @@ private:
     std::thread accept_thread_;
 
     mutable std::mutex clients_mutex_;
-    std::set<int> client_fds_;
+    std::map<int, std::uint64_t> client_sessions_;
     std::vector<std::thread> client_threads_;
 };
 

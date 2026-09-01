@@ -32,11 +32,40 @@ zano_p2pool::Share make_share(
     return share;
 }
 
+zano_p2pool::Share make_v2_share(
+    std::string_view share_difficulty,
+    std::uint64_t nonce) {
+    using namespace zano_p2pool;
+
+    Share share = make_share(share_difficulty, nonce);
+    PayoutPublicKeys payout;
+    payout.spend_public_key[0] = 0x02;
+    payout.spend_public_key[31] = static_cast<std::uint8_t>(nonce & 0xffU);
+    payout.view_public_key[0] = 0x03;
+    payout.view_public_key[31] =
+        static_cast<std::uint8_t>((nonce ^ 0x5aU) & 0xffU);
+    share.version = kShareVersion2;
+    share.payout = payout;
+    share.miner_id = miner_id_from_payout(payout);
+    return share;
+}
+
 zano_p2pool::Share make_child(
     const zano_p2pool::Share& parent,
     std::string_view share_difficulty,
     std::uint64_t nonce) {
     auto child = make_share(share_difficulty, nonce);
+    child.parent_id = zano_p2pool::share_id(parent);
+    child.share_height = parent.share_height + 1;
+    child.timestamp = parent.timestamp + 1;
+    return child;
+}
+
+zano_p2pool::Share make_v2_child(
+    const zano_p2pool::Share& parent,
+    std::string_view share_difficulty,
+    std::uint64_t nonce) {
+    auto child = make_v2_share(share_difficulty, nonce);
     child.parent_id = zano_p2pool::share_id(parent);
     child.share_height = parent.share_height + 1;
     child.timestamp = parent.timestamp + 1;
@@ -76,9 +105,8 @@ int main() {
     const ChainWork work1 = share_work(difficulty128_from_decimal("1"));
     CHECK(!add_chain_work_checked(max_work, work1, overflow_result));
 
-    // A consensus-configured chain requires the exact branch-relative target.
-    // Wrong difficulty is rejected before ProgPoWZ is invoked, so this invariant
-    // is covered in both lightweight and exact-Zano builds.
+    // A consensus-configured chain requires payout-capable share v2 and the
+    // exact branch-relative target. Both checks occur before ProgPoWZ.
     SidechainParameters consensus_params = canonical_sidechain_parameters(
         SidechainParentNetwork::Testnet);
     consensus_params.minimum_share_difficulty = 10;
@@ -91,7 +119,17 @@ int main() {
     CHECK(consensus_chain.expected_next_share_difficulty(consensus_network) ==
           difficulty128_from_decimal("10"));
 
-    Share wrong_root = make_share("9", 90);
+    Share legacy_root = make_share("10", 89);
+    legacy_root.network_difficulty = consensus_network;
+    const AddShareResult legacy_root_result = consensus_chain.submit_share(
+        legacy_root,
+        context_for(legacy_root),
+        legacy_root.timestamp);
+    CHECK(legacy_root_result.disposition == ShareDisposition::Rejected);
+    CHECK(legacy_root_result.reject_reason ==
+          ShareRejectReason::UnexpectedShareVersion);
+
+    Share wrong_root = make_v2_share("9", 90);
     wrong_root.network_difficulty = consensus_network;
     const AddShareResult wrong_root_result = consensus_chain.submit_share(
         wrong_root,
@@ -105,19 +143,19 @@ int main() {
     // best tip. Synthetic unchecked insertion is used only to construct the two
     // deterministic histories without requiring PoW vectors for every sample.
     ShareChain fork_difficulty_chain(consensus_params);
-    Share difficulty_root = make_share("10", 100);
+    Share difficulty_root = make_v2_share("10", 100);
     difficulty_root.timestamp = 10'000;
     difficulty_root.network_difficulty = consensus_network;
     CHECK(fork_difficulty_chain.add_share_unchecked(difficulty_root).disposition ==
           ShareDisposition::Connected);
 
-    Share steady_branch = make_child(difficulty_root, "10", 101);
+    Share steady_branch = make_v2_child(difficulty_root, "10", 101);
     steady_branch.timestamp = difficulty_root.timestamp + 10;
     steady_branch.network_difficulty = consensus_network;
     CHECK(fork_difficulty_chain.add_share_unchecked(steady_branch).disposition ==
           ShareDisposition::Connected);
 
-    Share fast_branch = make_child(difficulty_root, "10", 102);
+    Share fast_branch = make_v2_child(difficulty_root, "10", 102);
     fast_branch.timestamp = difficulty_root.timestamp + 5;
     fast_branch.network_difficulty = consensus_network;
     CHECK(fork_difficulty_chain.add_share_unchecked(fast_branch).disposition ==
@@ -391,6 +429,9 @@ int main() {
     CHECK(std::string(share_reject_reason_name(
               ShareRejectReason::ParentHeightMismatch)) ==
           "parent-height-mismatch");
+    CHECK(std::string(share_reject_reason_name(
+              ShareRejectReason::UnexpectedShareVersion)) ==
+          "unexpected-share-version");
     CHECK(std::string(share_reject_reason_name(
               ShareRejectReason::UnexpectedShareDifficulty)) ==
           "unexpected-share-difficulty");

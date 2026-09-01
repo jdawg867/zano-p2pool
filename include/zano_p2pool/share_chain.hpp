@@ -42,6 +42,7 @@ enum class ShareDisposition {
 
 enum class ShareRejectReason {
     None,
+    UnexpectedShareVersion,
     ZeroShareDifficulty,
     ZeroNetworkDifficulty,
     ShareDifficultyAboveNetwork,
@@ -79,7 +80,8 @@ public:
     // The default constructor preserves the existing synthetic/testing behavior
     // where callers may build arbitrary work branches with add_share_unchecked().
     // A production sidechain passes its canonical SidechainParameters explicitly;
-    // submit_share() then enforces the branch-relative expected difficulty.
+    // submit_share() then enforces the configured share-version range and the
+    // branch-relative expected difficulty.
     ShareChain() = default;
     explicit ShareChain(const SidechainParameters& sidechain_parameters);
 
@@ -121,6 +123,8 @@ public:
 
 private:
     struct DifficultyPolicy {
+        std::uint8_t minimum_share_version{0};
+        std::uint8_t maximum_share_version{0};
         std::uint64_t target_share_seconds{0};
         std::uint64_t minimum_share_difficulty{0};
         std::uint64_t difficulty_window_shares{0};

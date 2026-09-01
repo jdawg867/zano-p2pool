@@ -1,6 +1,7 @@
 #pragma once
 
 #include "zano_p2pool/p2p_miner_tx_binding.hpp"
+#include "zano_p2pool/pplns_coinbase.hpp"
 #include "zano_p2pool/zano_curve.hpp"
 
 #include <cstddef>
@@ -30,6 +31,7 @@ enum class P2pPayoutPolicyStatus {
     DestinationMismatch,
     AmountCommitmentMismatch,
     RewardSumMismatch,
+    PayoutPlanMismatch,
 };
 
 struct P2pPayoutPolicyResult {
@@ -52,10 +54,27 @@ struct P2pPayoutPolicyResult {
     std::uint64_t txs_fee,
     const P2pPayoutAddress& expected_payout) noexcept;
 
+// Multi-recipient variant for canonical PPLNS payouts. Output ordering and
+// per-recipient splitting are not trusted: every actual output must derive to
+// exactly one destination in expected_plan, and the verified TGC amounts are
+// aggregated by payout identity before being compared to the plan amounts.
+[[nodiscard]] P2pPayoutPolicyResult verify_miner_tx_payout_policy(
+    std::span<const std::uint8_t> miner_tx_prefix,
+    std::string_view miner_tx_tgc_json,
+    std::uint64_t block_reward_without_fee,
+    std::uint64_t block_reward,
+    std::uint64_t txs_fee,
+    const PplnsCoinbasePlan& expected_plan) noexcept;
+
 [[nodiscard]] P2pPayoutPolicyResult verify_p2p_mining_context_payout_policy(
     const P2pMiningContextProposal& proposal,
     const P2pMiningContextCheckResult& anchored_check,
     const P2pPayoutAddress& expected_payout) noexcept;
+
+[[nodiscard]] P2pPayoutPolicyResult verify_p2p_mining_context_payout_policy(
+    const P2pMiningContextProposal& proposal,
+    const P2pMiningContextCheckResult& anchored_check,
+    const PplnsCoinbasePlan& expected_plan) noexcept;
 
 [[nodiscard]] const char* p2p_payout_policy_status_name(
     P2pPayoutPolicyStatus status) noexcept;

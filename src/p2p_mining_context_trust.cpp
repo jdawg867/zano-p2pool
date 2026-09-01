@@ -1,13 +1,17 @@
 #include "zano_p2pool/p2p_mining_context_trust.hpp"
 
-namespace zano_p2pool {
+#include <utility>
 
-P2pMiningContextTrustResult promote_p2p_mining_context(
+namespace zano_p2pool {
+namespace {
+
+template <typename ProofVerifier>
+P2pMiningContextTrustResult promote_p2p_mining_context_impl(
     P2pTrustedWorkRegistry& trusted_work,
     const P2pHandshake& peer,
     const P2pEnvelope& envelope,
     const P2pMiningAnchor& local_anchor,
-    const P2pPayoutAddress& expected_payout) {
+    ProofVerifier&& verify_proofs) {
     P2pMiningContextTrustResult result;
 
     const P2pMiningContextCheckResult check =
@@ -30,8 +34,8 @@ P2pMiningContextTrustResult promote_p2p_mining_context(
     // cryptographic result can be accepted.
     const P2pMiningContextProposal proposal =
         parse_p2p_mining_context_envelope(envelope);
-    const P2pMinerTxProofResult proof = verify_p2p_mining_context_proofs(
-        proposal, check, expected_payout);
+    const P2pMinerTxProofResult proof =
+        std::forward<ProofVerifier>(verify_proofs)(proposal, check);
     result.proof_status = proof.status;
     result.payout_status = proof.payout_status;
 
@@ -54,6 +58,46 @@ P2pMiningContextTrustResult promote_p2p_mining_context(
     result.registry_inserted = !already_trusted;
     result.status = P2pMiningContextTrustStatus::Trusted;
     return result;
+}
+
+}  // namespace
+
+P2pMiningContextTrustResult promote_p2p_mining_context(
+    P2pTrustedWorkRegistry& trusted_work,
+    const P2pHandshake& peer,
+    const P2pEnvelope& envelope,
+    const P2pMiningAnchor& local_anchor,
+    const P2pPayoutAddress& expected_payout) {
+    return promote_p2p_mining_context_impl(
+        trusted_work,
+        peer,
+        envelope,
+        local_anchor,
+        [&expected_payout](
+            const P2pMiningContextProposal& proposal,
+            const P2pMiningContextCheckResult& check) {
+            return verify_p2p_mining_context_proofs(
+                proposal, check, expected_payout);
+        });
+}
+
+P2pMiningContextTrustResult promote_p2p_mining_context(
+    P2pTrustedWorkRegistry& trusted_work,
+    const P2pHandshake& peer,
+    const P2pEnvelope& envelope,
+    const P2pMiningAnchor& local_anchor,
+    const PplnsCoinbasePlan& expected_plan) {
+    return promote_p2p_mining_context_impl(
+        trusted_work,
+        peer,
+        envelope,
+        local_anchor,
+        [&expected_plan](
+            const P2pMiningContextProposal& proposal,
+            const P2pMiningContextCheckResult& check) {
+            return verify_p2p_mining_context_proofs(
+                proposal, check, expected_plan);
+        });
 }
 
 const char* p2p_mining_context_trust_status_name(

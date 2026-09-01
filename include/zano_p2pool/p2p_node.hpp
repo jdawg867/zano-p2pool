@@ -35,17 +35,9 @@ struct P2pNodeMessageResult {
     bool relayed_tip{false};
 };
 
-// Returns the deterministic score penalty for a fully parsed node-protocol
-// result. Benign synchronization states such as duplicates, unknown work,
-// missing parents and mining-anchor races remain neutral. Malformed payloads
-// throw before a result exists and are scored by P2pNodeProtocol::handle().
 [[nodiscard]] std::uint32_t p2p_node_message_penalty(
     const P2pNodeMessageResult& result) noexcept;
 
-// Runtime protocol dispatcher for share-chain synchronization. ShareChain,
-// P2pTrustedWorkRegistry and the current local mining context are protected by
-// the same node-wide mutex so Stratum, P2P gossip, sync and checkpoint-6B.4
-// trust promotion share one serialized consensus boundary.
 class P2pNodeProtocol {
 public:
     P2pNodeProtocol(
@@ -64,7 +56,20 @@ public:
     void set_local_mining_context(
         const P2pMiningAnchor& anchor,
         const P2pMiningContextProposal& proposal);
+    void set_local_mining_context(
+        const P2pMiningAnchor& anchor,
+        const P2pMiningContextProposal& proposal,
+        const P2pPayoutAddress& payout);
+    void set_local_mining_context(
+        const P2pMiningAnchor& anchor,
+        const P2pMiningContextProposal& proposal,
+        const PplnsCoinbasePlan& plan);
+
+    // Exactly one payout expectation is active at a time. Bootstrap/legacy
+    // daemon templates use the single public payout identity; canonical PPLNS
+    // templates install the complete deterministic destination plan instead.
     void set_expected_payout(const P2pPayoutAddress& payout);
+    void set_expected_payout_plan(const PplnsCoinbasePlan& plan);
     void clear_expected_payout() noexcept;
 
     [[nodiscard]] std::size_t trusted_work_count() const noexcept;
@@ -81,6 +86,7 @@ private:
     std::optional<P2pMiningAnchor> local_mining_anchor_;
     std::optional<P2pMiningContextProposal> local_mining_context_;
     std::optional<P2pPayoutAddress> expected_payout_;
+    std::optional<PplnsCoinbasePlan> expected_payout_plan_;
 };
 
 [[nodiscard]] const char* p2p_node_message_status_name(
