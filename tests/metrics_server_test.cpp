@@ -84,7 +84,7 @@ int main() {
     snapshot.p2p_peers = 3;
     snapshot.p2p_trusted_work_contexts = 4;
     snapshot.stratum_connections = 5;
-    snapshot.stratum_template_version = 9;
+    snapshot.stratum_job_sequence = 9;
     snapshot.stratum_accepted_shares_total = 11;
     snapshot.p2p_admitted_shares_total = 12;
     snapshot.block_candidates_total = 13;
@@ -107,7 +107,9 @@ int main() {
           std::string::npos);
     CHECK(rendered.find("zano_p2pool_stratum_connections 5\n") !=
           std::string::npos);
-    CHECK(rendered.find("zano_p2pool_stratum_template_version 9\n") !=
+    CHECK(rendered.find("zano_p2pool_stratum_job_sequence 9\n") !=
+          std::string::npos);
+    CHECK(rendered.find("zano_p2pool_stratum_template_version") ==
           std::string::npos);
     CHECK(rendered.find("zano_p2pool_stratum_accepted_shares_total 11\n") !=
           std::string::npos);
@@ -146,6 +148,8 @@ int main() {
           std::string::npos);
     CHECK(metrics.find("zano_p2pool_up 1\n") != std::string::npos);
     CHECK(metrics.find("zano_p2pool_sidechain_connected_shares 7\n") !=
+          std::string::npos);
+    CHECK(metrics.find("zano_p2pool_stratum_job_sequence 9\n") !=
           std::string::npos);
     CHECK(snapshots.load() == 1);
 
