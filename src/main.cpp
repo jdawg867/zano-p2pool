@@ -1,5 +1,7 @@
 #include "zano_p2pool/block_submitter.hpp"
 #include "zano_p2pool/crypto_hash.hpp"
+#include "zano_p2pool/metrics_server.hpp"
+#include "zano_p2pool/metrics_snapshot.hpp"
 #include "zano_p2pool/mining_header.hpp"
 #include "zano_p2pool/p2p_mining_context.hpp"
 #include "zano_p2pool/p2p_node.hpp"
@@ -50,6 +52,7 @@ constexpr const char* kMainnetRpcUrl =
 constexpr const char* kTestnetRpcUrl =
     "http://127.0.0.1:12111/json_rpc";
 constexpr std::uint16_t kDefaultStratumPort = 3333;
+constexpr std::uint16_t kDefaultMetricsPort = 37890;
 constexpr std::uint64_t kDefaultStratumDifficulty = 100000000;
 constexpr std::uint64_t kDefaultTemplateRefreshSeconds = 5;
 
@@ -84,6 +87,10 @@ struct Options {
     std::string p2p_bind{"127.0.0.1"};
     std::uint16_t p2p_port{0};
     std::vector<zano_p2pool::P2pEndpoint> p2p_peers;
+
+    bool metrics{false};
+    std::string metrics_bind{"127.0.0.1"};
+    std::uint16_t metrics_port{kDefaultMetricsPort};
 
     bool no_share_store{false};
     std::optional<std::filesystem::path> share_store_path;
@@ -261,6 +268,9 @@ void print_usage(const char* program) {
         << " [--p2p-bind ADDRESS]"
         << " [--p2p-port PORT]"
         << " [--p2p-peer HOST:PORT]..."
+        << " [--metrics]"
+        << " [--metrics-bind IPv4]"
+        << " [--metrics-port PORT]"
         << " [--share-store PATH]"
         << " [--no-share-store]"
         << " [--template-refresh-seconds SECONDS]\n\n"
@@ -273,6 +283,9 @@ void print_usage(const char* program) {
         << "  Stratum difficulty: " << kDefaultStratumDifficulty << '\n'
         << "  P2P bind: 127.0.0.1\n"
         << "  P2P port: 0 (ephemeral development port)\n"
+        << "  metrics: disabled\n"
+        << "  metrics bind: 127.0.0.1\n"
+        << "  metrics port: " << kDefaultMetricsPort << '\n'
         << "  share store: ~/.zano-p2pool/<network>/shares.dat\n"
         << "  template refresh: " << kDefaultTemplateRefreshSeconds
         << " seconds\n";
@@ -375,6 +388,29 @@ Options parse_args(int argc, char** argv) {
             }
             options.p2p = true;
             options.p2p_peers.push_back(parse_p2p_endpoint(argv[i]));
+            continue;
+        }
+
+        if (arg == "--metrics") {
+            options.metrics = true;
+            continue;
+        }
+
+        if (arg == "--metrics-bind") {
+            if (++i >= argc) {
+                throw std::runtime_error("--metrics-bind requires a value");
+            }
+            options.metrics = true;
+            options.metrics_bind = argv[i];
+            continue;
+        }
+
+        if (arg == "--metrics-port") {
+            if (++i >= argc) {
+                throw std::runtime_error("--metrics-port requires a value");
+            }
+            options.metrics = true;
+            options.metrics_port = parse_port("--metrics-port", argv[i]);
             continue;
         }
 
@@ -577,7 +613,7 @@ int main(int argc, char** argv) {
         LiveTemplate live = fetch_live_template(rpc, options);
         print_template(live);
 
-        if (!options.stratum && !options.p2p) {
+        if (!options.stratum && !options.p2p && !options.metrics) {
             return 0;
         }
 
@@ -590,6 +626,14 @@ int main(int argc, char** argv) {
         zano_p2pool::ShareChain node_chain(sidechain_parameters);
         zano_p2pool::P2pTrustedWorkRegistry trusted_work;
         std::mutex node_state_mutex;
+
+        std::atomic<std::uint64_t> observed_zano_height{live.block.height};
+        std::atomic<std::uint64_t> stratum_accepted_shares_total{0};
+        std::atomic<std::uint64_t> p2p_admitted_shares_total{0};
+        std::atomic<std::uint64_t> block_candidates_total{0};
+        std::atomic<std::uint64_t> blocks_submitted_total{0};
+        std::atomic<std::uint64_t> block_submission_failures_total{0};
+        std::atomic<std::uint64_t> template_refresh_failures_total{0};
 
         std::unique_ptr<zano_p2pool::ShareStore> share_store;
         if (!options.no_share_store) {
@@ -694,6 +738,9 @@ int main(int argc, char** argv) {
                              result.share_status ==
                                  zano_p2pool::P2pShareReceiveStatus::Orphan);
                         if (share_admitted) {
+                            p2p_admitted_shares_total.fetch_add(
+                                1,
+                                std::memory_order_relaxed);
                             if (result.status ==
                                 zano_p2pool::P2pNodeMessageStatus::ShareProcessed) {
                                 persist_share(
@@ -799,6 +846,9 @@ int main(int argc, char** argv) {
                     [&](const zano_p2pool::BlockSubmitEvent& event) {
                         if (event.status ==
                             zano_p2pool::BlockSubmitStatus::Submitted) {
+                            blocks_submitted_total.fetch_add(
+                                1,
+                                std::memory_order_relaxed);
                             std::cout
                                 << "Zano block submitted: height="
                                 << event.candidate.zano_height
@@ -811,6 +861,9 @@ int main(int argc, char** argv) {
                             return;
                         }
 
+                        block_submission_failures_total.fetch_add(
+                            1,
+                            std::memory_order_relaxed);
                         std::cerr
                             << "Zano block submission "
                             << zano_p2pool::block_submit_status_name(
@@ -834,7 +887,7 @@ int main(int argc, char** argv) {
         }
 
         std::unique_ptr<zano_p2pool::StratumTcpServer> server;
-        std::uint64_t template_version = 0;
+        std::uint64_t job_sequence = 0;
         if (options.stratum) {
             zano_p2pool::StratumServerConfig server_config;
             server_config.bind_address = options.stratum_bind;
@@ -851,6 +904,14 @@ int main(int argc, char** argv) {
             zano_p2pool::StratumAcceptedShareHandler accepted_share =
                 [&](const zano_p2pool::Share& share,
                     bool block_candidate) {
+                    stratum_accepted_shares_total.fetch_add(
+                        1,
+                        std::memory_order_relaxed);
+                    if (block_candidate) {
+                        block_candidates_total.fetch_add(
+                            1,
+                            std::memory_order_relaxed);
+                    }
                     persist_share(share);
 
                     // The accepted share changed the local payout history. Until
@@ -897,7 +958,7 @@ int main(int argc, char** argv) {
                 &node_state_mutex,
                 std::move(accepted_share));
 
-            template_version = server->publish_template(
+            job_sequence = server->publish_template(
                 live.mining_work.header_hash,
                 live.seed_hash,
                 live.block.height,
@@ -924,6 +985,70 @@ int main(int argc, char** argv) {
                       << '\n';
         }
 
+        std::unique_ptr<zano_p2pool::MetricsHttpServer> metrics_server;
+        if (options.metrics) {
+            zano_p2pool::MetricsServerConfig metrics_config;
+            metrics_config.bind_address = options.metrics_bind;
+            metrics_config.port = options.metrics_port;
+
+            metrics_server = std::make_unique<zano_p2pool::MetricsHttpServer>(
+                metrics_config,
+                [&]() {
+                    zano_p2pool::MetricsSnapshot snapshot;
+                    snapshot.zano_height = observed_zano_height.load(
+                        std::memory_order_relaxed);
+
+                    {
+                        std::lock_guard lock(node_state_mutex);
+                        snapshot.sidechain_connected_shares =
+                            node_chain.connected_size();
+                        snapshot.sidechain_orphan_shares =
+                            node_chain.orphan_size();
+                        if (const zano_p2pool::ConnectedShare* tip =
+                                node_chain.best_tip();
+                            tip != nullptr) {
+                            snapshot.sidechain_tip_height = tip->share.share_height;
+                        }
+                    }
+
+                    snapshot.p2p_peers = p2p_runtime
+                        ? p2p_runtime->peer_count()
+                        : 0;
+                    snapshot.p2p_trusted_work_contexts =
+                        p2p_protocol.trusted_work_count();
+                    snapshot.stratum_connections = server
+                        ? server->client_count()
+                        : 0;
+                    snapshot.stratum_job_sequence = server
+                        ? server->current_template_version()
+                        : 0;
+                    snapshot.stratum_accepted_shares_total =
+                        stratum_accepted_shares_total.load(
+                            std::memory_order_relaxed);
+                    snapshot.p2p_admitted_shares_total =
+                        p2p_admitted_shares_total.load(
+                            std::memory_order_relaxed);
+                    snapshot.block_candidates_total =
+                        block_candidates_total.load(std::memory_order_relaxed);
+                    snapshot.blocks_submitted_total =
+                        blocks_submitted_total.load(std::memory_order_relaxed);
+                    snapshot.block_submission_failures_total =
+                        block_submission_failures_total.load(
+                            std::memory_order_relaxed);
+                    snapshot.template_refresh_failures_total =
+                        template_refresh_failures_total.load(
+                            std::memory_order_relaxed);
+                    snapshot.persistence_ok =
+                        !g_persistence_failed.load(std::memory_order_acquire);
+                    return zano_p2pool::render_prometheus_metrics(snapshot);
+                });
+            metrics_server->start();
+            std::cout << "\nMetrics listening: "
+                      << metrics_config.bind_address << ':'
+                      << metrics_server->bound_port()
+                      << " (/metrics, /healthz)\n";
+        }
+
         std::cout << "Template refresh: "
                   << options.template_refresh_seconds << " seconds\n";
         std::cout << "Press Ctrl+C to stop.\n";
@@ -937,6 +1062,9 @@ int main(int argc, char** argv) {
 
             try {
                 LiveTemplate next = fetch_live_template(rpc, options);
+                observed_zano_height.store(
+                    next.block.height,
+                    std::memory_order_relaxed);
                 const bool daemon_changed =
                     zano_p2pool::should_refresh_stratum_template(
                         live.block,
@@ -970,10 +1098,10 @@ int main(int argc, char** argv) {
                             next.seed_hash,
                             next.block.height,
                             next.network_difficulty);
-                    if (next_version != template_version) {
-                        template_version = next_version;
+                    if (next_version != job_sequence) {
+                        job_sequence = next_version;
                         std::cout
-                            << "Stratum template v" << template_version
+                            << "Stratum job #" << job_sequence
                             << ": height=" << next.block.height
                             << " header="
                             << zano_p2pool::hash_to_hex(
@@ -998,11 +1126,18 @@ int main(int argc, char** argv) {
                 }
                 live = std::move(next);
             } catch (const std::exception& e) {
+                template_refresh_failures_total.fetch_add(
+                    1,
+                    std::memory_order_relaxed);
                 std::cerr
                     << "template refresh failed: " << e.what() << '\n';
             }
         }
 
+        if (metrics_server) {
+            metrics_server->stop();
+            std::cout << "Metrics stopped.\n";
+        }
         if (server) {
             server->stop();
             std::cout

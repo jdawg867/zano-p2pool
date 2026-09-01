@@ -71,6 +71,19 @@ public:
 
     [[nodiscard]] std::size_t connected_share_count() const noexcept;
 
+    // Read-only observability snapshots. These methods never issue work or
+    // mutate session/consensus state.
+    [[nodiscard]] std::size_t client_count() const {
+        std::lock_guard lock(clients_mutex_);
+        return client_sessions_.size();
+    }
+
+    [[nodiscard]] std::uint64_t current_template_version() const {
+        std::lock_guard lock(state_mutex_);
+        const StratumTemplate* current = sessions_.current_template();
+        return current != nullptr ? current->version : 0;
+    }
+
 private:
     void accept_loop();
     void client_loop(int client_fd, std::uint64_t session_id) noexcept;
