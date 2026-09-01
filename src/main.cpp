@@ -1007,7 +1007,7 @@ int main(int argc, char** argv) {
                         if (const zano_p2pool::ConnectedShare* tip =
                                 node_chain.best_tip();
                             tip != nullptr) {
-                            snapshot.sidechain_tip_height = tip->share.height;
+                            snapshot.sidechain_tip_height = tip->share.share_height;
                         }
                     }
 
