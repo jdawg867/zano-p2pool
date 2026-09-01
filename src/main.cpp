@@ -5,12 +5,14 @@
 #include "zano_p2pool/p2p_node.hpp"
 #include "zano_p2pool/p2p_runtime.hpp"
 #include "zano_p2pool/p2p_share.hpp"
+#include "zano_p2pool/p2p_sync.hpp"
 #include "zano_p2pool/p2p_tip.hpp"
 #include "zano_p2pool/pow_target.hpp"
 #include "zano_p2pool/progpowz.hpp"
 #include "zano_p2pool/pplns_template.hpp"
 #include "zano_p2pool/rpc_client.hpp"
 #include "zano_p2pool/share.hpp"
+#include "zano_p2pool/share_store.hpp"
 #include "zano_p2pool/sidechain_params.hpp"
 #include "zano_p2pool/stratum_server.hpp"
 #include "zano_p2pool/template_refresh.hpp"
@@ -22,6 +24,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
+#include <filesystem>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -52,6 +55,7 @@ constexpr std::uint64_t kDefaultTemplateRefreshSeconds = 5;
 
 volatile std::sig_atomic_t g_stop_requested = 0;
 std::atomic<bool> g_template_refresh_requested{false};
+std::atomic<bool> g_persistence_failed{false};
 
 void handle_signal(int) noexcept {
     g_stop_requested = 1;
@@ -59,6 +63,11 @@ void handle_signal(int) noexcept {
 
 void request_template_refresh() noexcept {
     g_template_refresh_requested.store(true, std::memory_order_release);
+}
+
+[[nodiscard]] bool runtime_stop_requested() noexcept {
+    return g_stop_requested != 0 ||
+           g_persistence_failed.load(std::memory_order_acquire);
 }
 
 struct Options {
@@ -75,6 +84,9 @@ struct Options {
     std::string p2p_bind{"127.0.0.1"};
     std::uint16_t p2p_port{0};
     std::vector<zano_p2pool::P2pEndpoint> p2p_peers;
+
+    bool no_share_store{false};
+    std::optional<std::filesystem::path> share_store_path;
 };
 
 struct LiveTemplate {
@@ -91,6 +103,18 @@ const char* network_name(Network network) {
 
 const char* default_rpc_url(Network network) {
     return network == Network::Testnet ? kTestnetRpcUrl : kMainnetRpcUrl;
+}
+
+std::filesystem::path default_share_store_path(Network network) {
+    const char* home = std::getenv("HOME");
+    if (home == nullptr || *home == '\0') {
+        throw std::runtime_error(
+            "HOME is not set; use --share-store PATH or --no-share-store");
+    }
+    return std::filesystem::path(home) /
+           ".zano-p2pool" /
+           network_name(network) /
+           "shares.dat";
 }
 
 zano_p2pool::P2pNetwork p2p_network(Network network) {
@@ -237,6 +261,8 @@ void print_usage(const char* program) {
         << " [--p2p-bind ADDRESS]"
         << " [--p2p-port PORT]"
         << " [--p2p-peer HOST:PORT]..."
+        << " [--share-store PATH]"
+        << " [--no-share-store]"
         << " [--template-refresh-seconds SECONDS]\n\n"
         << "Defaults:\n"
         << "  network: testnet\n"
@@ -247,6 +273,7 @@ void print_usage(const char* program) {
         << "  Stratum difficulty: " << kDefaultStratumDifficulty << '\n'
         << "  P2P bind: 127.0.0.1\n"
         << "  P2P port: 0 (ephemeral development port)\n"
+        << "  share store: ~/.zano-p2pool/<network>/shares.dat\n"
         << "  template refresh: " << kDefaultTemplateRefreshSeconds
         << " seconds\n";
 }
@@ -351,6 +378,19 @@ Options parse_args(int argc, char** argv) {
             continue;
         }
 
+        if (arg == "--share-store") {
+            if (++i >= argc || argv[i][0] == '\0') {
+                throw std::runtime_error("--share-store requires PATH");
+            }
+            options.share_store_path = std::filesystem::path(argv[i]);
+            continue;
+        }
+
+        if (arg == "--no-share-store") {
+            options.no_share_store = true;
+            continue;
+        }
+
         if (arg == "--template-refresh-seconds") {
             if (++i >= argc) {
                 throw std::runtime_error(
@@ -370,6 +410,11 @@ Options parse_args(int argc, char** argv) {
 
     if (options.wallet.empty()) {
         throw std::runtime_error("--wallet is required");
+    }
+
+    if (options.no_share_store && options.share_store_path.has_value()) {
+        throw std::runtime_error(
+            "--share-store and --no-share-store cannot be used together");
     }
 
     if (options.rpc_url.empty()) {
@@ -453,7 +498,9 @@ void print_template(const LiveTemplate& live) {
 bool wait_for_refresh(std::uint64_t seconds) {
     constexpr auto kSlice = std::chrono::milliseconds(100);
     const std::uint64_t slices = seconds * 10;
-    for (std::uint64_t i = 0; i < slices && !g_stop_requested; ++i) {
+    for (std::uint64_t i = 0;
+         i < slices && !runtime_stop_requested();
+         ++i) {
         if (g_template_refresh_requested.exchange(
                 false,
                 std::memory_order_acq_rel)) {
@@ -544,6 +591,56 @@ int main(int argc, char** argv) {
         zano_p2pool::P2pTrustedWorkRegistry trusted_work;
         std::mutex node_state_mutex;
 
+        std::unique_ptr<zano_p2pool::ShareStore> share_store;
+        if (!options.no_share_store) {
+            const std::filesystem::path store_path =
+                options.share_store_path.value_or(
+                    default_share_store_path(options.network));
+            share_store = std::make_unique<zano_p2pool::ShareStore>(
+                store_path,
+                zano_p2pool::sidechain_id(sidechain_parameters));
+            const zano_p2pool::ShareStoreLoadResult recovered =
+                share_store->load_into(node_chain);
+
+            std::cout << "\nShare store:     " << store_path.string() << '\n';
+            std::cout << "Recovered shares: records="
+                      << recovered.records_loaded
+                      << " connected=" << recovered.connected_shares
+                      << " orphans=" << recovered.orphan_shares;
+            if (recovered.best_tip_id.has_value()) {
+                std::cout << " tip="
+                          << zano_p2pool::hash_to_hex(*recovered.best_tip_id);
+            }
+            if (recovered.truncated_tail_repaired) {
+                std::cout << " tail=repaired";
+            }
+            std::cout << '\n';
+        } else {
+            std::cout << "\nShare store:     disabled\n";
+        }
+
+        auto persist_share = [&](const zano_p2pool::Share& share) noexcept {
+            if (!share_store || g_persistence_failed.load(std::memory_order_acquire)) {
+                return;
+            }
+            try {
+                share_store->append(share);
+            } catch (const std::exception& e) {
+                std::cerr
+                    << "FATAL share-store append failed: "
+                    << e.what()
+                    << "; shutting down to preserve durable consensus history\n";
+                g_persistence_failed.store(true, std::memory_order_release);
+                request_template_refresh();
+            } catch (...) {
+                std::cerr
+                    << "FATAL share-store append failed with unknown error; "
+                       "shutting down to preserve durable consensus history\n";
+                g_persistence_failed.store(true, std::memory_order_release);
+                request_template_refresh();
+            }
+        };
+
         static_cast<void>(apply_canonical_pplns_template(
             live,
             node_chain,
@@ -586,6 +683,31 @@ int main(int argc, char** argv) {
                             envelope,
                             unix_time_seconds(),
                             zano_p2pool::ProgPowZContextMode::Light);
+
+                        const bool share_admitted =
+                            (result.status ==
+                                 zano_p2pool::P2pNodeMessageStatus::ShareProcessed ||
+                             result.status ==
+                                 zano_p2pool::P2pNodeMessageStatus::ShareResponseProcessed) &&
+                            (result.share_status ==
+                                 zano_p2pool::P2pShareReceiveStatus::Connected ||
+                             result.share_status ==
+                                 zano_p2pool::P2pShareReceiveStatus::Orphan);
+                        if (share_admitted) {
+                            if (result.status ==
+                                zano_p2pool::P2pNodeMessageStatus::ShareProcessed) {
+                                persist_share(
+                                    zano_p2pool::parse_p2p_share_announce_envelope(
+                                        envelope));
+                            } else {
+                                const zano_p2pool::P2pShareResponse response =
+                                    zano_p2pool::parse_p2p_share_response_envelope(
+                                        envelope);
+                                if (response.share.has_value()) {
+                                    persist_share(*response.share);
+                                }
+                            }
+                        }
 
                         if ((result.status ==
                                  zano_p2pool::P2pNodeMessageStatus::ShareProcessed ||
@@ -729,6 +851,8 @@ int main(int argc, char** argv) {
             zano_p2pool::StratumAcceptedShareHandler accepted_share =
                 [&](const zano_p2pool::Share& share,
                     bool block_candidate) {
+                    persist_share(share);
+
                     // The accepted share changed the local payout history. Until
                     // the main refresh installs the rebuilt plan, peer contexts
                     // must defer rather than be checked against a stale plan.
@@ -804,10 +928,10 @@ int main(int argc, char** argv) {
                   << options.template_refresh_seconds << " seconds\n";
         std::cout << "Press Ctrl+C to stop.\n";
 
-        while (!g_stop_requested) {
+        while (!runtime_stop_requested()) {
             const bool forced_refresh =
                 wait_for_refresh(options.template_refresh_seconds);
-            if (g_stop_requested) {
+            if (runtime_stop_requested()) {
                 break;
             }
 
@@ -894,6 +1018,12 @@ int main(int argc, char** argv) {
             std::cout
                 << "P2P stopped. Connected shares in memory: "
                 << p2p_protocol.connected_share_count() << '\n';
+        }
+
+        if (g_persistence_failed.load(std::memory_order_acquire)) {
+            std::cerr
+                << "error: node stopped because sidechain persistence failed\n";
+            return 1;
         }
         return 0;
     } catch (const std::exception& e) {
