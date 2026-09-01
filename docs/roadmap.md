@@ -252,7 +252,7 @@ exact-Zano Release suite passed 33/33 in 3.76 seconds, and branch CI #409 passed
 
 - [x] mainnet-compatible sidechain parameters
 - [ ] seed nodes
-- [ ] observability/metrics
+- [x] observability/metrics
 - [ ] rate limits
 - [x] persistence recovery
 - [ ] adversarial tests
@@ -311,3 +311,22 @@ node cleanly, then restarted without mining. Recovery reported `records=15`,
 mode was immediately `canonical PPLNS`, and canonical PPLNS block submission was
 enabled without bootstrap re-establishment. The final exact-Zano regression suite
 passed 33/33 locally in 4.14 seconds on 2026-08-31.
+
+Checkpoint 5 adds opt-in runtime observability. A bounded HTTP server defaults to
+loopback and exposes Prometheus-style `GET /metrics` plus `GET /healthz`. The metric
+surface is intentionally label-free and excludes wallet addresses, node IDs, share
+IDs, peer identities, and other payout-identifying values. It reports parent-chain
+height, connected/orphan share counts and tip height, connected P2P and Stratum
+peers, trusted work contexts, a process-local Stratum job sequence, accepted/admitted
+share counters, block-candidate and submission outcomes, template-refresh failures,
+and persistence health. Runtime logs use `Stratum job #N`, and the exported gauge is
+`zano_p2pool_stratum_job_sequence`, avoiding ambiguity with node, P2P, or canonical
+share protocol versions.
+
+Live Zano testnet validation started from the previously persisted 15-share chain,
+reported a healthy `/healthz`, and served correct idle metrics before mining. With
+SRBMiner connected, the same endpoint tracked growth to 77 connected shares and tip
+height 76, one Stratum connection, 62 accepted shares, 62 full-difficulty block
+candidates, 17 successful `submitblock` events, two non-success block-submission
+events, and healthy persistence throughout. The final exact-Zano regression suite
+passed 34/34 locally in 4.17 seconds on 2026-09-01.
