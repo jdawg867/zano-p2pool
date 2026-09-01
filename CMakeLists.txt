@@ -23,6 +23,7 @@ add_library(zano_p2pool_core
     src/block_submitter.cpp
     src/block_template.cpp
     src/crypto_hash.cpp
+    src/metrics_server.cpp
     src/mining_header.cpp
     src/p2p_miner_tx_binding.cpp
     src/p2p_miner_tx_proofs.cpp
@@ -238,6 +239,10 @@ if(ZANO_P2POOL_BUILD_TESTS)
     add_executable(mining_header_test tests/mining_header_test.cpp)
     target_link_libraries(mining_header_test PRIVATE zano_p2pool_core)
     add_test(NAME mining_header_test COMMAND mining_header_test)
+
+    add_executable(metrics_server_test tests/metrics_server_test.cpp)
+    target_link_libraries(metrics_server_test PRIVATE zano_p2pool_core)
+    add_test(NAME metrics_server_test COMMAND metrics_server_test)
 
     add_executable(share_test tests/share_test.cpp)
     target_link_libraries(share_test PRIVATE zano_p2pool_core)
