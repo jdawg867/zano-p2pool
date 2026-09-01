@@ -30,7 +30,7 @@
 - [x] share timestamp rules
 - [x] cumulative work
 - [x] stale/orphan handling
-- [ ] local persistence
+- [x] local persistence
 - [x] deterministic best-tip/reorg rules
 - [x] share-chain structural tests
 - [x] gate share-chain admission on local ProgPoWZ verification
@@ -254,7 +254,7 @@ exact-Zano Release suite passed 33/33 in 3.76 seconds, and branch CI #409 passed
 - [ ] seed nodes
 - [ ] observability/metrics
 - [ ] rate limits
-- [ ] persistence recovery
+- [x] persistence recovery
 - [ ] adversarial tests
 - [ ] release builds
 - [ ] protocol specification
@@ -286,9 +286,28 @@ guarantees no more than 32 credited share identities can enter the direct HF6
 coinbase plan. On 2026-08-30 the local exact-Zano Release suite passed 33/33 in 3.76
 seconds, and CI #449 passed both `build-and-test` and `progpowz-compat`.
 
-Live multi-recipient PPLNS template replacement remains a separate follow-up
-checkpoint. The current P2P mining-context payout verifier still validates every
-miner-transaction output against one locally expected payout identity; it must be
-upgraded to verify the deterministic sidechain-derived multi-recipient payout set
-before the executable can safely replace the daemon's single-wallet miner transaction
-without honest peers rejecting the resulting mining context.
+Checkpoint 3 completes live multi-recipient PPLNS template replacement and direct
+HF6 payout submission. Canonical payout-capable share v2 is enforced by sidechain
+identity v3, P2P mining-context trust verifies complete deterministic payout plans,
+and the runtime atomically publishes rebuilt PPLNS work to Stratum, P2P trust and
+block submission. Live Zano testnet validation produced two-recipient PPLNS work and
+successful `submitblock` results at heights 169473 and 169474. The final exact-Zano
+suite passed 33/33 locally in 4.14 seconds, PR #21 merged to `main`, and post-merge CI
+#487 passed both `build-and-test` and `progpowz-compat`.
+
+Checkpoint 4 adds restart-safe sidechain persistence and recovery. `ShareStore` is
+an append-only file bound to the canonical `SidechainId`; each record stores the
+canonical serialized share plus its `ShareId`, rejects wrong-sidechain stores and
+full-record corruption, restores orphan/parent ordering deterministically, and can
+truncate an interrupted final append back to the last complete record. The runtime
+persists locally accepted and P2P-admitted shares, defaults to
+`~/.zano-p2pool/<network>/shares.dat`, supports `--share-store PATH` and
+`--no-share-store`, and shuts down on append failure rather than silently losing
+durable consensus history.
+
+Live Zano testnet restart validation persisted 15 connected shares, stopped the
+node cleanly, then restarted without mining. Recovery reported `records=15`,
+`connected=15`, `orphans=0`; mining-context trust was immediately `ready`, payout
+mode was immediately `canonical PPLNS`, and canonical PPLNS block submission was
+enabled without bootstrap re-establishment. The final exact-Zano regression suite
+passed 33/33 locally in 4.14 seconds on 2026-08-31.
