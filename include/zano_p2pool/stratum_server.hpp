@@ -71,6 +71,11 @@ public:
 
     [[nodiscard]] std::size_t connected_share_count() const noexcept;
 
+    // Read-only observability snapshots. These methods never issue work or
+    // mutate session/consensus state.
+    [[nodiscard]] std::size_t client_count() const;
+    [[nodiscard]] std::uint64_t current_template_version() const;
+
 private:
     void accept_loop();
     void client_loop(int client_fd, std::uint64_t session_id) noexcept;
