@@ -95,6 +95,12 @@ JsonPtr parse_json(std::string_view text, const char* context) {
 
 }  // namespace
 
+RpcError::RpcError(int code, std::string message)
+    : std::runtime_error(
+          "Zano RPC error " + std::to_string(code) + ": " + message),
+      code_(code),
+      rpc_message_(std::move(message)) {}
+
 RpcClient::RpcClient(
     std::string rpc_url,
     std::chrono::milliseconds timeout)
@@ -179,6 +185,23 @@ std::string RpcClient::call(
     if (json_object_object_get_ex(response.get(), "error", &error_object) &&
         error_object != nullptr &&
         json_object_get_type(error_object) != json_type_null) {
+        if (json_object_get_type(error_object) == json_type_object) {
+            json_object* code_object = nullptr;
+            json_object* message_object = nullptr;
+            if (json_object_object_get_ex(error_object, "code", &code_object) &&
+                code_object != nullptr &&
+                json_object_get_type(code_object) == json_type_int &&
+                json_object_object_get_ex(
+                    error_object,
+                    "message",
+                    &message_object) &&
+                message_object != nullptr &&
+                json_object_get_type(message_object) == json_type_string) {
+                throw RpcError(
+                    json_object_get_int(code_object),
+                    json_object_get_string(message_object));
+            }
+        }
         throw std::runtime_error(
             "Zano RPC error: " + json_to_string(error_object));
     }
