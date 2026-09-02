@@ -94,6 +94,12 @@ StratumTcpServer::StratumTcpServer(
     if (config_.max_line_bytes == 0) {
         throw std::runtime_error("Stratum max line size must be nonzero");
     }
+    if (config_.max_clients == 0) {
+        throw std::runtime_error("Stratum max clients must be nonzero");
+    }
+    validate_token_bucket_config(
+        config_.request_rate_limit,
+        "Stratum request rate limit");
     if ((shared_chain == nullptr) != (shared_chain_mutex == nullptr)) {
         throw std::runtime_error(
             "shared Stratum chain and mutex must be supplied together");
@@ -318,6 +324,17 @@ void StratumTcpServer::accept_loop() {
             break;
         }
 
+        // Reject excess clients before allocating a Stratum session or
+        // starting a client thread. The accept loop is the only path that
+        // adds entries, while client threads may concurrently remove them.
+        {
+            std::lock_guard lock(clients_mutex_);
+            if (client_sessions_.size() >= config_.max_clients) {
+                ::close(client_fd);
+                continue;
+            }
+        }
+
         std::uint64_t session_id = 0;
         try {
             {
@@ -344,6 +361,7 @@ void StratumTcpServer::client_loop(
     std::string pending;
     pending.reserve(4096);
     std::array<char, 4096> buffer{};
+    TokenBucket request_limiter(config_.request_rate_limit);
     bool keep_running = true;
 
     while (running_.load() && keep_running) {
@@ -386,6 +404,14 @@ void StratumTcpServer::client_loop(
             }
             if (line.empty()) {
                 continue;
+            }
+
+            // Count each non-empty newline-delimited request before parsing or
+            // dispatch. The first rate-limit violation disconnects the client
+            // without touching consensus or peer-reputation state.
+            if (!request_limiter.consume()) {
+                keep_running = false;
+                break;
             }
 
             const std::string response = handle_line(session_id, line);

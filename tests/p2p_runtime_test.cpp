@@ -85,6 +85,19 @@ bool wait_for_counts(
            second.peer_count() == second_expected;
 }
 
+bool wait_for_peer_count(
+    const P2pRuntime& runtime,
+    std::size_t expected) {
+    const auto deadline = std::chrono::steady_clock::now() + 2s;
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (runtime.peer_count() == expected) {
+            return true;
+        }
+        std::this_thread::sleep_for(10ms);
+    }
+    return runtime.peer_count() == expected;
+}
+
 }  // namespace
 
 int main() {
@@ -382,6 +395,129 @@ int main() {
     scored_client.stop();
     CHECK(!scored_client.running());
     CHECK(scored_client.peer_count() == 0);
+
+    // Peer admission is capped atomically before a reader thread is started.
+    // Use raw transport clients so reconnect management cannot hide whether the
+    // second inbound peer was actually admitted.
+    {
+        Inbox cap_inbox;
+
+        P2pRuntimeConfig cap_config;
+        cap_config.listen_endpoint = P2pEndpoint{"127.0.0.1", 0};
+        cap_config.handshake = make_handshake(0x31);
+        cap_config.max_peers = 1;
+
+        P2pRuntime cap_server(
+            cap_config,
+            [&cap_inbox](
+                const P2pHandshake&,
+                const P2pEnvelope& envelope) {
+                cap_inbox.push(envelope);
+            });
+
+        cap_server.start();
+
+        P2pTcpConnection first_peer = connect_p2p_peer(
+            P2pEndpoint{"127.0.0.1", cap_server.listen_port()},
+            make_handshake(0x32));
+        CHECK(wait_for_peer_count(cap_server, 1));
+
+        P2pTcpConnection excess_peer = connect_p2p_peer(
+            P2pEndpoint{"127.0.0.1", cap_server.listen_port()},
+            make_handshake(0x33));
+
+        P2pTipHint rejected_tip;
+        rejected_tip.share_id[31] = 0x34;
+        rejected_tip.share_height = 301;
+        try {
+            excess_peer.send_envelope(
+                make_p2p_tip_announce_envelope(rejected_tip));
+        } catch (...) {
+            // The server may close the rejected socket before this write.
+        }
+
+        std::this_thread::sleep_for(100ms);
+        CHECK(cap_server.peer_count() == 1);
+        CHECK(cap_inbox.size() == 0);
+
+        P2pTipHint accepted_tip;
+        accepted_tip.share_id[31] = 0x35;
+        accepted_tip.share_height = 302;
+        first_peer.send_envelope(
+            make_p2p_tip_announce_envelope(accepted_tip));
+        CHECK(cap_inbox.wait_for_count(1));
+        {
+            std::lock_guard lock(cap_inbox.mutex);
+            CHECK(cap_inbox.messages.size() == 1);
+            CHECK(
+                parse_p2p_tip_announce_envelope(cap_inbox.messages[0]) ==
+                accepted_tip);
+        }
+
+        excess_peer.close();
+        first_peer.close();
+        cap_server.stop();
+    }
+
+    // Every peer owns an independent inbound token bucket. The first message
+    // consumes the configured burst; the next excess message disconnects that
+    // peer before protocol dispatch and without adding a reputation penalty.
+    {
+        Inbox rate_inbox;
+
+        P2pRuntimeConfig rate_config;
+        rate_config.listen_endpoint = P2pEndpoint{"127.0.0.1", 0};
+        rate_config.handshake = make_handshake(0x41);
+        rate_config.inbound_message_rate_limit =
+            TokenBucketConfig{1, 0.001};
+
+        P2pRuntime rate_server(
+            rate_config,
+            [&rate_inbox](
+                const P2pHandshake&,
+                const P2pEnvelope& envelope) {
+                rate_inbox.push(envelope);
+            });
+
+        rate_server.start();
+
+        const P2pHandshake sender_handshake = make_handshake(0x42);
+        P2pTcpConnection sender = connect_p2p_peer(
+            P2pEndpoint{"127.0.0.1", rate_server.listen_port()},
+            sender_handshake);
+        CHECK(wait_for_peer_count(rate_server, 1));
+
+        P2pTipHint first_tip;
+        first_tip.share_id[31] = 0x43;
+        first_tip.share_height = 401;
+
+        P2pTipHint excess_tip;
+        excess_tip.share_id[31] = 0x44;
+        excess_tip.share_height = 402;
+
+        sender.send_envelope(
+            make_p2p_tip_announce_envelope(first_tip));
+        sender.send_envelope(
+            make_p2p_tip_announce_envelope(excess_tip));
+
+        CHECK(rate_inbox.wait_for_count(1));
+        CHECK(wait_for_peer_count(rate_server, 0));
+
+        std::this_thread::sleep_for(50ms);
+        CHECK(rate_inbox.size() == 1);
+        {
+            std::lock_guard lock(rate_inbox.mutex);
+            CHECK(
+                parse_p2p_tip_announce_envelope(rate_inbox.messages[0]) ==
+                first_tip);
+        }
+
+        CHECK(rate_server.peer_score(sender_handshake.node_id) == 0);
+        CHECK(!rate_server.peer_banned(sender_handshake.node_id));
+
+        sender.close();
+        rate_server.stop();
+    }
 
     return 0;
 }

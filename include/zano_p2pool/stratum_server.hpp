@@ -3,6 +3,7 @@
 #include "zano_p2pool/share_chain.hpp"
 #include "zano_p2pool/stratum_session.hpp"
 #include "zano_p2pool/stratum_submission.hpp"
+#include "zano_p2pool/token_bucket.hpp"
 
 #include <atomic>
 #include <cstddef>
@@ -23,6 +24,8 @@ struct StratumServerConfig {
     std::uint16_t port{3333};
     std::size_t max_line_bytes{64 * 1024};
     StratumSessionConfig sessions{};
+    std::size_t max_clients{512};
+    TokenBucketConfig request_rate_limit{256, 128.0};
 };
 
 using StratumAcceptedShareHandler =
