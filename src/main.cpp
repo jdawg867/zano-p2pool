@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <csignal>
 #include <cstdint>
 #include <cstdlib>
@@ -81,12 +82,18 @@ struct Options {
     std::string stratum_bind{"127.0.0.1"};
     std::uint16_t stratum_port{kDefaultStratumPort};
     std::uint64_t stratum_difficulty{kDefaultStratumDifficulty};
+    std::size_t stratum_max_clients{512};
+    std::size_t stratum_request_burst{256};
+    double stratum_request_rate{128.0};
     std::uint64_t template_refresh_seconds{kDefaultTemplateRefreshSeconds};
 
     bool p2p{false};
     std::string p2p_bind{"127.0.0.1"};
     std::uint16_t p2p_port{0};
     std::vector<zano_p2pool::P2pEndpoint> p2p_peers;
+    std::size_t p2p_max_peers{64};
+    std::size_t p2p_message_burst{512};
+    double p2p_message_rate{256.0};
 
     bool metrics{false};
     std::string metrics_bind{"127.0.0.1"};
@@ -167,6 +174,45 @@ std::uint64_t parse_u64_option(
     if (parsed != value.size()) {
         throw std::runtime_error(
             std::string(option) + " requires an unsigned integer");
+    }
+    return result;
+}
+
+std::size_t parse_size_option(
+    std::string_view option,
+    const std::string& value) {
+    const std::uint64_t parsed = parse_u64_option(option, value);
+    if (parsed == 0 ||
+        parsed > static_cast<std::uint64_t>(
+            std::numeric_limits<std::size_t>::max())) {
+        throw std::runtime_error(
+            std::string(option) + " must be a positive integer");
+    }
+    return static_cast<std::size_t>(parsed);
+}
+
+double parse_positive_double_option(
+    std::string_view option,
+    const std::string& value) {
+    if (value.empty() || value.front() == '-') {
+        throw std::runtime_error(
+            std::string(option) + " requires a positive number");
+    }
+
+    std::size_t parsed = 0;
+    double result = 0.0;
+    try {
+        result = std::stod(value, &parsed);
+    } catch (const std::exception&) {
+        throw std::runtime_error(
+            std::string(option) + " requires a positive number");
+    }
+
+    if (parsed != value.size() ||
+        !std::isfinite(result) ||
+        result <= 0.0) {
+        throw std::runtime_error(
+            std::string(option) + " requires a positive finite number");
     }
     return result;
 }
@@ -264,10 +310,16 @@ void print_usage(const char* program) {
         << " [--stratum-bind IPv4]"
         << " [--stratum-port PORT]"
         << " [--stratum-difficulty DIFFICULTY]"
+        << " [--stratum-max-clients COUNT]"
+        << " [--stratum-request-burst COUNT]"
+        << " [--stratum-request-rate REQUESTS_PER_SECOND]"
         << " [--p2p]"
         << " [--p2p-bind ADDRESS]"
         << " [--p2p-port PORT]"
         << " [--p2p-peer HOST:PORT]..."
+        << " [--p2p-max-peers COUNT]"
+        << " [--p2p-message-burst COUNT]"
+        << " [--p2p-message-rate MESSAGES_PER_SECOND]"
         << " [--metrics]"
         << " [--metrics-bind IPv4]"
         << " [--metrics-port PORT]"
@@ -281,8 +333,12 @@ void print_usage(const char* program) {
         << "  Stratum bind: 127.0.0.1\n"
         << "  Stratum port: " << kDefaultStratumPort << '\n'
         << "  Stratum difficulty: " << kDefaultStratumDifficulty << '\n'
+        << "  Stratum max clients: 512\n"
+        << "  Stratum request rate: burst 256, refill 128/s\n"
         << "  P2P bind: 127.0.0.1\n"
         << "  P2P port: 0 (ephemeral development port)\n"
+        << "  P2P max peers: 64\n"
+        << "  P2P message rate: burst 512, refill 256/s\n"
         << "  metrics: disabled\n"
         << "  metrics bind: 127.0.0.1\n"
         << "  metrics port: " << kDefaultMetricsPort << '\n'
@@ -361,6 +417,38 @@ Options parse_args(int argc, char** argv) {
             continue;
         }
 
+        if (arg == "--stratum-max-clients") {
+            if (++i >= argc) {
+                throw std::runtime_error(
+                    "--stratum-max-clients requires a value");
+            }
+            options.stratum_max_clients =
+                parse_size_option("--stratum-max-clients", argv[i]);
+            continue;
+        }
+
+        if (arg == "--stratum-request-burst") {
+            if (++i >= argc) {
+                throw std::runtime_error(
+                    "--stratum-request-burst requires a value");
+            }
+            options.stratum_request_burst =
+                parse_size_option("--stratum-request-burst", argv[i]);
+            continue;
+        }
+
+        if (arg == "--stratum-request-rate") {
+            if (++i >= argc) {
+                throw std::runtime_error(
+                    "--stratum-request-rate requires a value");
+            }
+            options.stratum_request_rate =
+                parse_positive_double_option(
+                    "--stratum-request-rate",
+                    argv[i]);
+            continue;
+        }
+
         if (arg == "--p2p") {
             options.p2p = true;
             continue;
@@ -388,6 +476,38 @@ Options parse_args(int argc, char** argv) {
             }
             options.p2p = true;
             options.p2p_peers.push_back(parse_p2p_endpoint(argv[i]));
+            continue;
+        }
+
+        if (arg == "--p2p-max-peers") {
+            if (++i >= argc) {
+                throw std::runtime_error(
+                    "--p2p-max-peers requires a value");
+            }
+            options.p2p_max_peers =
+                parse_size_option("--p2p-max-peers", argv[i]);
+            continue;
+        }
+
+        if (arg == "--p2p-message-burst") {
+            if (++i >= argc) {
+                throw std::runtime_error(
+                    "--p2p-message-burst requires a value");
+            }
+            options.p2p_message_burst =
+                parse_size_option("--p2p-message-burst", argv[i]);
+            continue;
+        }
+
+        if (arg == "--p2p-message-rate") {
+            if (++i >= argc) {
+                throw std::runtime_error(
+                    "--p2p-message-rate requires a value");
+            }
+            options.p2p_message_rate =
+                parse_positive_double_option(
+                    "--p2p-message-rate",
+                    argv[i]);
             continue;
         }
 
@@ -708,14 +828,21 @@ int main(int argc, char** argv) {
             handshake.best_share_id = tip.share_id;
             handshake.best_share_height = tip.share_height;
 
+            zano_p2pool::P2pRuntimeConfig p2p_config;
+            p2p_config.listen_endpoint = zano_p2pool::P2pEndpoint{
+                options.p2p_bind,
+                options.p2p_port,
+            };
+            p2p_config.handshake = handshake;
+            p2p_config.max_peers = options.p2p_max_peers;
+            p2p_config.inbound_message_rate_limit =
+                zano_p2pool::TokenBucketConfig{
+                    options.p2p_message_burst,
+                    options.p2p_message_rate,
+                };
+
             p2p_runtime = std::make_unique<zano_p2pool::P2pRuntime>(
-                zano_p2pool::P2pRuntimeConfig{
-                    zano_p2pool::P2pEndpoint{
-                        options.p2p_bind,
-                        options.p2p_port,
-                    },
-                    handshake,
-                },
+                std::move(p2p_config),
                 [&](const zano_p2pool::P2pHandshake& peer,
                     const zano_p2pool::P2pEnvelope& envelope) {
                     if (!p2p_runtime) {
@@ -923,6 +1050,12 @@ int main(int argc, char** argv) {
             zano_p2pool::StratumServerConfig server_config;
             server_config.bind_address = options.stratum_bind;
             server_config.port = options.stratum_port;
+            server_config.max_clients = options.stratum_max_clients;
+            server_config.request_rate_limit =
+                zano_p2pool::TokenBucketConfig{
+                    options.stratum_request_burst,
+                    options.stratum_request_rate,
+                };
 
             if (options.stratum_difficulty !=
                 sidechain_parameters.minimum_share_difficulty) {
