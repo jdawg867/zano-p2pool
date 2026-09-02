@@ -2,6 +2,7 @@
 
 #include "zano_p2pool/p2p_peer_score.hpp"
 #include "zano_p2pool/p2p_transport.hpp"
+#include "zano_p2pool/token_bucket.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -22,6 +23,8 @@ struct P2pRuntimeConfig {
     std::chrono::milliseconds outbound_reconnect_initial{250};
     std::chrono::milliseconds outbound_reconnect_max{5000};
     P2pPeerScoreConfig peer_score{};
+    std::size_t max_peers{64};
+    TokenBucketConfig inbound_message_rate_limit{512, 256.0};
 };
 
 using P2pMessageHandler = std::function<void(
