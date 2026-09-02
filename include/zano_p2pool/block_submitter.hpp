@@ -23,7 +23,13 @@ struct BlockCandidate {
 
 enum class BlockSubmitStatus : std::uint8_t {
     Submitted,
+    AlternativeAccepted,
     SubmissionFailed,
+};
+
+enum class BlockSubmissionResult : std::uint8_t {
+    Submitted,
+    AlternativeAccepted,
 };
 
 struct BlockSubmitEvent {
@@ -58,7 +64,8 @@ struct BlockCandidateQueueResult {
     }
 };
 
-using BlockSubmitFunction = std::function<void(const std::string& block_blob_hex)>;
+using BlockSubmitFunction =
+    std::function<BlockSubmissionResult(const std::string& block_blob_hex)>;
 using BlockSubmitEventHandler = std::function<void(const BlockSubmitEvent&)>;
 
 // Return a copy of the exact RPC block template with block_header.nonce patched

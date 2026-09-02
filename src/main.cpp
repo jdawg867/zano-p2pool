@@ -632,6 +632,7 @@ int main(int argc, char** argv) {
         std::atomic<std::uint64_t> p2p_admitted_shares_total{0};
         std::atomic<std::uint64_t> block_candidates_total{0};
         std::atomic<std::uint64_t> blocks_submitted_total{0};
+        std::atomic<std::uint64_t> blocks_alternative_total{0};
         std::atomic<std::uint64_t> block_submission_failures_total{0};
         std::atomic<std::uint64_t> template_refresh_failures_total{0};
 
@@ -840,8 +841,20 @@ int main(int argc, char** argv) {
         if (options.stratum) {
             block_submitter =
                 std::make_unique<zano_p2pool::BlockCandidateSubmitter>(
-                    [&](const std::string& block_blob_hex) {
-                        rpc.submit_block(block_blob_hex);
+                    [&](const std::string& block_blob_hex)
+                        -> zano_p2pool::BlockSubmissionResult {
+                        try {
+                            rpc.submit_block(block_blob_hex);
+                            return zano_p2pool::BlockSubmissionResult::Submitted;
+                        } catch (const zano_p2pool::RpcError& e) {
+                            if (e.code() ==
+                                zano_p2pool::
+                                    kZanoRpcErrorBlockAddedAsAlternative) {
+                                return zano_p2pool::BlockSubmissionResult::
+                                    AlternativeAccepted;
+                            }
+                            throw;
+                        }
                     },
                     [&](const zano_p2pool::BlockSubmitEvent& event) {
                         if (event.status ==
@@ -851,6 +864,24 @@ int main(int argc, char** argv) {
                                 std::memory_order_relaxed);
                             std::cout
                                 << "Zano block submitted: height="
+                                << event.candidate.zano_height
+                                << " nonce=" << event.candidate.nonce
+                                << " header="
+                                << zano_p2pool::hash_to_hex(
+                                       event.candidate.mining_header_hash)
+                                << '\n';
+                            request_template_refresh();
+                            return;
+                        }
+
+                        if (event.status ==
+                            zano_p2pool::BlockSubmitStatus::
+                                AlternativeAccepted) {
+                            blocks_alternative_total.fetch_add(
+                                1,
+                                std::memory_order_relaxed);
+                            std::cout
+                                << "Zano block accepted as alternative: height="
                                 << event.candidate.zano_height
                                 << " nonce=" << event.candidate.nonce
                                 << " header="
@@ -1032,6 +1063,8 @@ int main(int argc, char** argv) {
                         block_candidates_total.load(std::memory_order_relaxed);
                     snapshot.blocks_submitted_total =
                         blocks_submitted_total.load(std::memory_order_relaxed);
+                    snapshot.blocks_alternative_total =
+                        blocks_alternative_total.load(std::memory_order_relaxed);
                     snapshot.block_submission_failures_total =
                         block_submission_failures_total.load(
                             std::memory_order_relaxed);

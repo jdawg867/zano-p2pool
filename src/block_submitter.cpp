@@ -152,7 +152,7 @@ void BlockCandidateSubmitter::worker_loop() noexcept {
         }
 
         try {
-            submit_(block_blob_with_nonce(
+            const BlockSubmissionResult result = submit_(block_blob_with_nonce(
                 queued.block_blob_hex,
                 queued.candidate.nonce));
 
@@ -169,7 +169,9 @@ void BlockCandidateSubmitter::worker_loop() noexcept {
             }
 
             emit(BlockSubmitEvent{
-                BlockSubmitStatus::Submitted,
+                result == BlockSubmissionResult::AlternativeAccepted
+                    ? BlockSubmitStatus::AlternativeAccepted
+                    : BlockSubmitStatus::Submitted,
                 queued.candidate,
                 {},
             });
@@ -203,6 +205,8 @@ const char* block_submit_status_name(BlockSubmitStatus status) noexcept {
     switch (status) {
     case BlockSubmitStatus::Submitted:
         return "submitted";
+    case BlockSubmitStatus::AlternativeAccepted:
+        return "alternative-accepted";
     case BlockSubmitStatus::SubmissionFailed:
         return "submission-failed";
     }

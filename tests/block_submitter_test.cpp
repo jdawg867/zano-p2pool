@@ -67,6 +67,7 @@ int main() {
         [&](const std::string& blob) {
             std::lock_guard lock(submitted_mutex);
             submitted.push_back(blob);
+            return BlockSubmissionResult::Submitted;
         },
         [&](const BlockSubmitEvent& event) {
             events.push(event);
@@ -77,6 +78,7 @@ int main() {
     const Hash256 header_a = hash_from_byte(0x11);
     const Hash256 header_b = hash_from_byte(0x22);
     const Hash256 header_missing = hash_from_byte(0x33);
+    const Hash256 header_alternative = hash_from_byte(0x44);
 
     submitter.remember_template(header_a, base);
     submitter.remember_template(header_b, base);
@@ -115,6 +117,37 @@ int main() {
           BlockCandidateQueueStatus::StaleTemplate);
     CHECK(submitter.queued() == 0);
 
+    // An alternative-chain acceptance is a handled block submission, not an
+    // invalid block. It retires the solved template and queued siblings just
+    // like a main-chain acceptance, but is surfaced with its own status.
+    Events alternative_events;
+    BlockCandidateSubmitter alternative(
+        [](const std::string&) {
+            return BlockSubmissionResult::AlternativeAccepted;
+        },
+        [&](const BlockSubmitEvent& event) {
+            alternative_events.push(event);
+        });
+    alternative.remember_template(header_alternative, base);
+    alternative.start();
+    CHECK(alternative.enqueue(BlockCandidate{101, header_alternative, 5}) ==
+          BlockCandidateQueueStatus::Queued);
+    CHECK(alternative.enqueue(BlockCandidate{101, header_alternative, 6}) ==
+          BlockCandidateQueueStatus::Queued);
+    CHECK(alternative_events.wait_for(1));
+    {
+        std::lock_guard lock(alternative_events.mutex);
+        CHECK(alternative_events.values.size() == 1);
+        CHECK(alternative_events.values[0].status ==
+              BlockSubmitStatus::AlternativeAccepted);
+        CHECK(alternative_events.values[0].error.empty());
+    }
+    CHECK(alternative.template_count() == 0);
+    CHECK(alternative.queued() == 0);
+    CHECK(alternative.enqueue(BlockCandidate{101, header_alternative, 7}) ==
+          BlockCandidateQueueStatus::StaleTemplate);
+    alternative.stop();
+
     // A submission failure is surfaced but leaves the worker alive.
     submitter.stop();
     CHECK(!submitter.running());
@@ -123,7 +156,7 @@ int main() {
 
     Events failing_events;
     BlockCandidateSubmitter failing(
-        [](const std::string&) {
+        [](const std::string&) -> BlockSubmissionResult {
             throw std::runtime_error("daemon rejected block");
         },
         [&](const BlockSubmitEvent& event) {
@@ -143,6 +176,9 @@ int main() {
 
     CHECK(std::string(block_submit_status_name(BlockSubmitStatus::Submitted)) ==
           "submitted");
+    CHECK(std::string(block_submit_status_name(
+              BlockSubmitStatus::AlternativeAccepted)) ==
+          "alternative-accepted");
     CHECK(std::string(block_candidate_queue_status_name(
               BlockCandidateQueueStatus::StaleTemplate)) ==
           "stale-template");
