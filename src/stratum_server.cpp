@@ -11,6 +11,7 @@
 #include <cerrno>
 #include <chrono>
 #include <cstring>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -240,10 +241,6 @@ std::uint64_t StratumTcpServer::publish_template(
 }
 
 StratumIssuedWork StratumTcpServer::issue_work(std::uint64_t session_id) {
-    if (!share_chain_->enforces_sidechain_difficulty()) {
-        return sessions_.issue_work(session_id);
-    }
-
     const StratumTemplate* work_template = sessions_.current_template();
     if (work_template == nullptr) {
         // Preserve the session registry's existing error text for no-template
@@ -251,15 +248,38 @@ StratumIssuedWork StratumTcpServer::issue_work(std::uint64_t session_id) {
         return sessions_.issue_work(session_id);
     }
 
-    std::unique_lock<std::mutex> chain_lock;
-    if (shared_chain_mutex_ != nullptr) {
-        chain_lock = std::unique_lock<std::mutex>(*shared_chain_mutex_);
+    // Standalone Stratum owns a development chain and retains the historical
+    // behavior. A full node always supplies the shared consensus mutex.
+    if (shared_chain_mutex_ == nullptr) {
+        return sessions_.issue_work(session_id);
     }
 
-    const Difficulty128 consensus_difficulty =
-        share_chain_->expected_next_share_difficulty(
-            work_template->network_difficulty);
-    return sessions_.issue_work(session_id, consensus_difficulty);
+    std::unique_lock<std::mutex> chain_lock(*shared_chain_mutex_);
+
+    StratumShareParentBinding parent_binding;
+    if (const ConnectedShare* tip = share_chain_->best_tip();
+        tip != nullptr) {
+        if (tip->share.share_height ==
+            std::numeric_limits<std::uint64_t>::max()) {
+            throw std::runtime_error(
+                "sidechain share height exhausted while issuing Stratum work");
+        }
+        parent_binding.parent_id = tip->id;
+        parent_binding.share_height = tip->share.share_height + 1;
+    }
+
+    std::optional<Difficulty128> consensus_difficulty;
+    if (share_chain_->enforces_sidechain_difficulty()) {
+        consensus_difficulty =
+            share_chain_->expected_child_share_difficulty(
+                parent_binding.parent_id,
+                work_template->network_difficulty);
+    }
+
+    return sessions_.issue_work(
+        session_id,
+        consensus_difficulty,
+        parent_binding);
 }
 
 std::size_t StratumTcpServer::connected_share_count() const noexcept {

@@ -25,12 +25,21 @@ struct StratumTemplate {
     Difficulty128 network_difficulty{};
 };
 
+struct StratumShareParentBinding {
+    ShareId parent_id{};
+    std::uint64_t share_height{0};
+};
+
 struct StratumIssuedWork {
     std::uint64_t job_version{0};
     std::uint64_t session_id{0};
     Difficulty128 share_difficulty{};
     StratumWork wire_work{};
     ShareWorkContext trusted_context{};
+    // Full-node Stratum snapshots the sidechain ancestry at job issuance. The
+    // optional form preserves standalone/session compatibility for callers that
+    // do not have a shared consensus chain.
+    std::optional<StratumShareParentBinding> parent_binding;
 };
 
 enum class StratumWorkMatch {
@@ -72,10 +81,12 @@ public:
 
     // A full sidechain node supplies consensus_share_difficulty so miner work
     // uses the exact branch-derived target required by ShareChain admission.
-    // Standalone/session tests may omit it and retain configured vardiff behavior.
+    // It also supplies the exact parent binding selected while the consensus
+    // chain is locked. Standalone/session callers may omit both.
     [[nodiscard]] StratumIssuedWork issue_work(
         std::uint64_t session_id,
-        std::optional<Difficulty128> consensus_share_difficulty = std::nullopt);
+        std::optional<Difficulty128> consensus_share_difficulty = std::nullopt,
+        std::optional<StratumShareParentBinding> parent_binding = std::nullopt);
 
     [[nodiscard]] StratumWorkMatch match_submission(
         std::uint64_t session_id,

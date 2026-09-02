@@ -134,13 +134,26 @@ std::uint64_t StratumSessionRegistry::publish_template(
 
 StratumIssuedWork StratumSessionRegistry::issue_work(
     std::uint64_t session_id,
-    std::optional<Difficulty128> consensus_share_difficulty) {
+    std::optional<Difficulty128> consensus_share_difficulty,
+    std::optional<StratumShareParentBinding> parent_binding) {
     StratumSession& session = require_session(session_id);
     if (!session.logged_in) {
         throw std::runtime_error("Stratum session is not logged in");
     }
     if (!current_template_.has_value()) {
         throw std::runtime_error("no Stratum template is available");
+    }
+
+    if (parent_binding.has_value()) {
+        const bool root = parent_binding->parent_id == ShareId{};
+        if (root && parent_binding->share_height != 0) {
+            throw std::runtime_error(
+                "root Stratum parent binding must use share height zero");
+        }
+        if (!root && parent_binding->share_height == 0) {
+            throw std::runtime_error(
+                "non-root Stratum parent binding must use nonzero share height");
+        }
     }
 
     Difficulty128 share_difficulty{};
@@ -162,6 +175,9 @@ StratumIssuedWork StratumSessionRegistry::issue_work(
             *current_template_);
     }
 
+    // A published template is one immutable job per session. In particular, a
+    // later chain-tip movement must not silently rewrite the parent of work that
+    // was already handed to the miner under the same template/header.
     if (session.current_work.has_value() &&
         session.current_work->job_version == current_template_->version &&
         session.current_work->share_difficulty == share_difficulty) {
@@ -181,6 +197,7 @@ StratumIssuedWork StratumSessionRegistry::issue_work(
     issued.trusted_context.mining_header_hash = current_template_->header_hash;
     issued.trusted_context.network_difficulty =
         current_template_->network_difficulty;
+    issued.parent_binding = parent_binding;
 
     session.previous_work = session.current_work;
     session.current_work = issued;

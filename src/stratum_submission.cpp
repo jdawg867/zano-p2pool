@@ -60,7 +60,13 @@ StratumSubmissionResult StratumSubmissionRouter::submit(
     seen.insert(duplicate_key);
 
     Share share;
-    if (const ConnectedShare* tip = share_chain_.best_tip(); tip != nullptr) {
+    if (issued.parent_binding.has_value()) {
+        share.parent_id = issued.parent_binding->parent_id;
+        share.share_height = issued.parent_binding->share_height;
+    } else if (const ConnectedShare* tip = share_chain_.best_tip(); tip != nullptr) {
+        // Standalone/development callers that issue work without a consensus
+        // parent snapshot retain the historical behavior. Full-node Stratum
+        // always supplies parent_binding at job issuance.
         share.parent_id = tip->id;
         share.share_height = tip->share.share_height + 1;
     }
