@@ -89,8 +89,9 @@ int main() {
     snapshot.p2p_admitted_shares_total = 12;
     snapshot.block_candidates_total = 13;
     snapshot.blocks_submitted_total = 14;
-    snapshot.block_submission_failures_total = 15;
-    snapshot.template_refresh_failures_total = 16;
+    snapshot.blocks_alternative_total = 15;
+    snapshot.block_submission_failures_total = 16;
+    snapshot.template_refresh_failures_total = 17;
     snapshot.persistence_ok = false;
 
     const std::string rendered = render_prometheus_metrics(snapshot);
@@ -119,9 +120,11 @@ int main() {
           std::string::npos);
     CHECK(rendered.find("zano_p2pool_blocks_submitted_total 14\n") !=
           std::string::npos);
-    CHECK(rendered.find("zano_p2pool_block_submission_failures_total 15\n") !=
+    CHECK(rendered.find("zano_p2pool_blocks_alternative_total 15\n") !=
           std::string::npos);
-    CHECK(rendered.find("zano_p2pool_template_refresh_failures_total 16\n") !=
+    CHECK(rendered.find("zano_p2pool_block_submission_failures_total 16\n") !=
+          std::string::npos);
+    CHECK(rendered.find("zano_p2pool_template_refresh_failures_total 17\n") !=
           std::string::npos);
     CHECK(rendered.find("zano_p2pool_persistence_ok 0\n") !=
           std::string::npos);
@@ -150,6 +153,8 @@ int main() {
     CHECK(metrics.find("zano_p2pool_sidechain_connected_shares 7\n") !=
           std::string::npos);
     CHECK(metrics.find("zano_p2pool_stratum_job_sequence 9\n") !=
+          std::string::npos);
+    CHECK(metrics.find("zano_p2pool_blocks_alternative_total 15\n") !=
           std::string::npos);
     CHECK(snapshots.load() == 1);
 
