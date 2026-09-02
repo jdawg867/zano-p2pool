@@ -131,18 +131,49 @@ int main() {
     CHECK(unknown_result.disposition ==
           StratumSubmissionDisposition::UnknownWork);
 
-    // Restore the known ProgPoWZ header with network difficulty 3. The same
-    // pinned nonce now satisfies both share and full-network difficulty and is
-    // surfaced as a block candidate without any daemon submission side effect.
+    // Restore the known ProgPoWZ header with network difficulty 3. Bind this
+    // issued job to the exact current parent before deliberately moving the
+    // chain tip. The later submission must not silently adopt the new tip.
     CHECK(sessions.publish_template(
               header,
               seed,
               0,
               difficulty128_from_decimal("3")) == 3);
-    const StratumIssuedWork work3 = sessions.issue_work(session_id);
+
+    const StratumShareParentBinding issued_parent{
+        accepted.share_id,
+        1,
+    };
+    const StratumIssuedWork work3 =
+        sessions.issue_work(session_id, std::nullopt, issued_parent);
     CHECK(work3.job_version == 3);
     CHECK(difficulty128_to_decimal(work3.share_difficulty) == "3");
+    CHECK(work3.parent_binding.has_value());
+    CHECK(work3.parent_binding->parent_id == accepted.share_id);
+    CHECK(work3.parent_binding->share_height == 1);
 
+    // Move best_tip() after job issuance without changing the issued job.
+    // This synthetic unchecked child needs no additional ProgPoW calculation.
+    Share competing_tip;
+    competing_tip.parent_id = accepted.share_id;
+    competing_tip.share_height = 1;
+    competing_tip.timestamp = 1'700'200'003;
+    competing_tip.zano_height = 0;
+    competing_tip.mining_header_hash = header;
+    competing_tip.nonce = UINT64_C(0x7777777777777777);
+    competing_tip.share_difficulty = difficulty128_from_decimal("4");
+    competing_tip.network_difficulty = difficulty128_from_decimal("4");
+    competing_tip.miner_id[0] = 0x77;
+
+    const AddShareResult competing_added =
+        chain.add_share_unchecked(competing_tip);
+    CHECK(competing_added.disposition == ShareDisposition::Connected);
+    CHECK(chain.best_tip() != nullptr);
+    CHECK(chain.best_tip()->id == competing_added.id);
+
+    // The pinned nonce satisfies both share and network difficulty 3 and is
+    // surfaced as a block candidate. Its ancestry must remain the parent that
+    // was snapshotted into work3, not competing_added.id.
     StratumSubmission block_submission = submission;
     block_submission.nonce = UINT64_C(0x123456789abcdef0);
     const StratumSubmissionResult block = router.submit(
@@ -152,12 +183,19 @@ int main() {
         ProgPowZContextMode::Light);
     CHECK(block.disposition == StratumSubmissionDisposition::BlockCandidate);
     CHECK(block.job_version == 3);
-    CHECK(chain.connected_size() == 2);
+    CHECK(chain.connected_size() == 3);
+
     const ConnectedShare* block_share = chain.find(block.share_id);
     CHECK(block_share != nullptr);
+    CHECK(block_share->share.parent_id == accepted.share_id);
+    CHECK(block_share->share.parent_id != competing_added.id);
+    CHECK(block_share->share.share_height == 1);
     CHECK(block_share->pow_validation.has_value());
     CHECK(block_share->pow_validation->classification ==
           CandidateClassification::Block);
+
+    CHECK(chain.best_tip() != nullptr);
+    CHECK(chain.best_tip()->id == competing_added.id);
 
     // A fresh session/job with difficulty 4 rejects the same deterministic PoW
     // and then suppresses an identical repeat as a duplicate nonce submission.
