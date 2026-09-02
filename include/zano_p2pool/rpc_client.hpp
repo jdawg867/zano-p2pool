@@ -1,12 +1,29 @@
 #pragma once
 
 #include <chrono>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
 #include "zano_p2pool/block_template.hpp"
 
 namespace zano_p2pool {
+
+inline constexpr int kZanoRpcErrorBlockAddedAsAlternative = -13;
+
+class RpcError : public std::runtime_error {
+public:
+    RpcError(int code, std::string message);
+
+    [[nodiscard]] int code() const noexcept { return code_; }
+    [[nodiscard]] const std::string& rpc_message() const noexcept {
+        return rpc_message_;
+    }
+
+private:
+    int code_{};
+    std::string rpc_message_;
+};
 
 class RpcClient {
 public:
