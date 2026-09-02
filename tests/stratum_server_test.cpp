@@ -18,6 +18,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 
 namespace {
 
@@ -87,6 +88,37 @@ int connect_loopback(std::uint16_t port) {
         throw std::runtime_error("client connect failed");
     }
     return fd;
+}
+
+bool wait_for_client_count(
+    const zano_p2pool::StratumTcpServer& server,
+    std::size_t expected,
+    std::chrono::milliseconds timeout = std::chrono::seconds(2)) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (server.client_count() == expected) {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return server.client_count() == expected;
+}
+
+bool wait_for_eof(int fd) {
+    while (true) {
+        char byte = 0;
+        const ssize_t received = ::recv(fd, &byte, 1, 0);
+        if (received == 0) {
+            return true;
+        }
+        if (received > 0) {
+            return false;
+        }
+        if (errno == EINTR) {
+            continue;
+        }
+        return false;
+    }
 }
 
 }  // namespace
@@ -233,6 +265,60 @@ int main() {
     server.stop();
     CHECK(!server.running());
     CHECK(server.bound_port() == 0);
+
+    // The connection cap is enforced before a session or worker thread is
+    // allocated for the excess client.
+    {
+        StratumServerConfig cap_config;
+        cap_config.port = 0;
+        cap_config.max_clients = 1;
+
+        StratumTcpServer cap_server(cap_config);
+        cap_server.start();
+
+        const int first_client = connect_loopback(cap_server.bound_port());
+        CHECK(wait_for_client_count(cap_server, 1));
+
+        const int excess_client = connect_loopback(cap_server.bound_port());
+        CHECK(wait_for_eof(excess_client));
+        CHECK(cap_server.client_count() == 1);
+
+        ::close(excess_client);
+        ::shutdown(first_client, SHUT_RDWR);
+        ::close(first_client);
+
+        cap_server.stop();
+    }
+
+    // A client gets the configured initial burst and is disconnected on the
+    // first request that exceeds its token bucket. Use an intentionally tiny
+    // refill rate so scheduling delays cannot refill a token during the test.
+    {
+        StratumServerConfig rate_config;
+        rate_config.port = 0;
+        rate_config.request_rate_limit = TokenBucketConfig{1, 0.001};
+
+        StratumTcpServer rate_server(rate_config);
+        rate_server.start();
+
+        const int rate_client = connect_loopback(rate_server.bound_port());
+
+        send_all(
+            rate_client,
+            R"({"jsonrpc":"2.0","id":101,"method":"no_such_method","params":[]})"
+            "\n"
+            R"({"jsonrpc":"2.0","id":102,"method":"no_such_method","params":[]})"
+            "\n");
+
+        const std::string allowed_response = read_line(rate_client);
+        CHECK(allowed_response.find(R"("id":101)") != std::string::npos);
+        CHECK(allowed_response.find(R"("code":-32601)") != std::string::npos);
+
+        CHECK(wait_for_eof(rate_client));
+
+        ::close(rate_client);
+        rate_server.stop();
+    }
 
     return 0;
 }

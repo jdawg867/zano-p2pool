@@ -33,10 +33,14 @@ namespace {
 }  // namespace
 
 struct P2pRuntime::Peer {
-    explicit Peer(P2pTcpConnection value)
-        : connection(std::move(value)) {}
+    Peer(
+        P2pTcpConnection value,
+        TokenBucketConfig inbound_message_rate_limit)
+        : connection(std::move(value)),
+          inbound_message_limiter(inbound_message_rate_limit) {}
 
     P2pTcpConnection connection;
+    TokenBucket inbound_message_limiter;
     std::atomic<bool> alive{true};
     std::mutex send_mutex;
     std::thread reader_thread;
@@ -74,6 +78,12 @@ void P2pRuntime::start() {
     if (running_.load()) {
         throw std::runtime_error("P2P runtime is already running");
     }
+    if (config_.max_peers == 0) {
+        throw std::runtime_error("P2P max peers must be nonzero");
+    }
+    validate_token_bucket_config(
+        config_.inbound_message_rate_limit,
+        "P2P inbound message rate limit");
     if (config_.outbound_reconnect_initial.count() <= 0) {
         throw std::runtime_error(
             "P2P outbound reconnect initial delay must be positive");
@@ -451,7 +461,9 @@ std::shared_ptr<P2pRuntime::Peer> P2pRuntime::add_peer(
         return {};
     }
 
-    auto peer = std::make_shared<Peer>(std::move(connection));
+    auto peer = std::make_shared<Peer>(
+        std::move(connection),
+        config_.inbound_message_rate_limit);
     {
         std::lock_guard lock(peers_mutex_);
         const bool duplicate = std::any_of(
@@ -467,6 +479,20 @@ std::shared_ptr<P2pRuntime::Peer> P2pRuntime::add_peer(
             peer->connection.close();
             return {};
         }
+
+        const std::size_t live_peers = static_cast<std::size_t>(
+            std::count_if(
+                peers_.begin(),
+                peers_.end(),
+                [](const std::shared_ptr<Peer>& existing) {
+                    return existing->alive.load();
+                }));
+        if (live_peers >= config_.max_peers) {
+            peer->alive.store(false);
+            peer->connection.close();
+            return {};
+        }
+
         peers_.push_back(peer);
     }
 
@@ -508,6 +534,13 @@ void P2pRuntime::peer_loop(const std::shared_ptr<Peer>& peer) noexcept {
     while (running_.load() && peer->alive.load()) {
         try {
             const P2pEnvelope envelope = peer->connection.receive_envelope();
+
+            // Rate limiting is transport-local and reputation-neutral. Drop the
+            // peer on the first excess inbound message before protocol dispatch.
+            if (!peer->inbound_message_limiter.consume()) {
+                break;
+            }
+
             if (handler_) {
                 handler_(peer->connection.peer_handshake(), envelope);
             }
