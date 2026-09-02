@@ -20,6 +20,7 @@ struct MetricsSnapshot {
     std::uint64_t p2p_admitted_shares_total{0};
     std::uint64_t block_candidates_total{0};
     std::uint64_t blocks_submitted_total{0};
+    std::uint64_t blocks_alternative_total{0};
     std::uint64_t block_submission_failures_total{0};
     std::uint64_t template_refresh_failures_total{0};
     bool persistence_ok{true};
@@ -135,13 +136,19 @@ inline void append_metric(
         out,
         "zano_p2pool_blocks_submitted_total",
         "counter",
-        "Block candidates accepted by the Zano submitblock RPC since process start.",
+        "Block candidates accepted onto the Zano main chain since process start.",
         snapshot.blocks_submitted_total);
+    detail::append_metric(
+        out,
+        "zano_p2pool_blocks_alternative_total",
+        "counter",
+        "Block candidates accepted into Zano's alternative chain since process start.",
+        snapshot.blocks_alternative_total);
     detail::append_metric(
         out,
         "zano_p2pool_block_submission_failures_total",
         "counter",
-        "Block submitter events not reported as successful submitblock results since process start.",
+        "Block submission attempts rejected or otherwise failed since process start.",
         snapshot.block_submission_failures_total);
     detail::append_metric(
         out,
