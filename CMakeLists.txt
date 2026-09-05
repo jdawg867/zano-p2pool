@@ -130,6 +130,7 @@ if(ZANO_P2POOL_ZANO_SOURCE_DIR)
                 "${_zano_source_dir}/src"
                 "${_zano_source_dir}/contrib"
                 "${_zano_source_dir}/contrib/epee/include"
+                "${Boost_INCLUDE_DIRS}"
         )
         target_compile_definitions(zano_p2pool_zano_curve PRIVATE STATICLIB=1)
         target_compile_options(zano_p2pool_zano_curve PRIVATE
