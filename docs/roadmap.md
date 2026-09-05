@@ -253,7 +253,7 @@ exact-Zano Release suite passed 33/33 in 3.76 seconds, and branch CI #409 passed
 - [x] mainnet-compatible sidechain parameters
 - [ ] seed nodes
 - [x] observability/metrics
-- [ ] rate limits
+- [x] rate limits
 - [x] persistence recovery
 - [ ] adversarial tests
 - [ ] release builds
@@ -330,3 +330,27 @@ height 76, one Stratum connection, 62 accepted shares, 62 full-difficulty block
 candidates, 17 successful `submitblock` events, two non-success block-submission
 events, and healthy persistence throughout. The final exact-Zano regression suite
 passed 34/34 locally in 4.17 seconds on 2026-09-01.
+
+Checkpoint 6 adds bounded runtime admission and request/message rate limiting.
+Stratum defaults to at most 512 connected clients and a per-client token bucket of
+256 requests burst with 128 requests/second refill. P2P defaults to at most 64
+connected peers and a per-peer inbound token bucket of 512 messages burst with
+256 messages/second refill. Excess Stratum connections are rejected before session
+allocation, excess P2P peers are rejected at admission, and the first rate-limit
+violation disconnects the offending connection without altering consensus or peer
+reputation. The executable exposes matching `--stratum-max-clients`,
+`--stratum-request-burst`, `--stratum-request-rate`, `--p2p-max-peers`,
+`--p2p-message-burst`, and `--p2p-message-rate` controls.
+
+On 2026-09-04 the post-rate-limit `main` runtime was revalidated end-to-end against
+a synchronized Zano testnet daemon with SRBMiner-MULTI 3.6.0 using `progpow_zano`.
+A miner login using a non-payout identity failed closed with
+`unexpected-share-version`; logging in with the standard testnet Zano payout
+address produced payout-capable v2 shares and immediately restored repeated accepted
+shares. The node progressed from bootstrap payout establishment into canonical
+single-recipient PPLNS work and submitted multiple full-network-difficulty blocks,
+including heights 175216, 175217, 175218, 175220, and 175221. `zanod` independently
+processed the submitted PoW blocks, including normal alternative-chain/reorganization
+behavior on the low-difficulty testnet. This reconfirms the current-main path:
+
+`SRBMiner -> Stratum -> payout-capable share v2 -> exact ProgPoWZ validation -> sidechain -> PPLNS template -> canonical block reconstruction -> zanod submitblock`.
