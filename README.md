@@ -175,9 +175,13 @@ Stratum development mode is opt-in and defaults to loopback:
   --stratum \
   --stratum-bind 127.0.0.1 \
   --stratum-port 3333 \
-  --stratum-difficulty 100000 \
   --template-refresh-seconds 5
 ```
+
+In canonical sidechain consensus mode, the effective miner share difficulty is
+derived from the selected sidechain branch and parent-network difficulty.
+`--stratum-difficulty` is therefore ignored in that mode. Miners should log in
+with a standard Zano payout address so payout-capable v2 shares can be constructed.
 
 Expected startup output includes the independently derived mining header and the local Stratum listener.
 
