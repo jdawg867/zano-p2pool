@@ -210,6 +210,10 @@ if(ZANO_P2POOL_BUILD_TESTS)
     target_link_libraries(block_template_test PRIVATE zano_p2pool_core)
     add_test(NAME block_template_test COMMAND block_template_test)
 
+    add_executable(rpc_client_test tests/rpc_client_test.cpp)
+    target_link_libraries(rpc_client_test PRIVATE zano_p2pool_core)
+    add_test(NAME rpc_client_test COMMAND rpc_client_test)
+
     add_executable(testnet_fixture_test tests/testnet_fixture_test.cpp)
     target_link_libraries(testnet_fixture_test PRIVATE zano_p2pool_core)
     target_compile_definitions(testnet_fixture_test PRIVATE

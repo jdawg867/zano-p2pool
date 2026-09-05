@@ -970,18 +970,13 @@ int main(int argc, char** argv) {
                 std::make_unique<zano_p2pool::BlockCandidateSubmitter>(
                     [&](const std::string& block_blob_hex)
                         -> zano_p2pool::BlockSubmissionResult {
-                        try {
-                            rpc.submit_block(block_blob_hex);
-                            return zano_p2pool::BlockSubmissionResult::Submitted;
-                        } catch (const zano_p2pool::RpcError& e) {
-                            if (e.code() ==
-                                zano_p2pool::
-                                    kZanoRpcErrorBlockAddedAsAlternative) {
-                                return zano_p2pool::BlockSubmissionResult::
-                                    AlternativeAccepted;
-                            }
-                            throw;
-                        }
+                        const auto result = rpc.submit_block(block_blob_hex);
+                        return result == zano_p2pool::RpcBlockSubmissionResult::
+                                             AlternativeAccepted
+                                   ? zano_p2pool::BlockSubmissionResult::
+                                         AlternativeAccepted
+                                   : zano_p2pool::BlockSubmissionResult::
+                                         Submitted;
                     },
                     [&](const zano_p2pool::BlockSubmitEvent& event) {
                         if (event.status ==

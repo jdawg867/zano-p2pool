@@ -11,6 +11,11 @@ namespace zano_p2pool {
 
 inline constexpr int kZanoRpcErrorBlockAddedAsAlternative = -13;
 
+enum class RpcBlockSubmissionResult {
+    Accepted,
+    AlternativeAccepted,
+};
+
 class RpcError : public std::runtime_error {
 public:
     RpcError(int code, std::string message);
@@ -35,7 +40,8 @@ public:
         const std::string& wallet_address,
         const std::string& extra_text = {}) const;
 
-    void submit_block(const std::string& block_blob_hex) const;
+    [[nodiscard]] RpcBlockSubmissionResult submit_block(
+        const std::string& block_blob_hex) const;
 
 private:
     [[nodiscard]] std::string call(
