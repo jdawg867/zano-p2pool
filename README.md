@@ -205,6 +205,11 @@ temporarily unavailable. RPC retries use bounded exponential backoff from 1 to
 30 seconds by default. Override the bounds with
 `--rpc-reconnect-initial-seconds` and `--rpc-reconnect-max-seconds`.
 
+Testnet P2P mode automatically bootstraps from the project's built-in seed node
+at `207.148.30.120:37888`. Explicit `--p2p-peer HOST:PORT` entries are combined
+with the seed list and de-duplicated. Operators running the seed itself or an
+isolated network can pass `--no-seed-nodes`.
+
 ## Current Zano network defaults
 
 From the current Zano source:

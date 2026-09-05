@@ -14,6 +14,7 @@
 #include "zano_p2pool/pplns_template.hpp"
 #include "zano_p2pool/rpc_backoff.hpp"
 #include "zano_p2pool/rpc_client.hpp"
+#include "zano_p2pool/seed_nodes.hpp"
 #include "zano_p2pool/share.hpp"
 #include "zano_p2pool/share_store.hpp"
 #include "zano_p2pool/sidechain_params.hpp"
@@ -97,6 +98,7 @@ struct Options {
     std::string p2p_bind{"127.0.0.1"};
     std::uint16_t p2p_port{0};
     std::vector<zano_p2pool::P2pEndpoint> p2p_peers;
+    bool no_seed_nodes{false};
     std::size_t p2p_max_peers{64};
     std::size_t p2p_message_burst{512};
     double p2p_message_rate{256.0};
@@ -325,6 +327,7 @@ void print_usage(const char* program) {
         << " [--p2p-bind ADDRESS]"
         << " [--p2p-port PORT]"
         << " [--p2p-peer HOST:PORT]..."
+        << " [--no-seed-nodes]"
         << " [--p2p-max-peers COUNT]"
         << " [--p2p-message-burst COUNT]"
         << " [--p2p-message-rate MESSAGES_PER_SECOND]"
@@ -348,6 +351,8 @@ void print_usage(const char* program) {
         << "  Stratum request rate: burst 256, refill 128/s\n"
         << "  P2P bind: 127.0.0.1\n"
         << "  P2P port: 0 (ephemeral development port)\n"
+        << "  testnet seed: 207.148.30.120:"
+        << zano_p2pool::kDefaultP2pSeedPort << '\n'
         << "  P2P max peers: 64\n"
         << "  P2P message rate: burst 512, refill 256/s\n"
         << "  metrics: disabled\n"
@@ -515,6 +520,11 @@ Options parse_args(int argc, char** argv) {
             }
             options.p2p = true;
             options.p2p_peers.push_back(parse_p2p_endpoint(argv[i]));
+            continue;
+        }
+
+        if (arg == "--no-seed-nodes") {
+            options.no_seed_nodes = true;
             continue;
         }
 
@@ -1024,7 +1034,11 @@ int main(int argc, char** argv) {
                               : "deferred until canonical PPLNS payout history exists")
                       << '\n';
 
-            for (const auto& peer : options.p2p_peers) {
+            const auto bootstrap_nodes = zano_p2pool::p2p_bootstrap_nodes(
+                handshake.network,
+                options.p2p_peers,
+                !options.no_seed_nodes);
+            for (const auto& peer : bootstrap_nodes) {
                 try {
                     p2p_runtime->connect_peer(peer);
                     std::cout << "P2P connected:  "
