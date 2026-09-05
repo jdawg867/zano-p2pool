@@ -244,6 +244,90 @@ int main() {
           StratumSubmissionDisposition::Duplicate);
 #endif
 
+    // Hostile stale/unknown submissions must fail before duplicate tracking
+    // or consensus mutation, even when an attacker rotates nonces aggressively.
+    {
+        StratumSessionRegistry hostile_sessions(config);
+        const std::uint64_t hostile_id = hostile_sessions.create_session();
+        hostile_sessions.login(
+            hostile_id,
+            login_request("hostile-miner", 3));
+        CHECK(hostile_sessions.publish_template(
+                  header,
+                  seed,
+                  10,
+                  difficulty128_from_decimal("4")) == 1);
+        CHECK(hostile_sessions.issue_work(hostile_id).job_version == 1);
+        CHECK(hostile_sessions.publish_template(
+                  next_header,
+                  seed,
+                  11,
+                  difficulty128_from_decimal("4")) == 2);
+        CHECK(hostile_sessions.issue_work(hostile_id).job_version == 2);
+
+        ShareChain hostile_chain;
+        StratumSubmissionRouter hostile_router(
+            hostile_sessions,
+            hostile_chain);
+
+        for (std::uint64_t i = 0; i < 256; ++i) {
+            StratumSubmission stale_attack;
+            stale_attack.nonce = UINT64_C(0x5000000000000000) + i;
+            stale_attack.header_hash = header;
+            const StratumSubmissionResult result = hostile_router.submit(
+                hostile_id,
+                stale_attack,
+                1'700'400'000 + i,
+                ProgPowZContextMode::Light);
+            CHECK(result.disposition == StratumSubmissionDisposition::Stale);
+            CHECK(result.job_version == 1);
+            CHECK(!hostile_router.was_submitted(
+                hostile_id,
+                1,
+                stale_attack.nonce));
+        }
+
+        for (std::uint64_t i = 0; i < 256; ++i) {
+            StratumSubmission unknown_attack;
+            unknown_attack.nonce = UINT64_C(0x6000000000000000) + i;
+            unknown_attack.header_hash.fill(
+                static_cast<std::uint8_t>(0x80U + (i & 0x3fU)));
+            const StratumSubmissionResult result = hostile_router.submit(
+                hostile_id,
+                unknown_attack,
+                1'700'401'000 + i,
+                ProgPowZContextMode::Light);
+            CHECK(result.disposition ==
+                  StratumSubmissionDisposition::UnknownWork);
+            CHECK(!hostile_router.was_submitted(
+                hostile_id,
+                2,
+                unknown_attack.nonce));
+        }
+
+        const std::uint64_t unauthenticated_id =
+            hostile_sessions.create_session();
+        for (std::uint64_t i = 0; i < 64; ++i) {
+            StratumSubmission unauthenticated;
+            unauthenticated.nonce = UINT64_C(0x7000000000000000) + i;
+            unauthenticated.header_hash = next_header;
+            CHECK(hostile_router.submit(
+                      unauthenticated_id,
+                      unauthenticated,
+                      1'700'402'000 + i,
+                      ProgPowZContextMode::Light).disposition ==
+                  StratumSubmissionDisposition::UnknownWork);
+            CHECK(!hostile_router.was_submitted(
+                unauthenticated_id,
+                2,
+                unauthenticated.nonce));
+        }
+
+        CHECK(hostile_chain.connected_size() == 0);
+        CHECK(hostile_chain.orphan_size() == 0);
+        CHECK(hostile_chain.best_tip() == nullptr);
+    }
+
     CHECK(std::string(stratum_submission_disposition_name(
               StratumSubmissionDisposition::AcceptedShare)) ==
           "accepted-share");

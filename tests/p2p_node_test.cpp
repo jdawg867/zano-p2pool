@@ -308,6 +308,60 @@ int main() {
     CHECK(p2p_node_message_penalty(neutral_result) ==
           kP2pProtocolViolationPenalty);
 
+    // Explicit capability abuse is attributable to the advertised node ID. It
+    // must reach the ban threshold without changing any local consensus state.
+    const std::size_t adversarial_connected_before =
+        requester_protocol.connected_share_count();
+    const P2pTipHint adversarial_tip_before = requester_protocol.local_tip();
+
+    P2pHandshake capability_abuser = make_handshake(0x35);
+    capability_abuser.capabilities = 0;
+    const P2pEnvelope capability_abuse =
+        make_p2p_share_announce_envelope(parent);
+    for (std::uint32_t i = 1; i <= 4; ++i) {
+        const P2pNodeMessageResult result = requester_protocol.handle(
+            requester_runtime,
+            capability_abuser,
+            capability_abuse,
+            child.timestamp,
+            ProgPowZContextMode::Light);
+        CHECK(result.status == P2pNodeMessageStatus::ShareProcessed);
+        CHECK(result.share_status ==
+              P2pShareReceiveStatus::CapabilityMissing);
+        CHECK(requester_runtime.peer_score(capability_abuser.node_id) ==
+              i * kP2pProtocolViolationPenalty);
+        CHECK(requester_protocol.connected_share_count() ==
+              adversarial_connected_before);
+        CHECK(requester_protocol.local_tip() == adversarial_tip_before);
+    }
+    CHECK(requester_runtime.peer_banned(capability_abuser.node_id));
+
+    // Unknown mining contexts are not attributable consensus abuse. A rotating
+    // stream must stay reputation-neutral and cannot create shares; transport
+    // rate limiting is the separate resource-exhaustion control.
+    const P2pHandshake unknown_work_peer = make_handshake(0x36);
+    for (std::uint64_t i = 0; i < 256; ++i) {
+        Share unknown_work = parent;
+        unknown_work.zano_height = 50'000 + i;
+        unknown_work.mining_header_hash.fill(
+            static_cast<std::uint8_t>(0xa0U + (i & 0x0fU)));
+        unknown_work.nonce = UINT64_C(0x8000000000000000) + i;
+        const P2pNodeMessageResult result = requester_protocol.handle(
+            requester_runtime,
+            unknown_work_peer,
+            make_p2p_share_announce_envelope(unknown_work),
+            child.timestamp,
+            ProgPowZContextMode::Light);
+        CHECK(result.status == P2pNodeMessageStatus::ShareProcessed);
+        CHECK(result.share_status ==
+              P2pShareReceiveStatus::UnknownWorkContext);
+    }
+    CHECK(requester_runtime.peer_score(unknown_work_peer.node_id) == 0);
+    CHECK(!requester_runtime.peer_banned(unknown_work_peer.node_id));
+    CHECK(requester_protocol.connected_share_count() ==
+          adversarial_connected_before);
+    CHECK(requester_protocol.local_tip() == adversarial_tip_before);
+
     // A parsed but impossible in-session handshake is an unambiguous protocol
     // violation. P2pNodeProtocol must report it to the runtime automatically.
     const P2pHandshake scored_peer = make_handshake(0x33);
@@ -348,6 +402,9 @@ int main() {
     CHECK(malformed_threw);
     CHECK(requester_runtime.peer_score(malformed_peer.node_id) == 0);
     CHECK(!requester_runtime.peer_banned(malformed_peer.node_id));
+    CHECK(requester_protocol.connected_share_count() ==
+          adversarial_connected_before);
+    CHECK(requester_protocol.local_tip() == adversarial_tip_before);
 
     leaf_runtime.stop();
     requester_runtime.stop();

@@ -255,7 +255,7 @@ exact-Zano Release suite passed 33/33 in 3.76 seconds, and branch CI #409 passed
 - [x] observability/metrics
 - [x] rate limits
 - [x] persistence recovery
-- [ ] adversarial tests
+- [x] adversarial tests
 - [ ] release builds
 - [ ] protocol specification
 
@@ -354,3 +354,15 @@ processed the submitted PoW blocks, including normal alternative-chain/reorganiz
 behavior on the low-difficulty testnet. This reconfirms the current-main path:
 
 `SRBMiner -> Stratum -> payout-capable share v2 -> exact ProgPoWZ validation -> sidechain -> PPLNS template -> canonical block reconstruction -> zanod submitblock`.
+
+Checkpoint 7 adds adversarial runtime regression coverage at the Stratum and P2P
+consensus boundaries. Stratum flood cases submit hundreds of stale and unknown work
+headers plus unauthenticated submissions and prove they fail before duplicate
+tracking or share-chain mutation. P2P cases prove explicit capability abuse accrues
+peer penalties and reaches the ban threshold without mutating consensus state,
+while rotating unknown-work-context shares remain reputation-neutral and leave the
+share chain unchanged. These tests complement the existing parser fuzzing and
+runtime token-bucket limits by exercising hostile but syntactically valid request
+sequences against normal admission paths. On 2026-09-04 the focused adversarial
+tests passed 2/2, `git diff --check` was clean, and the full exact-Zano regression
+suite passed 34/34 locally in 4.39 seconds.
