@@ -246,7 +246,8 @@ BlockTemplate RpcClient::get_block_template(
         call("getblocktemplate", json_to_string(params.get())));
 }
 
-void RpcClient::submit_block(const std::string& block_blob_hex) const {
+RpcBlockSubmissionResult RpcClient::submit_block(
+    const std::string& block_blob_hex) const {
     if (block_blob_hex.empty()) {
         throw std::invalid_argument("block blob cannot be empty");
     }
@@ -257,7 +258,15 @@ void RpcClient::submit_block(const std::string& block_blob_hex) const {
     }
     json_object_array_add(params.get(), json_object_new_string(block_blob_hex.c_str()));
 
-    const auto result_text = call("submitblock", json_to_string(params.get()));
+    std::string result_text;
+    try {
+        result_text = call("submitblock", json_to_string(params.get()));
+    } catch (const RpcError& error) {
+        if (error.code() == kZanoRpcErrorBlockAddedAsAlternative) {
+            return RpcBlockSubmissionResult::AlternativeAccepted;
+        }
+        throw;
+    }
     auto result = parse_json(result_text, "submitblock result");
 
     json_object* status = nullptr;
@@ -272,6 +281,8 @@ void RpcClient::submit_block(const std::string& block_blob_hex) const {
         throw std::runtime_error(
             "submitblock returned non-OK status: " + status_text);
     }
+
+    return RpcBlockSubmissionResult::Accepted;
 }
 
 }  // namespace zano_p2pool
