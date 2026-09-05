@@ -12,6 +12,7 @@
 #include "zano_p2pool/pow_target.hpp"
 #include "zano_p2pool/progpowz.hpp"
 #include "zano_p2pool/pplns_template.hpp"
+#include "zano_p2pool/rpc_backoff.hpp"
 #include "zano_p2pool/rpc_client.hpp"
 #include "zano_p2pool/share.hpp"
 #include "zano_p2pool/share_store.hpp"
@@ -56,6 +57,8 @@ constexpr std::uint16_t kDefaultStratumPort = 3333;
 constexpr std::uint16_t kDefaultMetricsPort = 37890;
 constexpr std::uint64_t kDefaultStratumDifficulty = 100000000;
 constexpr std::uint64_t kDefaultTemplateRefreshSeconds = 5;
+constexpr std::uint64_t kDefaultRpcReconnectInitialSeconds = 1;
+constexpr std::uint64_t kDefaultRpcReconnectMaxSeconds = 30;
 
 volatile std::sig_atomic_t g_stop_requested = 0;
 std::atomic<bool> g_template_refresh_requested{false};
@@ -86,6 +89,9 @@ struct Options {
     std::size_t stratum_request_burst{256};
     double stratum_request_rate{128.0};
     std::uint64_t template_refresh_seconds{kDefaultTemplateRefreshSeconds};
+    std::uint64_t rpc_reconnect_initial_seconds{
+        kDefaultRpcReconnectInitialSeconds};
+    std::uint64_t rpc_reconnect_max_seconds{kDefaultRpcReconnectMaxSeconds};
 
     bool p2p{false};
     std::string p2p_bind{"127.0.0.1"};
@@ -306,6 +312,8 @@ void print_usage(const char* program) {
         << " --wallet ZANO_ADDRESS"
         << " [--network testnet|mainnet]"
         << " [--rpc-url URL]"
+        << " [--rpc-reconnect-initial-seconds SECONDS]"
+        << " [--rpc-reconnect-max-seconds SECONDS]"
         << " [--stratum]"
         << " [--stratum-bind IPv4]"
         << " [--stratum-port PORT]"
@@ -330,6 +338,9 @@ void print_usage(const char* program) {
         << "  network: testnet\n"
         << "  testnet RPC: " << kTestnetRpcUrl << '\n'
         << "  mainnet RPC: " << kMainnetRpcUrl << '\n'
+        << "  RPC reconnect backoff: "
+        << kDefaultRpcReconnectInitialSeconds << " to "
+        << kDefaultRpcReconnectMaxSeconds << " seconds\n"
         << "  Stratum bind: 127.0.0.1\n"
         << "  Stratum port: " << kDefaultStratumPort << '\n'
         << "  Stratum difficulty: " << kDefaultStratumDifficulty << '\n'
@@ -371,6 +382,34 @@ Options parse_args(int argc, char** argv) {
                 throw std::runtime_error("--network requires a value");
             }
             options.network = parse_network(argv[i]);
+            continue;
+        }
+
+        if (arg == "--rpc-reconnect-initial-seconds") {
+            if (++i >= argc) {
+                throw std::runtime_error(
+                    "--rpc-reconnect-initial-seconds requires a value");
+            }
+            options.rpc_reconnect_initial_seconds = parse_u64_option(
+                "--rpc-reconnect-initial-seconds", argv[i]);
+            if (options.rpc_reconnect_initial_seconds == 0) {
+                throw std::runtime_error(
+                    "--rpc-reconnect-initial-seconds must be nonzero");
+            }
+            continue;
+        }
+
+        if (arg == "--rpc-reconnect-max-seconds") {
+            if (++i >= argc) {
+                throw std::runtime_error(
+                    "--rpc-reconnect-max-seconds requires a value");
+            }
+            options.rpc_reconnect_max_seconds = parse_u64_option(
+                "--rpc-reconnect-max-seconds", argv[i]);
+            if (options.rpc_reconnect_max_seconds == 0) {
+                throw std::runtime_error(
+                    "--rpc-reconnect-max-seconds must be nonzero");
+            }
             continue;
         }
 
@@ -577,6 +616,13 @@ Options parse_args(int argc, char** argv) {
         options.rpc_url = default_rpc_url(options.network);
     }
 
+    if (options.rpc_reconnect_max_seconds <
+        options.rpc_reconnect_initial_seconds) {
+        throw std::runtime_error(
+            "--rpc-reconnect-max-seconds must not be less than "
+            "--rpc-reconnect-initial-seconds");
+    }
+
     return options;
 }
 
@@ -651,18 +697,23 @@ void print_template(const LiveTemplate& live) {
               << '\n';
 }
 
-bool wait_for_refresh(std::uint64_t seconds) {
+bool wait_for_refresh(
+    std::chrono::milliseconds delay,
+    bool allow_forced_refresh = true) {
     constexpr auto kSlice = std::chrono::milliseconds(100);
-    const std::uint64_t slices = seconds * 10;
-    for (std::uint64_t i = 0;
-         i < slices && !runtime_stop_requested();
-         ++i) {
+    const auto deadline = std::chrono::steady_clock::now() + delay;
+    while (std::chrono::steady_clock::now() < deadline &&
+           !runtime_stop_requested()) {
         if (g_template_refresh_requested.exchange(
                 false,
-                std::memory_order_acq_rel)) {
+                std::memory_order_acq_rel) &&
+            allow_forced_refresh) {
             return true;
         }
-        std::this_thread::sleep_for(kSlice);
+        const auto remaining = deadline - std::chrono::steady_clock::now();
+        std::this_thread::sleep_for(std::min(
+            kSlice,
+            std::chrono::duration_cast<std::chrono::milliseconds>(remaining)));
     }
     return false;
 }
@@ -729,16 +780,44 @@ int main(int argc, char** argv) {
                 "canonical PPLNS block construction");
         }
 
-        const zano_p2pool::RpcClient rpc(options.rpc_url);
-        LiveTemplate live = fetch_live_template(rpc, options);
-        print_template(live);
-
-        if (!options.stratum && !options.p2p && !options.metrics) {
-            return 0;
+        const bool long_lived_runtime =
+            options.stratum || options.p2p || options.metrics;
+        if (long_lived_runtime) {
+            std::signal(SIGINT, handle_signal);
+            std::signal(SIGTERM, handle_signal);
         }
 
-        std::signal(SIGINT, handle_signal);
-        std::signal(SIGTERM, handle_signal);
+        const zano_p2pool::RpcClient rpc(options.rpc_url);
+        zano_p2pool::RpcRetryBackoff rpc_backoff(
+            std::chrono::seconds(options.rpc_reconnect_initial_seconds),
+            std::chrono::seconds(options.rpc_reconnect_max_seconds));
+        LiveTemplate live;
+        std::uint64_t initial_template_failures = 0;
+        while (true) {
+            try {
+                live = fetch_live_template(rpc, options);
+                rpc_backoff.record_success();
+                break;
+            } catch (const std::exception& e) {
+                if (!long_lived_runtime) {
+                    throw;
+                }
+                ++initial_template_failures;
+                const auto retry_delay = rpc_backoff.record_failure();
+                std::cerr
+                    << "Zano RPC unavailable during startup: " << e.what()
+                    << "; retrying in " << retry_delay.count() << " ms\n";
+                static_cast<void>(wait_for_refresh(retry_delay, false));
+                if (runtime_stop_requested()) {
+                    return 0;
+                }
+            }
+        }
+        print_template(live);
+
+        if (!long_lived_runtime) {
+            return 0;
+        }
 
         const zano_p2pool::SidechainParameters sidechain_parameters =
             zano_p2pool::canonical_sidechain_parameters(
@@ -754,7 +833,8 @@ int main(int argc, char** argv) {
         std::atomic<std::uint64_t> blocks_submitted_total{0};
         std::atomic<std::uint64_t> blocks_alternative_total{0};
         std::atomic<std::uint64_t> block_submission_failures_total{0};
-        std::atomic<std::uint64_t> template_refresh_failures_total{0};
+        std::atomic<std::uint64_t> template_refresh_failures_total{
+            initial_template_failures};
 
         std::unique_ptr<zano_p2pool::ShareStore> share_store;
         if (!options.no_share_store) {
@@ -1212,17 +1292,44 @@ int main(int argc, char** argv) {
 
         std::cout << "Template refresh: "
                   << options.template_refresh_seconds << " seconds\n";
+        std::cout << "RPC reconnect:    "
+                  << options.rpc_reconnect_initial_seconds << "-"
+                  << options.rpc_reconnect_max_seconds << " seconds\n";
         std::cout << "Press Ctrl+C to stop.\n";
 
+        std::chrono::milliseconds refresh_delay = std::chrono::seconds(
+            options.template_refresh_seconds);
+        bool rpc_unavailable = false;
         while (!runtime_stop_requested()) {
             const bool forced_refresh =
-                wait_for_refresh(options.template_refresh_seconds);
+                wait_for_refresh(refresh_delay, !rpc_unavailable);
             if (runtime_stop_requested()) {
                 break;
             }
 
+            LiveTemplate next;
             try {
-                LiveTemplate next = fetch_live_template(rpc, options);
+                next = fetch_live_template(rpc, options);
+                if (rpc_unavailable) {
+                    std::cout << "Zano RPC connection restored.\n";
+                }
+                rpc_unavailable = false;
+                rpc_backoff.record_success();
+                refresh_delay = std::chrono::seconds(
+                    options.template_refresh_seconds);
+            } catch (const std::exception& e) {
+                template_refresh_failures_total.fetch_add(
+                    1,
+                    std::memory_order_relaxed);
+                rpc_unavailable = true;
+                refresh_delay = rpc_backoff.record_failure();
+                std::cerr
+                    << "template refresh failed: " << e.what()
+                    << "; retrying in " << refresh_delay.count() << " ms\n";
+                continue;
+            }
+
+            try {
                 observed_zano_height.store(
                     next.block.height,
                     std::memory_order_relaxed);
@@ -1291,7 +1398,7 @@ int main(int argc, char** argv) {
                     1,
                     std::memory_order_relaxed);
                 std::cerr
-                    << "template refresh failed: " << e.what() << '\n';
+                    << "template update failed: " << e.what() << '\n';
             }
         }
 

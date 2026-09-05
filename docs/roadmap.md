@@ -10,8 +10,16 @@
 - [x] parser unit test
 - [x] live integration test against a synced Zano **testnet** `zanod`
 - [x] sanitized live testnet metadata fixture and regression test
-- [ ] robust RPC error/status handling
-- [ ] daemon reconnect/backoff
+- [x] robust RPC error/status handling
+- [x] daemon reconnect/backoff
+
+The RPC client now preserves typed daemon errors and classifies Zano's valid
+`Block added as alternative` response as an accepted block-submission outcome,
+while genuine RPC errors and non-OK result statuses remain fail-closed. Long-lived
+Stratum, P2P, and metrics modes tolerate `zanod` being unavailable at startup or
+during template refresh, retry with configurable bounded exponential backoff,
+coalesce forced refresh requests while disconnected, and reset to the initial
+delay after the daemon recovers. One-shot template queries remain fail-fast.
 
 ## Phase 2 — ProgPoWZ verification
 
@@ -256,7 +264,7 @@ exact-Zano Release suite passed 33/33 in 3.76 seconds, and branch CI #409 passed
 - [x] rate limits
 - [x] persistence recovery
 - [x] adversarial tests
-- [ ] release builds
+- [x] release builds
 - [ ] protocol specification
 
 Checkpoint 1 establishes canonical sidechain identity. `SidechainParameters` has a

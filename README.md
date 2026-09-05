@@ -200,6 +200,11 @@ Runtime observability is also opt-in and defaults to loopback. Enable the Promet
 
 The server exposes `GET /metrics` and `GET /healthz`. Metrics are intentionally label-free and do not expose wallet addresses, node IDs, share IDs, peer identities, or other payout-identifying values. The Stratum work publication counter is named `zano_p2pool_stratum_job_sequence`; runtime logs use `Stratum job #N` so this process-local sequence cannot be confused with the zano-p2pool, P2P, or sidechain-share protocol version.
 
+Long-running Stratum, P2P, and metrics modes keep retrying if `zanod` is
+temporarily unavailable. RPC retries use bounded exponential backoff from 1 to
+30 seconds by default. Override the bounds with
+`--rpc-reconnect-initial-seconds` and `--rpc-reconnect-max-seconds`.
+
 ## Current Zano network defaults
 
 From the current Zano source:
