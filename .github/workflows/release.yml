@@ -1,0 +1,158 @@
+name: Release
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  linux-x86_64-package:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout zano-p2pool
+        uses: actions/checkout@v4
+
+      - name: Checkout audited Zano consensus sources
+        uses: actions/checkout@v4
+        with:
+          repository: hyle-team/zano
+          ref: 1508cf6ae3ef44a52d66137d30f800b06ce917ee
+          path: zano-src
+          sparse-checkout: |
+            contrib/ethereum/libethash
+            contrib/epee/include
+            contrib/eos_portable_archive
+            contrib/zlib
+            src
+          sparse-checkout-cone-mode: false
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            file \
+            libboost-dev \
+            libboost-serialization-dev \
+            libcurl4-openssl-dev \
+            libjson-c-dev \
+            pkg-config
+
+      - name: Configure exact-Zano Release build
+        run: |
+          cmake -S . -B build-zano \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DZANO_P2POOL_ZANO_SOURCE_DIR="$GITHUB_WORKSPACE/zano-src"
+
+      - name: Build exact-Zano Release binaries
+        run: cmake --build build-zano -j2
+
+      - name: Run exact-Zano regression suite
+        run: ctest --test-dir build-zano --output-on-failure
+
+      - name: Package Linux x86_64 release
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            VERSION="${GITHUB_REF_NAME}"
+          else
+            VERSION="dev-${GITHUB_SHA:0:12}"
+          fi
+
+          PACKAGE="zano-p2pool-${VERSION}-linux-x86_64"
+          ROOT="dist/${PACKAGE}"
+
+          mkdir -p "${ROOT}/bin" "${ROOT}/share/doc/zano-p2pool"
+          cp build-zano/zano-p2pool "${ROOT}/bin/"
+          cp build-zano/zano-p2pool-header "${ROOT}/bin/"
+          cp README.md "${ROOT}/share/doc/zano-p2pool/"
+          cp docs/progpowz.md "${ROOT}/share/doc/zano-p2pool/"
+
+          strip --strip-unneeded "${ROOT}/bin/zano-p2pool"
+          strip --strip-unneeded "${ROOT}/bin/zano-p2pool-header"
+
+          {
+            echo "zano-p2pool commit: ${GITHUB_SHA}"
+            echo "audited Zano commit: 1508cf6ae3ef44a52d66137d30f800b06ce917ee"
+            echo "build type: Release"
+            echo "target: Linux x86_64"
+            echo "runner: ubuntu-22.04"
+          } > "${ROOT}/BUILD-INFO.txt"
+
+          {
+            echo "zano-p2pool dynamic dependencies:"
+            ldd "${ROOT}/bin/zano-p2pool"
+            echo
+            echo "zano-p2pool-header dynamic dependencies:"
+            ldd "${ROOT}/bin/zano-p2pool-header"
+          } > "${ROOT}/DEPENDENCIES.txt"
+
+          if grep -q "not found" "${ROOT}/DEPENDENCIES.txt"; then
+            cat "${ROOT}/DEPENDENCIES.txt"
+            echo "Release package has unresolved dynamic dependencies" >&2
+            exit 1
+          fi
+
+          file "${ROOT}/bin/zano-p2pool"
+          file "${ROOT}/bin/zano-p2pool-header"
+          "${ROOT}/bin/zano-p2pool" --help >/dev/null
+
+          tar -C dist -czf "dist/${PACKAGE}.tar.gz" "${PACKAGE}"
+          (
+            cd dist
+            sha256sum "${PACKAGE}.tar.gz" > "${PACKAGE}.tar.gz.sha256"
+          )
+
+          echo "PACKAGE=${PACKAGE}" >> "$GITHUB_ENV"
+
+      - name: Upload release package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zano-p2pool-release-${{ github.sha }}
+          path: |
+            dist/${{ env.PACKAGE }}.tar.gz
+            dist/${{ env.PACKAGE }}.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  publish-github-release:
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: linux-x86_64-package
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download release package artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: zano-p2pool-release-${{ github.sha }}
+          path: dist
+
+      - name: Publish GitHub release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" dist/* --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" \
+              dist/* \
+              --verify-tag \
+              --generate-notes \
+              --title "${GITHUB_REF_NAME}"
+          fi
