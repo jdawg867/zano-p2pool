@@ -259,7 +259,7 @@ exact-Zano Release suite passed 33/33 in 3.76 seconds, and branch CI #409 passed
 ## Phase 7 — public network hardening
 
 - [x] mainnet-compatible sidechain parameters
-- [ ] seed nodes
+- [x] seed nodes
 - [x] observability/metrics
 - [x] rate limits
 - [x] persistence recovery
@@ -374,3 +374,17 @@ runtime token-bucket limits by exercising hostile but syntactically valid reques
 sequences against normal admission paths. On 2026-09-04 the focused adversarial
 tests passed 2/2, `git diff --check` was clean, and the full exact-Zano regression
 suite passed 34/34 locally in 4.39 seconds.
+
+Checkpoint 8 adds the first built-in testnet seed node at
+`207.148.30.120:37888`. Explicit `--p2p-peer` entries are combined with the
+network seed list and de-duplicated, while `--no-seed-nodes` supports the seed
+operator itself and isolated networks. Mainnet intentionally retains an empty
+seed list until a mainnet deployment is separately validated.
+
+On 2026-09-06 the exact-Zano Release suite passed 37/37 locally in 4.33 seconds,
+and branch CI passed both `build-and-test` and `progpowz-compat`. The dedicated
+Vultr testnet seed reported healthy persistence and a public listener on
+`207.148.30.120:37888`. A second node then started without any explicit
+`--p2p-peer`, reached the seed through the built-in list, completed the P2P
+handshake, and shut down cleanly after the bounded live test. This validates the
+default testnet bootstrap path end to end.
