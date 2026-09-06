@@ -397,3 +397,21 @@ capability semantics; TCP handshake order; trust-promotion boundary; payload,
 rate, and peer limits; and fail-closed behavior. The specification is derived
 from the canonical serializers, parsers, and pinned regression vectors so the
 document distinguishes transport validity from local consensus acceptance.
+
+## Phase 8 — operator and release readiness
+
+- [x] packaged Linux systemd service and environment template
+- [x] installation, health-check, upgrade, and rollback guide
+- [ ] release-archive installation smoke test
+- [ ] sustained multi-node testnet soak test
+- [ ] backup and recovery drill
+- [ ] permanent mainnet seed infrastructure
+- [ ] first tagged public beta release
+
+Checkpoint 1 converts the validated temporary VPS configuration into reusable
+operator assets without embedding a wallet, peer, or server address. Release
+archives carry a hardened systemd unit, a loopback-safe environment template,
+and an operator guide covering checksum verification, least-privilege install,
+listener exposure, health checks, upgrades, rollback, and share-store backup.
+Both default seed lists remain empty; permanent seed infrastructure is deferred
+until mainnet readiness.

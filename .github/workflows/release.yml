@@ -103,11 +103,19 @@ jobs:
           PACKAGE="zano-p2pool-${VERSION}-linux-x86_64"
           ROOT="dist/${PACKAGE}"
 
-          mkdir -p "${ROOT}/bin" "${ROOT}/share/doc/zano-p2pool"
+          mkdir -p \
+            "${ROOT}/bin" \
+            "${ROOT}/share/doc/zano-p2pool" \
+            "${ROOT}/share/zano-p2pool/systemd"
           cp build-zano/zano-p2pool "${ROOT}/bin/"
           cp build-zano/zano-p2pool-header "${ROOT}/bin/"
           cp README.md "${ROOT}/share/doc/zano-p2pool/"
           cp docs/progpowz.md "${ROOT}/share/doc/zano-p2pool/"
+          cp docs/p2p-protocol.md "${ROOT}/share/doc/zano-p2pool/"
+          cp docs/operator-deployment.md "${ROOT}/share/doc/zano-p2pool/"
+          cp packaging/systemd/zano-p2pool.service \
+            packaging/systemd/zano-p2pool.env.example \
+            "${ROOT}/share/zano-p2pool/systemd/"
 
           strip --strip-unneeded "${ROOT}/bin/zano-p2pool"
           strip --strip-unneeded "${ROOT}/bin/zano-p2pool-header"
