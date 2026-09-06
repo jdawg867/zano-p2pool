@@ -234,7 +234,9 @@ Zano testnet itself is a testnet build (`cmake -D TESTNET=TRUE ..`).
 
 See the [`P2P protocol specification`](docs/p2p-protocol.md) for the current
 public wire contract and [`docs/roadmap.md`](docs/roadmap.md) for development
-status.
+status. The [`Linux operator deployment guide`](docs/operator-deployment.md)
+covers the packaged systemd service, safe default binds, health validation,
+upgrades, and rollback.
 
 ## Safety
 
