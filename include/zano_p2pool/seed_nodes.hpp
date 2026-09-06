@@ -6,8 +6,6 @@
 
 namespace zano_p2pool {
 
-inline constexpr std::uint16_t kDefaultP2pSeedPort = 37888;
-
 [[nodiscard]] std::vector<P2pEndpoint> default_p2p_seed_nodes(
     P2pNetwork network);
 
