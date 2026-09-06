@@ -402,7 +402,7 @@ document distinguishes transport validity from local consensus acceptance.
 
 - [x] packaged Linux systemd service and environment template
 - [x] installation, health-check, upgrade, and rollback guide
-- [ ] release-archive installation smoke test
+- [x] release-archive installation smoke test
 - [ ] sustained multi-node testnet soak test
 - [ ] backup and recovery drill
 - [ ] permanent mainnet seed infrastructure
@@ -415,3 +415,10 @@ and an operator guide covering checksum verification, least-privilege install,
 listener exposure, health checks, upgrades, rollback, and share-store backup.
 Both default seed lists remain empty; permanent seed infrastructure is deferred
 until mainnet readiness.
+
+Checkpoint 2 adds a fail-closed installation smoke test for the exact archive
+produced by the Release workflow. It verifies the published checksum, rejects
+unsafe or out-of-root archive members, requires every binary, document, service,
+and configuration file, runs the packaged node's `--help` path, rechecks dynamic
+dependency policy, asserts loopback listener defaults, stages the documented
+installation modes, and parses the staged systemd unit before artifact upload.
