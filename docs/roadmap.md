@@ -265,7 +265,7 @@ exact-Zano Release suite passed 33/33 in 3.76 seconds, and branch CI #409 passed
 - [x] persistence recovery
 - [x] adversarial tests
 - [x] release builds
-- [ ] protocol specification
+- [x] protocol specification
 
 Checkpoint 1 establishes canonical sidechain identity. `SidechainParameters` has a
 deterministic domain-separated serialization and 32-byte `SidechainId`; P2P protocol
@@ -388,3 +388,11 @@ Vultr testnet seed reported healthy persistence and a public listener on
 `--p2p-peer`, reached the seed through the built-in list, completed the P2P
 handshake, and shut down cleanly after the bounded live test. This validates the
 default testnet bootstrap path end to end.
+
+Checkpoint 9 publishes the protocol-v2 wire contract in
+`docs/p2p-protocol.md`. It records the byte-level envelope, handshake, share,
+sync, tip, and mining-context encodings; canonical sidechain identifiers;
+capability semantics; TCP handshake order; trust-promotion boundary; payload,
+rate, and peer limits; and fail-closed behavior. The specification is derived
+from the canonical serializers, parsers, and pinned regression vectors so the
+document distinguishes transport validity from local consensus acceptance.

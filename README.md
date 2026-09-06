@@ -232,7 +232,9 @@ Zano testnet itself is a testnet build (`cmake -D TESTNET=TRUE ..`).
 
 ## Development roadmap
 
-See [`docs/roadmap.md`](docs/roadmap.md).
+See the [`P2P protocol specification`](docs/p2p-protocol.md) for the current
+public wire contract and [`docs/roadmap.md`](docs/roadmap.md) for development
+status.
 
 ## Safety
 
