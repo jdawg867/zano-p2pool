@@ -259,7 +259,7 @@ exact-Zano Release suite passed 33/33 in 3.76 seconds, and branch CI #409 passed
 ## Phase 7 — public network hardening
 
 - [x] mainnet-compatible sidechain parameters
-- [x] seed nodes
+- [x] seed-node bootstrap framework (no active defaults)
 - [x] observability/metrics
 - [x] rate limits
 - [x] persistence recovery
@@ -375,19 +375,20 @@ sequences against normal admission paths. On 2026-09-04 the focused adversarial
 tests passed 2/2, `git diff --check` was clean, and the full exact-Zano regression
 suite passed 34/34 locally in 4.39 seconds.
 
-Checkpoint 8 adds the first built-in testnet seed node at
-`207.148.30.120:37888`. Explicit `--p2p-peer` entries are combined with the
-network seed list and de-duplicated, while `--no-seed-nodes` supports the seed
-operator itself and isolated networks. Mainnet intentionally retains an empty
-seed list until a mainnet deployment is separately validated.
+Checkpoint 8 adds the built-in seed-node bootstrap framework. Explicit
+`--p2p-peer` entries are combined with the network seed list and de-duplicated,
+while `--no-seed-nodes` supports seed operators and isolated networks. The
+temporary testnet seed used for live validation was retired after the test, so
+both network seed lists are intentionally empty until permanent mainnet
+infrastructure is selected.
 
 On 2026-09-06 the exact-Zano Release suite passed 37/37 locally in 4.33 seconds,
-and branch CI passed both `build-and-test` and `progpowz-compat`. The dedicated
-Vultr testnet seed reported healthy persistence and a public listener on
-`207.148.30.120:37888`. A second node then started without any explicit
-`--p2p-peer`, reached the seed through the built-in list, completed the P2P
-handshake, and shut down cleanly after the bounded live test. This validates the
-default testnet bootstrap path end to end.
+and branch CI passed both `build-and-test` and `progpowz-compat`. The temporary
+Vultr testnet seed reported healthy persistence and a public listener. A second
+node then started without any explicit `--p2p-peer`, reached it through the
+built-in list, completed the P2P handshake, and shut down cleanly after the
+bounded live test. This validated the bootstrap path before the temporary VPS
+and its default endpoint were retired.
 
 Checkpoint 9 publishes the protocol-v2 wire contract in
 `docs/p2p-protocol.md`. It records the byte-level envelope, handshake, share,
