@@ -161,6 +161,12 @@ jobs:
 
           echo "PACKAGE=${PACKAGE}" >> "$GITHUB_ENV"
 
+      - name: Smoke-test release archive installation
+        run: |
+          packaging/smoke-test-release.sh \
+            "dist/${PACKAGE}.tar.gz" \
+            "dist/${PACKAGE}.tar.gz.sha256"
+
       - name: Upload release package artifact
         uses: actions/upload-artifact@v4
         with:
