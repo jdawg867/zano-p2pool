@@ -1,3 +1,4 @@
+#include "hf6_test_suffix.hpp"
 #include "test_check.hpp"
 
 #include "zano_p2pool/crypto_hash.hpp"
@@ -57,7 +58,8 @@ using namespace zano_p2pool;
     // dummy because this checkpoint validates transport/structural anchoring,
     // not miner-transaction cryptographic proofs.
     std::vector<std::uint8_t> suffix{0x00, 0x00, 0x02, 0x2f};
-    suffix.insert(suffix.end(), 16, 0xa5);
+    const auto range = make_structural_range_proof();
+    suffix.insert(suffix.end(), range.begin(), range.end());
     suffix.push_back(0x30);
     suffix.insert(suffix.end(), 96, 0x5a);
     suffix.push_back(0x00);  // zero regular transaction hashes

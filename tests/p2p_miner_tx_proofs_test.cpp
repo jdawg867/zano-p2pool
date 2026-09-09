@@ -1,3 +1,4 @@
+#include "hf6_test_suffix.hpp"
 #include "test_check.hpp"
 
 #include "zano_p2pool/crypto_hash.hpp"
@@ -280,13 +281,13 @@ void append_scalar_vector(
     return serialized;
 #else
     static_cast<void>(prefix);
-    return std::vector<std::uint8_t>(16, 0xa5);
+    return make_structural_range_proof();
 #endif
 }
 
 [[nodiscard]] std::vector<std::uint8_t> make_dummy_range_proof(
     std::uint8_t fill) {
-    return std::vector<std::uint8_t>(16, fill);
+    return make_structural_range_proof(fill);
 }
 
 [[nodiscard]] std::vector<std::uint8_t> make_block_blob(
@@ -466,10 +467,13 @@ int main() {
     noncanonical_range.insert(noncanonical_range.begin() + 1, 0x00);
     P2pMiningContextProposal malformed =
         make_proposal(prefix, balance_proof, noncanonical_range);
-    const auto malformed_anchored = inspect(malformed);
-    CHECK(verify_p2p_mining_context_proofs(
-              malformed, malformed_anchored, payout).status ==
-          P2pMinerTxProofStatus::MalformedRangeProof);
+    bool malformed_rejected = false;
+    try {
+        static_cast<void>(inspect(malformed));
+    } catch (const std::runtime_error&) {
+        malformed_rejected = true;
+    }
+    CHECK(malformed_rejected);
 
     P2pPayoutAddress wrong_payout = payout;
     wrong_payout.spend_public_key = {};

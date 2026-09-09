@@ -56,7 +56,8 @@ struct MiningHeaderWork {
 
 // Locates and parses block.tx_hashes, which is the final serialized field in a
 // current HF6 block. The current PoW coinbase suffix is structurally validated
-// so a random byte inside a hash cannot be mistaken for the vector count.
+// by walking the range/balance proof fields forward to the vector count.
+// This checks serialization only; cryptographic proof verification is separate.
 [[nodiscard]] ParsedTxHashTrailer parse_hf6_tx_hash_trailer(
     std::span<const std::uint8_t> block_blob,
     std::size_t miner_suffix_offset);

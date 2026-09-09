@@ -133,66 +133,6 @@ void append_varint(std::vector<std::uint8_t>& out, std::uint64_t value) {
     } while (value != 0);
 }
 
-[[nodiscard]] bool decode_varint_at(
-    std::span<const std::uint8_t> data,
-    std::size_t offset,
-    std::uint64_t& value,
-    std::size_t& consumed) {
-    if (offset >= data.size()) {
-        return false;
-    }
-
-    value = 0;
-    consumed = 0;
-    unsigned shift = 0;
-    for (unsigned i = 0; i < 10 && offset + i < data.size(); ++i) {
-        const std::uint8_t byte = data[offset + i];
-        if (shift == 63 && (byte & 0x7eU) != 0U) {
-            return false;
-        }
-        value |= static_cast<std::uint64_t>(byte & 0x7fU) << shift;
-        ++consumed;
-        if ((byte & 0x80U) == 0U) {
-            return consumed == encoded_varint_size(value);
-        }
-        shift += 7;
-    }
-    return false;
-}
-
-[[nodiscard]] bool has_current_hf6_coinbase_suffix_shape(
-    std::span<const std::uint8_t> block_blob,
-    std::size_t miner_suffix_offset,
-    std::size_t tx_hashes_offset) {
-    // Current HF6 PoW coinbase transaction suffix:
-    //   attachment vector count = 0
-    //   signature vector count  = 0
-    //   proof vector count      = 2
-    //   proof[0] tag            = 47 (zc_outs_range_proof)
-    //   proof[1] tag            = 48 (zc_balance_proof)
-    // The balance proof is a fixed 96-byte generic double-Schnorr payload,
-    // therefore its serialized variant occupies 97 bytes including tag 48.
-    constexpr std::size_t kBalanceProofSerializedSize = 97;
-
-    if (miner_suffix_offset > block_blob.size() ||
-        tx_hashes_offset > block_blob.size() ||
-        tx_hashes_offset < miner_suffix_offset + 4 + kBalanceProofSerializedSize) {
-        return false;
-    }
-
-    if (block_blob[miner_suffix_offset] != 0 ||
-        block_blob[miner_suffix_offset + 1] != 0 ||
-        block_blob[miner_suffix_offset + 2] != 2 ||
-        block_blob[miner_suffix_offset + 3] != 47) {
-        return false;
-    }
-
-    const std::size_t balance_proof_offset =
-        tx_hashes_offset - kBalanceProofSerializedSize;
-    return balance_proof_offset > miner_suffix_offset + 3 &&
-           block_blob[balance_proof_offset] == 48;
-}
-
 [[nodiscard]] Hash256 hash_pair(const Hash256& left, const Hash256& right) {
     std::array<std::uint8_t, 64> pair{};
     std::copy(left.begin(), left.end(), pair.begin());
@@ -283,64 +223,68 @@ ParsedTxHashTrailer parse_hf6_tx_hash_trailer(
         throw std::runtime_error("miner suffix offset is outside block blob");
     }
 
-    std::vector<ParsedTxHashTrailer> candidates;
-    const std::size_t max_count =
-        (block_blob.size() - miner_suffix_offset) / 32;
-
-    for (std::size_t count = 0; count <= max_count; ++count) {
-        if (count > std::numeric_limits<std::uint64_t>::max()) {
-            break;
+    Cursor cursor(block_blob);
+    cursor.skip(miner_suffix_offset);
+    // Read only canonical counts in the suffix. Payload bytes are never markers.
+    const auto read_count = [&]() {
+        const auto start = cursor.position();
+        const auto count = cursor.read_varint();
+        if (cursor.position() - start != encoded_varint_size(count)) {
+            throw std::runtime_error("non-canonical HF6 suffix count");
         }
-        const auto count64 = static_cast<std::uint64_t>(count);
-        const std::size_t count_bytes = encoded_varint_size(count64);
-
-        if (count > (std::numeric_limits<std::size_t>::max() - count_bytes) / 32) {
-            break;
-        }
-        const std::size_t trailer_size = count_bytes + count * 32;
-        if (trailer_size > block_blob.size() - miner_suffix_offset) {
-            continue;
-        }
-
-        const std::size_t offset = block_blob.size() - trailer_size;
-        if (!has_current_hf6_coinbase_suffix_shape(
-                block_blob, miner_suffix_offset, offset)) {
-            continue;
-        }
-
-        std::uint64_t decoded_count = 0;
-        std::size_t consumed = 0;
-        if (!decode_varint_at(block_blob, offset, decoded_count, consumed) ||
-            decoded_count != count64 || consumed != count_bytes) {
-            continue;
-        }
-
-        ParsedTxHashTrailer candidate;
-        candidate.serialized_offset = offset;
-        candidate.serialized_size = trailer_size;
-        candidate.hashes.reserve(count);
-
-        std::size_t pos = offset + count_bytes;
-        for (std::size_t i = 0; i < count; ++i) {
-            Hash256 hash{};
-            std::copy_n(block_blob.begin() + static_cast<std::ptrdiff_t>(pos),
-                        32,
-                        hash.begin());
-            candidate.hashes.push_back(hash);
-            pos += 32;
-        }
-        candidates.push_back(std::move(candidate));
+        return count;
+    };
+    if (read_count() != 0 || read_count() != 0 || read_count() != 2 ||
+        cursor.read_u8() != 47) {
+        throw std::runtime_error("unexpected current HF6 coinbase proof shape");
     }
+    const auto skip_keys = [&](std::uint64_t maximum) {
+        const auto count = read_count();
+        if (count > maximum) {
+            throw std::runtime_error("HF6 proof vector exceeds bound");
+        }
+        cursor.skip(static_cast<std::size_t>(count) * 32);
+        return count;
+    };
+    // BPP L, R, A0, A, B, r, s, delta; then UG commitments, y0s, y1s, c.
+    const auto left = skip_keys(11);
+    const auto right = skip_keys(11);
+    cursor.skip(6 * 32);
+    const auto outputs = skip_keys(32);
+    const auto y0s = skip_keys(32);
+    const auto y1s = skip_keys(32);
+    cursor.skip(32);
+    std::uint64_t rounds = 6;
+    for (std::uint64_t capacity = 1; capacity < outputs; capacity *= 2) {
+        ++rounds;
+    }
+    if (outputs < 2 || y0s != outputs || y1s != outputs ||
+        left != rounds || right != rounds) {
+        throw std::runtime_error("inconsistent current HF6 range-proof counts");
+    }
+    if (cursor.read_u8() != 48) {
+        throw std::runtime_error("missing current HF6 balance proof");
+    }
+    cursor.skip(96);
 
-    if (candidates.empty()) {
-        throw std::runtime_error(
-            "could not locate current HF6 block transaction-hash trailer");
+    ParsedTxHashTrailer result;
+    result.serialized_offset = cursor.position();
+    const auto count = read_count();
+    const auto remaining = block_blob.size() - cursor.position();
+    if (remaining % 32 != 0 || count != remaining / 32) {
+        throw std::runtime_error("invalid current HF6 transaction-hash trailer length");
     }
-    if (candidates.size() != 1) {
-        throw std::runtime_error(
-            "ambiguous current HF6 block transaction-hash trailer");
+    result.serialized_size = block_blob.size() - result.serialized_offset;
+    result.hashes.reserve(static_cast<std::size_t>(count));
+    for (std::uint64_t i = 0; i < count; ++i) {
+        Hash256 hash{};
+        std::copy_n(block_blob.begin() +
+                        static_cast<std::ptrdiff_t>(cursor.position()),
+                    32, hash.begin());
+        result.hashes.push_back(hash);
+        cursor.skip(32);
     }
-    return std::move(candidates.front());
+    return result;
 }
 
 Hash256 transaction_tree_hash(

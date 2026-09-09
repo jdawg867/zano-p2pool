@@ -1,3 +1,4 @@
+#include "hf6_test_suffix.hpp"
 #include "zano_p2pool/crypto_hash.hpp"
 #include "zano_p2pool/mining_header.hpp"
 
@@ -37,7 +38,8 @@ std::vector<std::uint8_t> make_current_coinbase_suffix(
     // prefix hash. We only model the current serialized suffix shape needed to
     // locate the final block.tx_hashes vector.
     std::vector<std::uint8_t> suffix{0x00, 0x00, 0x02, 0x2f};
-    suffix.insert(suffix.end(), 16, 0xa5);  // dummy range-proof payload
+    const auto range = make_structural_range_proof();
+    suffix.insert(suffix.end(), range.begin(), range.end());  // structurally valid dummy proof
     suffix.push_back(0x30);                // zc_balance_proof tag 48
     suffix.insert(suffix.end(), 96, 0x5a); // fixed balance-proof payload
 
@@ -136,8 +138,7 @@ int main() {
     const auto expected_three = pair_hash(miner.hash, pair_hash(tx1, tx2));
     CHECK(transaction_tree_hash(miner.hash, two_txs) == expected_three);
 
-    // The reverse trailer locator must also work when regular tx hashes are
-    // present, without parsing the 870-byte range proof.
+    // The forward trailer parser also handles regular transaction hashes.
     std::vector<std::uint8_t> block_with_txs = header_bytes;
     block_with_txs.insert(
         block_with_txs.end(), miner_prefix_bytes.begin(), miner_prefix_bytes.end());
@@ -148,6 +149,56 @@ int main() {
     CHECK(work_with_txs.tx_hashes.hashes[0] == tx1);
     CHECK(work_with_txs.tx_hashes.hashes[1] == tx2);
     CHECK(work_with_txs.tx_tree_root == expected_three);
+
+    // A real two-hash trailer plus a false zero-count candidate inside tx2.
+    // The old reverse scan sees tag 48 at candidate_offset - 97 for both.
+    auto collision = block_with_txs;
+    collision.back() = 0;
+    collision[collision.size() - 1 - 97] = 48;
+    const auto collision_work = derive_mining_header_work(collision);
+    CHECK(collision_work.tx_hashes.serialized_offset ==
+          work_with_txs.tx_hashes.serialized_offset);
+    CHECK(collision_work.tx_hashes.hashes.size() == 2);
+    auto collision_tx2 = tx2;
+    collision_tx2.back() = 0;
+    CHECK(collision_work.tx_hashes.hashes[0] == tx1);
+    CHECK(collision_work.tx_hashes.hashes[1] == collision_tx2);
+    CHECK(collision_work.tx_tree_root ==
+          pair_hash(miner.hash, pair_hash(tx1, collision_tx2)));
+
+    const auto rejects = [](const std::vector<std::uint8_t>& blob) {
+        try {
+            static_cast<void>(derive_mining_header_work(blob));
+            return false;
+        } catch (const std::runtime_error&) {
+            return true;
+        }
+    };
+    const auto suffix_start = header_bytes.size() + miner_prefix_bytes.size();
+    for (std::size_t length = suffix_start; length < synthetic_block.size(); ++length) {
+        CHECK(rejects(std::vector<std::uint8_t>(
+            synthetic_block.begin(), synthetic_block.begin() + length)));
+    }
+    auto malformed = synthetic_block;
+    malformed.push_back(0);
+    CHECK(rejects(malformed));
+    malformed = synthetic_block;
+    malformed[suffix_start + 4] = 12; // excessive BPP vector
+    CHECK(rejects(malformed));
+    malformed = synthetic_block;
+    malformed[suffix_start + 4] = 0x87;
+    malformed.insert(malformed.begin() + suffix_start + 5, 0);
+    CHECK(rejects(malformed));
+    malformed = synthetic_block;
+    malformed[work.tx_hashes.serialized_offset - 97] = 47;
+    CHECK(rejects(malformed));
+
+    auto many = synthetic_block;
+    many.pop_back();
+    many.push_back(0x80); // canonical varint 128
+    many.push_back(0x01);
+    many.insert(many.end(), 128 * 32, 0x55);
+    CHECK(derive_mining_header_work(many).tx_hashes.hashes.size() == 128);
 
     return 0;
 }

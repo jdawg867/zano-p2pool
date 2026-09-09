@@ -1,3 +1,4 @@
+#include "hf6_test_suffix.hpp"
 #include "zano_p2pool/crypto_hash.hpp"
 #include "zano_p2pool/pplns_block_template.hpp"
 #include "test_check.hpp"
@@ -17,7 +18,8 @@ using namespace zano_p2pool;
 std::vector<std::uint8_t> make_current_coinbase_suffix(
     std::span<const Hash256> tx_hashes) {
     std::vector<std::uint8_t> suffix{0x00, 0x00, 0x02, 0x2f};
-    suffix.insert(suffix.end(), 16, 0xa5);
+    const auto range = make_structural_range_proof();
+    suffix.insert(suffix.end(), range.begin(), range.end());
     suffix.push_back(0x30);
     suffix.insert(suffix.end(), 96, 0x5a);
     suffix.push_back(static_cast<std::uint8_t>(tx_hashes.size()));
