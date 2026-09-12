@@ -1,0 +1,46 @@
+[Unit]
+Description=Zano P2Pool node
+Documentation=https://github.com/jdawg867/zano-p2pool
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=zano-p2pool
+Group=zano-p2pool
+EnvironmentFile=/etc/zano-p2pool/zano-p2pool.env
+ExecStart=/usr/local/bin/zano-p2pool \
+    --network ${ZANO_P2POOL_NETWORK} \
+    --wallet ${ZANO_P2POOL_WALLET} \
+    --rpc-url ${ZANO_P2POOL_RPC_URL} \
+    --stratum \
+    --stratum-bind ${ZANO_P2POOL_STRATUM_BIND} \
+    --stratum-port ${ZANO_P2POOL_STRATUM_PORT} \
+    --p2p \
+    --p2p-bind ${ZANO_P2POOL_P2P_BIND} \
+    --p2p-port ${ZANO_P2POOL_P2P_PORT} \
+    --metrics \
+    --metrics-bind ${ZANO_P2POOL_METRICS_BIND} \
+    --metrics-port ${ZANO_P2POOL_METRICS_PORT} \
+    --share-store /var/lib/zano-p2pool/shares.dat
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+StateDirectory=zano-p2pool
+StateDirectoryMode=0700
+UMask=0077
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

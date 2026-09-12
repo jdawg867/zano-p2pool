@@ -352,8 +352,7 @@ void print_usage(const char* program) {
         << "  Stratum request rate: burst 256, refill 128/s\n"
         << "  P2P bind: 127.0.0.1\n"
         << "  P2P port: 0 (ephemeral development port)\n"
-        << "  testnet seed: 207.148.30.120:"
-        << zano_p2pool::kDefaultP2pSeedPort << '\n'
+        << "  default seed nodes: none (use --p2p-peer)\n"
         << "  P2P max peers: 64\n"
         << "  P2P message rate: burst 512, refill 256/s\n"
         << "  metrics: disabled\n"

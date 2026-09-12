@@ -259,13 +259,13 @@ exact-Zano Release suite passed 33/33 in 3.76 seconds, and branch CI #409 passed
 ## Phase 7 — public network hardening
 
 - [x] mainnet-compatible sidechain parameters
-- [ ] seed nodes
+- [x] seed-node bootstrap framework (no active defaults)
 - [x] observability/metrics
 - [x] rate limits
 - [x] persistence recovery
 - [x] adversarial tests
 - [x] release builds
-- [ ] protocol specification
+- [x] protocol specification
 
 Checkpoint 1 establishes canonical sidechain identity. `SidechainParameters` has a
 deterministic domain-separated serialization and 32-byte `SidechainId`; P2P protocol
@@ -374,3 +374,51 @@ runtime token-bucket limits by exercising hostile but syntactically valid reques
 sequences against normal admission paths. On 2026-09-04 the focused adversarial
 tests passed 2/2, `git diff --check` was clean, and the full exact-Zano regression
 suite passed 34/34 locally in 4.39 seconds.
+
+Checkpoint 8 adds the built-in seed-node bootstrap framework. Explicit
+`--p2p-peer` entries are combined with the network seed list and de-duplicated,
+while `--no-seed-nodes` supports seed operators and isolated networks. The
+temporary testnet seed used for live validation was retired after the test, so
+both network seed lists are intentionally empty until permanent mainnet
+infrastructure is selected.
+
+On 2026-09-06 the exact-Zano Release suite passed 37/37 locally in 4.33 seconds,
+and branch CI passed both `build-and-test` and `progpowz-compat`. The temporary
+Vultr testnet seed reported healthy persistence and a public listener. A second
+node then started without any explicit `--p2p-peer`, reached it through the
+built-in list, completed the P2P handshake, and shut down cleanly after the
+bounded live test. This validated the bootstrap path before the temporary VPS
+and its default endpoint were retired.
+
+Checkpoint 9 publishes the protocol-v2 wire contract in
+`docs/p2p-protocol.md`. It records the byte-level envelope, handshake, share,
+sync, tip, and mining-context encodings; canonical sidechain identifiers;
+capability semantics; TCP handshake order; trust-promotion boundary; payload,
+rate, and peer limits; and fail-closed behavior. The specification is derived
+from the canonical serializers, parsers, and pinned regression vectors so the
+document distinguishes transport validity from local consensus acceptance.
+
+## Phase 8 — operator and release readiness
+
+- [x] packaged Linux systemd service and environment template
+- [x] installation, health-check, upgrade, and rollback guide
+- [x] release-archive installation smoke test
+- [ ] sustained multi-node testnet soak test
+- [ ] backup and recovery drill
+- [ ] permanent mainnet seed infrastructure
+- [ ] first tagged public beta release
+
+Checkpoint 1 converts the validated temporary VPS configuration into reusable
+operator assets without embedding a wallet, peer, or server address. Release
+archives carry a hardened systemd unit, a loopback-safe environment template,
+and an operator guide covering checksum verification, least-privilege install,
+listener exposure, health checks, upgrades, rollback, and share-store backup.
+Both default seed lists remain empty; permanent seed infrastructure is deferred
+until mainnet readiness.
+
+Checkpoint 2 adds a fail-closed installation smoke test for the exact archive
+produced by the Release workflow. It verifies the published checksum, rejects
+unsafe or out-of-root archive members, requires every binary, document, service,
+and configuration file, runs the packaged node's `--help` path, rechecks dynamic
+dependency policy, asserts loopback listener defaults, stages the documented
+installation modes, and parses the staged systemd unit before artifact upload.

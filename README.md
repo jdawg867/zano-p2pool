@@ -205,10 +205,10 @@ temporarily unavailable. RPC retries use bounded exponential backoff from 1 to
 30 seconds by default. Override the bounds with
 `--rpc-reconnect-initial-seconds` and `--rpc-reconnect-max-seconds`.
 
-Testnet P2P mode automatically bootstraps from the project's built-in seed node
-at `207.148.30.120:37888`. Explicit `--p2p-peer HOST:PORT` entries are combined
-with the seed list and de-duplicated. Operators running the seed itself or an
-isolated network can pass `--no-seed-nodes`.
+No default seed nodes are currently active. Connect test nodes explicitly with
+one or more `--p2p-peer HOST:PORT` entries; duplicate endpoints are removed.
+The built-in seed framework remains available for permanent mainnet
+infrastructure, and `--no-seed-nodes` can disable those defaults when added.
 
 ## Current Zano network defaults
 
@@ -232,7 +232,11 @@ Zano testnet itself is a testnet build (`cmake -D TESTNET=TRUE ..`).
 
 ## Development roadmap
 
-See [`docs/roadmap.md`](docs/roadmap.md).
+See the [`P2P protocol specification`](docs/p2p-protocol.md) for the current
+public wire contract and [`docs/roadmap.md`](docs/roadmap.md) for development
+status. The [`Linux operator deployment guide`](docs/operator-deployment.md)
+covers the packaged systemd service, safe default binds, health validation,
+upgrades, and rollback.
 
 ## Safety
 

@@ -26,12 +26,7 @@ void append_unique(
 
 }  // namespace
 
-std::vector<P2pEndpoint> default_p2p_seed_nodes(P2pNetwork network) {
-    if (network == P2pNetwork::Testnet) {
-        return {
-            P2pEndpoint{"207.148.30.120", kDefaultP2pSeedPort},
-        };
-    }
+std::vector<P2pEndpoint> default_p2p_seed_nodes(P2pNetwork) {
     return {};
 }
 
