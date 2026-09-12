@@ -48,6 +48,16 @@ struct P2pMiningContextTrustResult {
     const P2pMiningAnchor& local_anchor,
     const P2pPayoutAddress& expected_payout);
 
+// Parent-bound form used by canonical sidechain work. The work registry entry
+// is valid only for shares extending expected_parent_id.
+[[nodiscard]] P2pMiningContextTrustResult promote_p2p_mining_context(
+    P2pTrustedWorkRegistry& trusted_work,
+    const P2pHandshake& peer,
+    const P2pEnvelope& envelope,
+    const P2pMiningAnchor& local_anchor,
+    const ShareId& expected_parent_id,
+    const P2pPayoutAddress& expected_payout);
+
 // Canonical PPLNS trust crossing. The expected coinbase plan must be derived
 // locally from the sidechain state for this parent-chain template; no payout
 // destination or amount supplied by the peer is trusted.
@@ -56,6 +66,17 @@ struct P2pMiningContextTrustResult {
     const P2pHandshake& peer,
     const P2pEnvelope& envelope,
     const P2pMiningAnchor& local_anchor,
+    const PplnsCoinbasePlan& expected_plan);
+
+// Parent-bound canonical PPLNS trust crossing. Historical and live branch
+// accounting must use this form so plan verification cannot authorize a
+// different sidechain parent.
+[[nodiscard]] P2pMiningContextTrustResult promote_p2p_mining_context(
+    P2pTrustedWorkRegistry& trusted_work,
+    const P2pHandshake& peer,
+    const P2pEnvelope& envelope,
+    const P2pMiningAnchor& local_anchor,
+    const ShareId& expected_parent_id,
     const PplnsCoinbasePlan& expected_plan);
 
 [[nodiscard]] const char* p2p_mining_context_trust_status_name(

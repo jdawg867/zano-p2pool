@@ -29,11 +29,17 @@ Share parse_p2p_share_announce_envelope(const P2pEnvelope& envelope) {
 }
 
 void P2pTrustedWorkRegistry::remember(const ShareWorkContext& context) {
+    remember(context, ShareId{});
+}
+
+void P2pTrustedWorkRegistry::remember(
+    const ShareWorkContext& context,
+    const ShareId& parent_id) {
     if (difficulty128_is_zero(context.network_difficulty)) {
         throw std::runtime_error("trusted P2P work context has zero network difficulty");
     }
 
-    const Key key{context.zano_height, context.mining_header_hash};
+    const Key key{context.zano_height, context.mining_header_hash, parent_id};
     const auto it = contexts_.find(key);
     if (it != contexts_.end()) {
         if (it->second.network_difficulty != context.network_difficulty) {
@@ -47,7 +53,15 @@ void P2pTrustedWorkRegistry::remember(const ShareWorkContext& context) {
 const ShareWorkContext* P2pTrustedWorkRegistry::find(
     std::uint64_t zano_height,
     const Hash256& mining_header_hash) const noexcept {
-    const auto it = contexts_.find(Key{zano_height, mining_header_hash});
+    return find(zano_height, mining_header_hash, ShareId{});
+}
+
+const ShareWorkContext* P2pTrustedWorkRegistry::find(
+    std::uint64_t zano_height,
+    const Hash256& mining_header_hash,
+    const ShareId& parent_id) const noexcept {
+    const auto it = contexts_.find(
+        Key{zano_height, mining_header_hash, parent_id});
     return it == contexts_.end() ? nullptr : &it->second;
 }
 
@@ -97,7 +111,8 @@ P2pShareReceiveResult P2pShareReceiver::receive_share(
 
     const ShareWorkContext* trusted = trusted_work_.find(
         share.zano_height,
-        share.mining_header_hash);
+        share.mining_header_hash,
+        share.parent_id);
     if (trusted == nullptr) {
         result.status = P2pShareReceiveStatus::UnknownWorkContext;
         return result;

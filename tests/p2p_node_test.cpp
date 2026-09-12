@@ -102,9 +102,15 @@ int main() {
     std::mutex requester_mutex;
     std::mutex leaf_mutex;
 
+    // The root and its child deliberately reuse one synthetic work context in
+    // this test. Parent-bound trusted work therefore needs one authorization
+    // for the zero-parent root and one for shares extending the root.
     provider_work.remember(trusted);
+    provider_work.remember(trusted, child.parent_id);
     requester_work.remember(trusted);
+    requester_work.remember(trusted, child.parent_id);
     leaf_work.remember(trusted);
+    leaf_work.remember(trusted, child.parent_id);
 
 #ifdef ZANO_P2POOL_HAVE_PROGPOWZ
     CHECK(provider_chain.submit_share(

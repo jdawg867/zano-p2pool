@@ -94,6 +94,7 @@ private:
     std::optional<P2pMiningContextProposal> local_mining_context_;
     std::optional<P2pPayoutAddress> expected_payout_;
     std::optional<PplnsCoinbasePlan> expected_payout_plan_;
+    std::optional<ShareId> expected_payout_parent_id_;
 };
 
 [[nodiscard]] const char* p2p_node_message_status_name(

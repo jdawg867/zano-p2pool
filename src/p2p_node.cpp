@@ -40,6 +40,7 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
             if (receive.chain_result.best_tip_changed) {
                 expected_payout_.reset();
                 expected_payout_plan_.reset();
+                expected_payout_parent_id_.reset();
             }
             if (receive.missing_parent_id.has_value()) {
                 followup = make_p2p_share_request_envelope(
@@ -75,6 +76,7 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
                 if (sync.share_result->chain_result.best_tip_changed) {
                     expected_payout_.reset();
                     expected_payout_plan_.reset();
+                    expected_payout_parent_id_.reset();
                 }
                 if (sync.share_result->missing_parent_id.has_value()) {
                     followup = make_p2p_share_request_envelope(
@@ -109,7 +111,8 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
             std::lock_guard lock(state_mutex_);
             if (!local_mining_anchor_.has_value() ||
                 (!expected_payout_.has_value() &&
-                 !expected_payout_plan_.has_value())) {
+                 !expected_payout_plan_.has_value()) ||
+                !expected_payout_parent_id_.has_value()) {
                 result.status = P2pNodeMessageStatus::MiningContextDeferred;
                 break;
             }
@@ -121,6 +124,7 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
                     peer,
                     envelope,
                     *local_mining_anchor_,
+                    *expected_payout_parent_id_,
                     *expected_payout_plan_);
             } else {
                 trust = promote_p2p_mining_context(
@@ -128,6 +132,7 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
                     peer,
                     envelope,
                     *local_mining_anchor_,
+                    *expected_payout_parent_id_,
                     *expected_payout_);
             }
             result.status = P2pNodeMessageStatus::MiningContextProcessed;
@@ -219,7 +224,9 @@ std::uint32_t p2p_node_message_penalty(
 void P2pNodeProtocol::remember_trusted_work(
     const ShareWorkContext& context) {
     std::lock_guard lock(state_mutex_);
-    trusted_work_.remember(context);
+    const ConnectedShare* parent = chain_.best_tip();
+    trusted_work_.remember(
+        context, parent == nullptr ? ShareId{} : parent->id);
 }
 
 void P2pNodeProtocol::set_local_mining_context(
@@ -239,6 +246,8 @@ void P2pNodeProtocol::set_local_mining_context(
     local_mining_context_ = proposal;
     expected_payout_ = payout;
     expected_payout_plan_.reset();
+    const ConnectedShare* parent = chain_.best_tip();
+    expected_payout_parent_id_ = parent == nullptr ? ShareId{} : parent->id;
 }
 
 void P2pNodeProtocol::set_local_mining_context(
@@ -250,6 +259,8 @@ void P2pNodeProtocol::set_local_mining_context(
     local_mining_context_ = proposal;
     expected_payout_plan_ = plan;
     expected_payout_.reset();
+    const ConnectedShare* parent = chain_.best_tip();
+    expected_payout_parent_id_ = parent == nullptr ? ShareId{} : parent->id;
 }
 
 void P2pNodeProtocol::set_expected_payout(
@@ -257,6 +268,8 @@ void P2pNodeProtocol::set_expected_payout(
     std::lock_guard lock(state_mutex_);
     expected_payout_ = payout;
     expected_payout_plan_.reset();
+    const ConnectedShare* parent = chain_.best_tip();
+    expected_payout_parent_id_ = parent == nullptr ? ShareId{} : parent->id;
 }
 
 void P2pNodeProtocol::set_expected_payout_plan(
@@ -264,12 +277,15 @@ void P2pNodeProtocol::set_expected_payout_plan(
     std::lock_guard lock(state_mutex_);
     expected_payout_plan_ = plan;
     expected_payout_.reset();
+    const ConnectedShare* parent = chain_.best_tip();
+    expected_payout_parent_id_ = parent == nullptr ? ShareId{} : parent->id;
 }
 
 void P2pNodeProtocol::clear_expected_payout() noexcept {
     std::lock_guard lock(state_mutex_);
     expected_payout_.reset();
     expected_payout_plan_.reset();
+    expected_payout_parent_id_.reset();
 }
 
 std::size_t P2pNodeProtocol::trusted_work_count() const noexcept {
@@ -291,14 +307,16 @@ bool P2pNodeProtocol::mining_context_trust_ready() const noexcept {
     std::lock_guard lock(state_mutex_);
     return local_mining_anchor_.has_value() &&
            local_mining_context_.has_value() &&
-           (expected_payout_.has_value() || expected_payout_plan_.has_value());
+           (expected_payout_.has_value() || expected_payout_plan_.has_value()) &&
+           expected_payout_parent_id_.has_value();
 }
 
 std::optional<P2pEnvelope>
 P2pNodeProtocol::local_mining_context_envelope() const {
     std::lock_guard lock(state_mutex_);
     if (!local_mining_context_.has_value() ||
-        (!expected_payout_.has_value() && !expected_payout_plan_.has_value())) {
+        (!expected_payout_.has_value() && !expected_payout_plan_.has_value()) ||
+        !expected_payout_parent_id_.has_value()) {
         return std::nullopt;
     }
     return make_p2p_mining_context_envelope(*local_mining_context_);

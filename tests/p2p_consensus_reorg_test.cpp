@@ -181,8 +181,20 @@ int main() {
     P2pTrustedWorkRegistry collector2_work;
     std::mutex collector1_mutex;
     std::mutex collector2_mutex;
+
+    // Every synthetic branch share reuses one mining context in this test.
+    // Parent-bound work authorization must therefore cover each distinct
+    // sidechain parent used by either branch.
     collector1_work.remember(trusted);
+    collector1_work.remember(trusted, root_id);
+    collector1_work.remember(trusted, branch_a1_id);
+    collector1_work.remember(trusted, branch_b1_id);
+    collector1_work.remember(trusted, branch_b2_id);
     collector2_work.remember(trusted);
+    collector2_work.remember(trusted, root_id);
+    collector2_work.remember(trusted, branch_a1_id);
+    collector2_work.remember(trusted, branch_b1_id);
+    collector2_work.remember(trusted, branch_b2_id);
     P2pNodeProtocol collector1_protocol(
         collector1_chain, collector1_work, collector1_mutex);
     P2pNodeProtocol collector2_protocol(

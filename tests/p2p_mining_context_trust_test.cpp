@@ -110,6 +110,31 @@ int main() {
     CHECK(plan_promoted.registry_inserted);
     CHECK(plan_registry.size() == 1);
 
+    // Canonical/historical plan trust can be bound to one exact sidechain
+    // parent. The same validated mining header must not authorize another
+    // branch parent.
+    ShareId bound_parent{};
+    bound_parent.back() = 0x5a;
+    P2pTrustedWorkRegistry bound_registry;
+    const auto bound_promoted = promote_p2p_mining_context(
+        bound_registry,
+        peer,
+        envelope,
+        local_anchor,
+        bound_parent,
+        plan);
+    CHECK(bound_promoted.status == P2pMiningContextTrustStatus::Trusted);
+    CHECK(bound_registry.find(
+              bound_promoted.trusted_context.zano_height,
+              bound_promoted.trusted_context.mining_header_hash,
+              bound_parent) != nullptr);
+    ShareId wrong_parent = bound_parent;
+    wrong_parent.back() ^= 0x01U;
+    CHECK(bound_registry.find(
+              bound_promoted.trusted_context.zano_height,
+              bound_promoted.trusted_context.mining_header_hash,
+              wrong_parent) == nullptr);
+
     // Re-promoting the exact verified context is safe and idempotent.
     const P2pMiningContextTrustResult repeated = promote_p2p_mining_context(
         trusted_work,

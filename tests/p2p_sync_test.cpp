@@ -184,6 +184,7 @@ int main() {
 
     P2pTrustedWorkRegistry trusted_work;
     trusted_work.remember(context_for(parent));
+    trusted_work.remember(context_for(parent), child.parent_id);
     ShareChain requester_chain;
     P2pShareReceiver receiver(requester_chain, trusted_work);
 

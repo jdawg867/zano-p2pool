@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <map>
 #include <optional>
+#include <tuple>
 #include <utility>
 
 namespace zano_p2pool {
@@ -19,18 +20,32 @@ namespace zano_p2pool {
 // Only locally derived/validated work contexts belong here. Peer-provided
 // context data must never be inserted directly. The registry lets P2P share
 // admission preserve ShareChain::submit_share()'s trusted-context boundary.
+//
+// Canonical PPLNS work is parent-branch specific: the miner transaction was
+// validated against the payout window for one exact sidechain parent. The
+// three-part key prevents a trusted template from authorizing a share that
+// points at a different branch.
 class P2pTrustedWorkRegistry {
 public:
+    // Compatibility/bootstrap helper: binds only to the zero parent.
     void remember(const ShareWorkContext& context);
+    void remember(
+        const ShareWorkContext& context,
+        const ShareId& parent_id);
 
+    // Compatibility/bootstrap helper: looks up only the zero parent.
     [[nodiscard]] const ShareWorkContext* find(
         std::uint64_t zano_height,
         const Hash256& mining_header_hash) const noexcept;
+    [[nodiscard]] const ShareWorkContext* find(
+        std::uint64_t zano_height,
+        const Hash256& mining_header_hash,
+        const ShareId& parent_id) const noexcept;
 
     [[nodiscard]] std::size_t size() const noexcept;
 
 private:
-    using Key = std::pair<std::uint64_t, Hash256>;
+    using Key = std::tuple<std::uint64_t, Hash256, ShareId>;
     std::map<Key, ShareWorkContext> contexts_;
 };
 

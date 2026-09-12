@@ -108,6 +108,12 @@ int main() {
     registry.remember(context_for(share));
     CHECK(registry.size() == 1);
     CHECK(registry.find(share.zano_height, share.mining_header_hash) != nullptr);
+    ShareId different_parent{};
+    different_parent.back() = 0x01;
+    CHECK(registry.find(
+              share.zano_height,
+              share.mining_header_hash,
+              different_parent) == nullptr);
 
     ShareWorkContext conflict = context_for(share);
     conflict.network_difficulty = difficulty128_from_decimal("5");

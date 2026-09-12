@@ -11,6 +11,7 @@ P2pMiningContextTrustResult promote_p2p_mining_context_impl(
     const P2pHandshake& peer,
     const P2pEnvelope& envelope,
     const P2pMiningAnchor& local_anchor,
+    const ShareId& expected_parent_id,
     ProofVerifier&& verify_proofs) {
     P2pMiningContextTrustResult result;
 
@@ -52,9 +53,10 @@ P2pMiningContextTrustResult promote_p2p_mining_context_impl(
 
     const bool already_trusted = trusted_work.find(
         result.trusted_context.zano_height,
-        result.trusted_context.mining_header_hash) != nullptr;
+        result.trusted_context.mining_header_hash,
+        expected_parent_id) != nullptr;
 
-    trusted_work.remember(result.trusted_context);
+    trusted_work.remember(result.trusted_context, expected_parent_id);
     result.registry_inserted = !already_trusted;
     result.status = P2pMiningContextTrustStatus::Trusted;
     return result;
@@ -73,6 +75,28 @@ P2pMiningContextTrustResult promote_p2p_mining_context(
         peer,
         envelope,
         local_anchor,
+        ShareId{},
+        [&expected_payout](
+            const P2pMiningContextProposal& proposal,
+            const P2pMiningContextCheckResult& check) {
+            return verify_p2p_mining_context_proofs(
+                proposal, check, expected_payout);
+        });
+}
+
+P2pMiningContextTrustResult promote_p2p_mining_context(
+    P2pTrustedWorkRegistry& trusted_work,
+    const P2pHandshake& peer,
+    const P2pEnvelope& envelope,
+    const P2pMiningAnchor& local_anchor,
+    const ShareId& expected_parent_id,
+    const P2pPayoutAddress& expected_payout) {
+    return promote_p2p_mining_context_impl(
+        trusted_work,
+        peer,
+        envelope,
+        local_anchor,
+        expected_parent_id,
         [&expected_payout](
             const P2pMiningContextProposal& proposal,
             const P2pMiningContextCheckResult& check) {
@@ -92,6 +116,28 @@ P2pMiningContextTrustResult promote_p2p_mining_context(
         peer,
         envelope,
         local_anchor,
+        ShareId{},
+        [&expected_plan](
+            const P2pMiningContextProposal& proposal,
+            const P2pMiningContextCheckResult& check) {
+            return verify_p2p_mining_context_proofs(
+                proposal, check, expected_plan);
+        });
+}
+
+P2pMiningContextTrustResult promote_p2p_mining_context(
+    P2pTrustedWorkRegistry& trusted_work,
+    const P2pHandshake& peer,
+    const P2pEnvelope& envelope,
+    const P2pMiningAnchor& local_anchor,
+    const ShareId& expected_parent_id,
+    const PplnsCoinbasePlan& expected_plan) {
+    return promote_p2p_mining_context_impl(
+        trusted_work,
+        peer,
+        envelope,
+        local_anchor,
+        expected_parent_id,
         [&expected_plan](
             const P2pMiningContextProposal& proposal,
             const P2pMiningContextCheckResult& check) {
