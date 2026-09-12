@@ -20,6 +20,7 @@ pkg_check_modules(CURL REQUIRED IMPORTED_TARGET libcurl)
 pkg_check_modules(JSONC REQUIRED IMPORTED_TARGET json-c)
 
 add_library(zano_p2pool_core
+    src/historical_trust.cpp
     src/historical_payout.cpp
     src/historical_work.cpp
     src/block_submitter.cpp
@@ -209,6 +210,9 @@ target_link_libraries(zano-p2pool-work-audit PRIVATE zano_p2pool_core)
 
 if(ZANO_P2POOL_BUILD_TESTS)
     enable_testing()
+    add_executable(historical_trust_test tests/historical_trust_test.cpp)
+    target_link_libraries(historical_trust_test PRIVATE zano_p2pool_core)
+    add_test(NAME historical_trust_test COMMAND historical_trust_test)
     add_executable(historical_payout_test tests/historical_payout_test.cpp)
     target_link_libraries(historical_payout_test PRIVATE zano_p2pool_core)
     add_test(NAME historical_payout_test COMMAND historical_payout_test)
