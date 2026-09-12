@@ -1,4 +1,5 @@
 #include "zano_p2pool/progpowz.hpp"
+#include "zano_p2pool/crypto_hash.hpp"
 
 #include <cstring>
 #include <limits>
@@ -28,6 +29,15 @@ ProgPowZResult copy_result(const ethash::result& result) {
 
 std::uint64_t progpowz_epoch(std::uint64_t height) noexcept {
     return height / kProgPowZEpochLength;
+}
+
+Hash256 progpowz_seed(std::uint64_t height) {
+    if (height > static_cast<std::uint64_t>(std::numeric_limits<int>::max()))
+        throw std::out_of_range("height exceeds the block-number range supported by ProgPoWZ");
+    Hash256 seed{};
+    for (std::uint64_t epoch = 0; epoch < progpowz_epoch(height); ++epoch)
+        seed = cn_fast_hash(seed);
+    return seed;
 }
 
 bool progpowz_available() noexcept {

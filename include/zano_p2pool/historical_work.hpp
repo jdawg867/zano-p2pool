@@ -3,6 +3,7 @@
 #include "zano_p2pool/p2p_mining_context.hpp"
 #include "zano_p2pool/rpc_client.hpp"
 #include <functional>
+#include "zano_p2pool/mining_work_archive.hpp"
 
 namespace zano_p2pool {
 enum class HistoricalParentStatus {
@@ -20,4 +21,32 @@ struct HistoricalParentResult {
 [[nodiscard]] HistoricalParentResult audit_historical_parent(
     const P2pMiningContextProposal& proposal,
     const std::function<RpcCanonicalHeader(std::uint64_t)>& lookup);
+
+// Only feed this API records captured from this node's own daemon. Archive
+// checksums establish integrity, not provenance; peer records are not evidence
+// of locally observed difficulty or reward.
+[[nodiscard]] std::vector<P2pMiningAnchor> load_local_mining_anchors(
+    const MiningWorkArchive& archive, std::size_t max_records = 10000);
+
+enum class HistoricalAnchorStatus {
+    AnchorMatchedUntrusted,
+    ParentMismatch,
+    ParentChangedDuringCheck,
+    SeedMismatch,
+    LocalObservationMissing,
+    LocalObservationConflict,
+    LocalObservationMismatch,
+};
+struct HistoricalAnchorResult {
+    HistoricalAnchorStatus status{HistoricalAnchorStatus::LocalObservationMissing};
+    Hash256 mining_header_hash{};
+    std::size_t matching_observations{};
+};
+// Matching local observations is not historical consensus recomputation. This
+// diagnostic has no authority to insert trusted work or admit shares.
+[[nodiscard]] HistoricalAnchorResult audit_historical_local_anchor(
+    const P2pMiningContextProposal& proposal,
+    std::span<const P2pMiningAnchor> local_observations,
+    const std::function<RpcCanonicalHeader(std::uint64_t)>& lookup);
+[[nodiscard]] const char* historical_anchor_status_name(HistoricalAnchorStatus status) noexcept;
 }

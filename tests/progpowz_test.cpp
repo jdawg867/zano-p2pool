@@ -4,6 +4,11 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
+#include <cstring>
+#ifdef ZANO_P2POOL_HAVE_PROGPOWZ
+#include <ethash/ethash.hpp>
+#endif
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -48,6 +53,27 @@ std::string to_hex(const zano_p2pool::Hash256& bytes) {
 }  // namespace
 
 int main() {
+    using zano_p2pool::progpowz_seed;
+    CHECK(progpowz_seed(0) == zano_p2pool::Hash256{});
+    CHECK(progpowz_seed(29999) == zano_p2pool::Hash256{});
+    CHECK(progpowz_seed(30000) == from_hex(
+        "290decd9548b62a8d60345a988386fc84ba6bc95484008f6362f93160ef3e563"));
+    CHECK(progpowz_seed(180000) == from_hex(
+        "582b06447f087674bcc0a32a19961e77dafb9e17955792f79ec8936e3d9742fc"));
+    CHECK(progpowz_seed(209999) == progpowz_seed(180000));
+    CHECK(progpowz_seed(210000) != progpowz_seed(209999));
+    bool seed_overflow = false;
+    try { static_cast<void>(progpowz_seed(std::numeric_limits<std::uint64_t>::max())); }
+    catch (const std::out_of_range&) { seed_overflow = true; }
+    CHECK(seed_overflow);
+#ifdef ZANO_P2POOL_HAVE_PROGPOWZ
+    for (const int epoch : {0, 1, 5, 6, 7}) {
+        const auto upstream_seed = ethash::calculate_epoch_seed(epoch);
+        const auto derived_seed = progpowz_seed(static_cast<std::uint64_t>(epoch) * 30000);
+        CHECK(std::memcmp(upstream_seed.bytes, derived_seed.data(), derived_seed.size()) == 0);
+    }
+#endif
+
     using zano_p2pool::CandidateClassification;
     using zano_p2pool::ProgPowZContextMode;
     using zano_p2pool::progpowz_available;

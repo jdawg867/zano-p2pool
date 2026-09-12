@@ -1,6 +1,9 @@
 #include "zano_p2pool/historical_work.hpp"
 #include "zano_p2pool/mining_header.hpp"
 #include "hf6_test_suffix.hpp"
+#include "zano_p2pool/progpowz.hpp"
+#include <filesystem>
+#include <unistd.h>
 #include "test_check.hpp"
 #include <algorithm>
 #include <functional>
@@ -113,5 +116,61 @@ int main() {
     malformed.zano_height = 0;
     CHECK(throws_runtime_error([&] { static_cast<void>(audit_historical_parent(malformed, lookup)); }));
     CHECK(calls == 0);
+    // Compare the peer's anchor with independently supplied local observations.
+    proposal.seed = progpowz_seed(proposal.zano_height);
+    P2pMiningAnchor local{proposal.zano_height, proposal.prev_hash,
+        proposal.network_difficulty, proposal.seed, proposal.block_reward_without_fee};
+    std::vector<P2pMiningAnchor> observations{local};
+    CHECK(audit_historical_local_anchor(proposal, observations, lookup).status ==
+        HistoricalAnchorStatus::AnchorMatchedUntrusted);
+    CHECK(audit_historical_local_anchor(proposal, {}, lookup).status ==
+        HistoricalAnchorStatus::LocalObservationMissing);
+    auto wrong_parent = local;
+    wrong_parent.prev_hash = other;
+    observations = {wrong_parent};
+    CHECK(audit_historical_local_anchor(proposal, observations, lookup).status ==
+        HistoricalAnchorStatus::LocalObservationMissing);
+    observations = {local};
+    auto changed = proposal;
+    changed.network_difficulty = difficulty128_from_decimal("9");
+    CHECK(audit_historical_local_anchor(changed, observations, lookup).status ==
+        HistoricalAnchorStatus::LocalObservationMismatch);
+    changed = proposal;
+    ++changed.block_reward_without_fee;
+    CHECK(audit_historical_local_anchor(changed, observations, lookup).status ==
+        HistoricalAnchorStatus::LocalObservationMismatch);
+    changed = proposal;
+    changed.seed[0] ^= 1;
+    CHECK(audit_historical_local_anchor(changed, observations, lookup).status ==
+        HistoricalAnchorStatus::SeedMismatch);
+    auto conflict = local;
+    ++conflict.block_reward_without_fee;
+    observations = {local, conflict};
+    CHECK(audit_historical_local_anchor(proposal, observations, lookup).status ==
+        HistoricalAnchorStatus::LocalObservationConflict);
+    std::reverse(observations.begin(), observations.end());
+    CHECK(audit_historical_local_anchor(proposal, observations, lookup).status ==
+        HistoricalAnchorStatus::LocalObservationConflict);
+    observations = {local, local};
+    CHECK(audit_historical_local_anchor(proposal, observations, lookup).matching_observations == 2);
+    CHECK(audit_historical_local_anchor(proposal, observations, [&](std::uint64_t h) {
+        return RpcCanonicalHeader{h, other};
+    }).status == HistoricalAnchorStatus::ParentMismatch);
+    calls = 0;
+    CHECK(audit_historical_local_anchor(proposal, observations, [&](std::uint64_t h) {
+        return RpcCanonicalHeader{h, ++calls == 1 ? local.prev_hash : other};
+    }).status == HistoricalAnchorStatus::ParentChangedDuringCheck);
+
+    std::string pattern = (std::filesystem::temp_directory_path()/"zano-anchor-XXXXXX").string();
+    CHECK(mkdtemp(pattern.data()) != nullptr);
+    struct Cleanup { std::filesystem::path path; ~Cleanup() { std::filesystem::remove_all(path); } } cleanup{pattern};
+    Hash256 sidechain{}; sidechain[0] = 1;
+    MiningWorkArchive archive(pattern, sidechain);
+    CHECK(load_local_mining_anchors(archive).empty());
+    static_cast<void>(archive.put(serialize_p2p_mining_context_payload(proposal)));
+    CHECK(load_local_mining_anchors(archive) == std::vector<P2pMiningAnchor>{local});
+    CHECK(throws_runtime_error([&] { static_cast<void>(load_local_mining_anchors(archive, 0)); }));
+    MiningWorkArchive other_chain(pattern, other);
+    CHECK(throws_runtime_error([&] { static_cast<void>(load_local_mining_anchors(other_chain)); }));
     // No ShareChain or trusted-work registry is available to this API.
 }

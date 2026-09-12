@@ -19,6 +19,9 @@ enum class ProgPowZContextMode {
 inline constexpr std::uint64_t kProgPowZEpochLength = 30000;
 
 [[nodiscard]] std::uint64_t progpowz_epoch(std::uint64_t height) noexcept;
+// Independently derive the Ethash epoch seed (Keccak-256, not SHA3-256).
+// Reject heights outside the block-number range supported by our PoW backend.
+[[nodiscard]] Hash256 progpowz_seed(std::uint64_t height);
 [[nodiscard]] bool progpowz_available() noexcept;
 [[nodiscard]] const char* progpowz_revision() noexcept;
 
