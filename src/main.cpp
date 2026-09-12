@@ -3,6 +3,7 @@
 #include "zano_p2pool/metrics_server.hpp"
 #include "zano_p2pool/metrics_snapshot.hpp"
 #include "zano_p2pool/mining_header.hpp"
+#include "zano_p2pool/mining_work_archive.hpp"
 #include "zano_p2pool/p2p_mining_context.hpp"
 #include "zano_p2pool/p2p_node.hpp"
 #include "zano_p2pool/p2p_runtime.hpp"
@@ -874,6 +875,32 @@ int main(int argc, char** argv) {
             std::cout << "\nShare store:     disabled\n";
         }
 
+        // Preserve exact locally issued work before publishing it to miners.
+        // Existing share records remain unchanged; old missing evidence is not
+        // reconstructed or silently treated as trusted.
+        std::unique_ptr<zano_p2pool::MiningWorkArchive> mining_work_archive;
+        if (share_store) {
+            mining_work_archive = std::make_unique<zano_p2pool::MiningWorkArchive>(
+                share_store->path().string() + ".work",
+                zano_p2pool::sidechain_id(sidechain_parameters));
+            const auto count = mining_work_archive->verify_all();
+            std::cout << "Mining work archive: " << mining_work_archive->path()
+                      << " records=" << count << '\n';
+        }
+        const auto archive_work = [&](const auto& work) {
+            if (!mining_work_archive) return;
+            try {
+                const auto proposal =
+                    zano_p2pool::p2p_mining_context_proposal_from_template(work.block);
+                const auto payload = zano_p2pool::serialize_p2p_mining_context_payload(proposal);
+                static_cast<void>(mining_work_archive->put(payload));
+            } catch (...) {
+                g_persistence_failed.store(true, std::memory_order_release);
+                std::cerr << "FATAL mining-work archive write failed; stopping before work publication\n";
+                throw;
+            }
+        };
+
         auto persist_share = [&](const zano_p2pool::Share& share) noexcept {
             if (!share_store || g_persistence_failed.load(std::memory_order_acquire)) {
                 return;
@@ -901,6 +928,8 @@ int main(int argc, char** argv) {
             node_chain,
             node_state_mutex,
             sidechain_parameters));
+
+        archive_work(live);
 
         zano_p2pool::P2pNodeProtocol p2p_protocol(
             node_chain, trusted_work, node_state_mutex);
@@ -1362,6 +1391,8 @@ int main(int argc, char** argv) {
                     node_chain,
                     node_state_mutex,
                     sidechain_parameters);
+
+                archive_work(next);
 
                 if (block_submitter && canonical_pplns) {
                     block_submitter->remember_template(

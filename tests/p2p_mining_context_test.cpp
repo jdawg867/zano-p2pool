@@ -1,3 +1,6 @@
+#include "zano_p2pool/mining_work_archive.hpp"
+#include <filesystem>
+#include <unistd.h>
 #include "hf6_test_suffix.hpp"
 #include "test_check.hpp"
 
@@ -122,6 +125,24 @@ int main() {
               proposal.miner_tx_tgc_json.size());
     CHECK(payload.size() <= kP2pMaxPayloadSize);
     CHECK(deserialize_p2p_mining_context_payload(payload) == proposal);
+
+    // Archive/reopen preserves the exact template and miner_tx_tgc evidence.
+    std::string archive_pattern =
+        (std::filesystem::temp_directory_path() / "zano-context-archive-XXXXXX").string();
+    CHECK(mkdtemp(archive_pattern.data()) != nullptr);
+    struct Cleanup {
+        std::filesystem::path path;
+        ~Cleanup() { std::filesystem::remove_all(path); }
+    } cleanup{archive_pattern};
+    Hash256 archive_sidechain{};
+    archive_sidechain[0] = 1;
+    MiningWorkArchive archive(archive_pattern, archive_sidechain);
+    const auto archived_id = archive.put(payload);
+    CHECK(archived_id == p2p_mining_context_id(proposal));
+    MiningWorkArchive reopened(archive_pattern, archive_sidechain);
+    CHECK(reopened.verify_all() == 1);
+    CHECK(deserialize_p2p_mining_context_payload(reopened.read(archived_id)) == proposal);
+
 
     const P2pEnvelope envelope = make_p2p_mining_context_envelope(proposal);
     CHECK(envelope.type == P2pMessageType::MiningContextAnnounce);
