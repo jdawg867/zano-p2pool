@@ -52,6 +52,7 @@ bool add_chain_work_checked(
 ShareChain::ShareChain(const SidechainParameters& sidechain_parameters) {
     // Reuse the canonical parameter serializer as the single validation gate.
     static_cast<void>(serialize_sidechain_parameters(sidechain_parameters));
+    parameter_id_ = sidechain_id(sidechain_parameters);
     difficulty_policy_ = DifficultyPolicy{
         sidechain_parameters.minimum_share_version,
         sidechain_parameters.maximum_share_version,
@@ -59,6 +60,10 @@ ShareChain::ShareChain(const SidechainParameters& sidechain_parameters) {
         sidechain_parameters.minimum_share_difficulty,
         sidechain_parameters.difficulty_window_shares,
     };
+}
+
+bool ShareChain::matches_sidechain_parameters(const SidechainParameters& params) const {
+    return parameter_id_.has_value() && *parameter_id_ == sidechain_id(params);
 }
 
 Difficulty128 ShareChain::expected_next_share_difficulty(
@@ -262,9 +267,13 @@ ShareRejectReason ShareChain::connect_share(
         cumulative = summed;
     }
 
+    const bool validated_ancestry = enforce_sidechain_difficulty &&
+        pow_validation.has_value() && pow_validation->meets_share_difficulty &&
+        (is_zero_share_id(share.parent_id) ||
+         connected_.find(share.parent_id)->second.validated_ancestry);
     const auto [it, inserted] = connected_.emplace(
         id,
-        ConnectedShare{share, id, cumulative, std::move(pow_validation)});
+        ConnectedShare{share, id, cumulative, std::move(pow_validation), validated_ancestry});
     if (!inserted) {
         throw std::logic_error("duplicate share reached connect_share");
     }

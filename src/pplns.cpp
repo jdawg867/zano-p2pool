@@ -63,8 +63,9 @@ void merge_payout_identity(
 
 }  // namespace
 
-PplnsWindow build_pplns_window(
+PplnsWindow build_pplns_window_at_parent(
     const ShareChain& chain,
+    const ShareId& parent_id,
     const ChainWork& requested_work) {
     const cpp_int requested = work_to_int(requested_work);
     if (requested == 0) {
@@ -75,7 +76,9 @@ PplnsWindow build_pplns_window(
     std::size_t included_shares = 0;
     std::map<MinerId, CreditedWork> credited;
 
-    const ConnectedShare* current = chain.best_tip();
+    const ConnectedShare* current = is_zero_share_id(parent_id) ? nullptr : chain.find(parent_id);
+    if (!is_zero_share_id(parent_id) && !current)
+        throw std::invalid_argument("PPLNS parent is not connected");
     while (current != nullptr && remaining != 0) {
         const cpp_int current_work = work_to_int(
             share_work(current->share.share_difficulty));
@@ -120,8 +123,9 @@ PplnsWindow build_pplns_window(
     return result;
 }
 
-PplnsWindow build_sidechain_pplns_window(
+PplnsWindow build_sidechain_pplns_window_at_parent(
     const ShareChain& chain,
+    const ShareId& parent_id,
     const SidechainParameters& params,
     const Difficulty128& network_difficulty) {
     if (params.pplns_window_shares == 0 ||
@@ -138,7 +142,9 @@ PplnsWindow build_sidechain_pplns_window(
             "sidechain PPLNS network difficulty must be nonzero");
     }
 
-    const ConnectedShare* current = chain.best_tip();
+    const ConnectedShare* current = is_zero_share_id(parent_id) ? nullptr : chain.find(parent_id);
+    if (!is_zero_share_id(parent_id) && !current)
+        throw std::invalid_argument("PPLNS parent is not connected");
     if (current == nullptr) {
         return {};
     }
@@ -172,11 +178,24 @@ PplnsWindow build_sidechain_pplns_window(
         throw std::logic_error("sidechain PPLNS policy produced zero work");
     }
 
-    PplnsWindow result = build_pplns_window(chain, int_to_work(requested));
+    PplnsWindow result = build_pplns_window_at_parent(chain, parent_id, int_to_work(requested));
     if (!result.complete || result.included_shares > params.pplns_window_shares) {
         throw std::logic_error("sidechain PPLNS policy bound was violated");
     }
     return result;
+}
+
+PplnsWindow build_pplns_window(const ShareChain& chain, const ChainWork& requested_work) {
+    const auto* tip = chain.best_tip();
+    return build_pplns_window_at_parent(chain, tip ? tip->id : ShareId{}, requested_work);
+}
+
+PplnsWindow build_sidechain_pplns_window(
+    const ShareChain& chain, const SidechainParameters& params,
+    const Difficulty128& network_difficulty) {
+    const auto* tip = chain.best_tip();
+    return build_sidechain_pplns_window_at_parent(
+        chain, tip ? tip->id : ShareId{}, params, network_difficulty);
 }
 
 std::vector<PplnsPayout> allocate_pplns_reward(

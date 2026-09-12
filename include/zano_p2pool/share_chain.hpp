@@ -73,6 +73,10 @@ struct ConnectedShare {
     ShareId id{};
     ChainWork cumulative_work{};
     std::optional<CandidateValidation> pow_validation;
+    // True only when this share and every ancestor entered through submit_share
+    // with configured difficulty enforcement and caller-supplied trusted work.
+    // Unchecked/replayed records never acquire this flag merely by connecting.
+    bool validated_ancestry{false};
 };
 
 class ShareChain {
@@ -108,6 +112,8 @@ public:
     [[nodiscard]] bool enforces_sidechain_difficulty() const noexcept {
         return difficulty_policy_.has_value();
     }
+
+    [[nodiscard]] bool matches_sidechain_parameters(const SidechainParameters& params) const;
 
     // Expected difficulty for a new share extending the currently selected tip.
     // On an empty chain this returns the configured minimum, capped by the
@@ -173,6 +179,7 @@ private:
     std::map<ShareId, std::vector<ShareId>> orphans_by_parent_;
     std::optional<ShareId> best_tip_id_;
     std::optional<DifficultyPolicy> difficulty_policy_;
+    std::optional<Hash256> parameter_id_;
 };
 
 [[nodiscard]] const char* share_disposition_name(

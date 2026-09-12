@@ -54,6 +54,14 @@ struct PplnsPayout {
     const SidechainParameters& params,
     const Difficulty128& network_difficulty);
 
+// Branch-relative variants. Zero parent means an empty window; a nonzero
+// missing parent throws. These are accounting functions, not trust checks.
+[[nodiscard]] PplnsWindow build_pplns_window_at_parent(
+    const ShareChain& chain, const ShareId& parent_id, const ChainWork& requested_work);
+[[nodiscard]] PplnsWindow build_sidechain_pplns_window_at_parent(
+    const ShareChain& chain, const ShareId& parent_id,
+    const SidechainParameters& params, const Difficulty128& network_difficulty);
+
 // Divide reward_atomic proportionally to credited work using exact integer
 // arithmetic. Floor allocations are followed by deterministic largest-remainder
 // apportionment; ties are resolved by lexicographic MinerId. The returned rows
