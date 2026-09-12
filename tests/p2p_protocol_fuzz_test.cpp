@@ -2,6 +2,7 @@
 #include "zano_p2pool/p2p_share.hpp"
 #include "zano_p2pool/p2p_sync.hpp"
 #include "zano_p2pool/p2p_tip.hpp"
+#include "zano_p2pool/p2p_work_retrieval.hpp"
 #include "test_check.hpp"
 
 #include <algorithm>
@@ -91,6 +92,10 @@ P2pMiningContextProposal make_mining_context() {
 bool semantic_parser_is_safe(const P2pEnvelope& envelope) {
     try {
         switch (envelope.type) {
+        case P2pMessageType::MiningWorkRequest:
+            return make_mining_work_request(parse_mining_work_request(envelope)) == envelope;
+        case P2pMessageType::MiningWorkResponse:
+            return make_mining_work_response(parse_mining_work_response(envelope)) == envelope;
         case P2pMessageType::Handshake: {
             const P2pHandshake parsed = parse_p2p_handshake_envelope(envelope);
             return make_p2p_handshake_envelope(parsed) == envelope;
@@ -168,6 +173,9 @@ std::vector<P2pEnvelope> canonical_envelopes() {
     tip.share_height = 77;
 
     return {
+        make_mining_work_request({{123, request_id}, 0}),
+        make_mining_work_response({{{123, request_id}, 0}, 0, {}}),
+        make_mining_work_response({{{123, request_id}, 0}, 128, std::vector<std::uint8_t>(128, 0x55)}),
         make_p2p_handshake_envelope(make_handshake()),
         make_p2p_share_announce_envelope(share),
         make_p2p_share_request_envelope(request_id),

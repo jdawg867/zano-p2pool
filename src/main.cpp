@@ -887,6 +887,10 @@ int main(int argc, char** argv) {
             std::cout << "Mining work archive: " << mining_work_archive->path()
                       << " records=" << count << '\n';
         }
+        std::unique_ptr<zano_p2pool::P2pWorkRetrieval> work_retrieval;
+        if (mining_work_archive) {
+            work_retrieval = std::make_unique<zano_p2pool::P2pWorkRetrieval>(*mining_work_archive);
+        }
         const auto archive_work = [&](const auto& work) {
             if (!mining_work_archive) return;
             try {
@@ -894,6 +898,7 @@ int main(int argc, char** argv) {
                     zano_p2pool::p2p_mining_context_proposal_from_template(work.block);
                 const auto payload = zano_p2pool::serialize_p2p_mining_context_payload(proposal);
                 static_cast<void>(mining_work_archive->put(payload));
+                work_retrieval->remember_local(proposal);
             } catch (...) {
                 g_persistence_failed.store(true, std::memory_order_release);
                 std::cerr << "FATAL mining-work archive write failed; stopping before work publication\n";
@@ -933,6 +938,7 @@ int main(int argc, char** argv) {
 
         zano_p2pool::P2pNodeProtocol p2p_protocol(
             node_chain, trusted_work, node_state_mutex);
+        p2p_protocol.set_work_retrieval(work_retrieval.get());
         p2p_protocol.remember_trusted_work(trusted_context_from_live(live));
         set_local_p2p_context(p2p_protocol, live);
 
@@ -943,6 +949,7 @@ int main(int argc, char** argv) {
             handshake.sidechain_id = zano_p2pool::sidechain_id(sidechain_parameters);
             handshake.node_id = generate_node_id();
             handshake.capabilities = zano_p2pool::kP2pCapabilitiesV1;
+            if (work_retrieval) handshake.capabilities |= zano_p2pool::kP2pCapabilityWorkRetrieval;
             const zano_p2pool::P2pTipHint tip = p2p_protocol.local_tip();
             handshake.best_share_id = tip.share_id;
             handshake.best_share_height = tip.share_height;
@@ -974,6 +981,12 @@ int main(int argc, char** argv) {
                             envelope,
                             unix_time_seconds(),
                             zano_p2pool::ProgPowZContextMode::Light);
+
+                        if (result.untrusted_work_received) {
+                            std::cerr << "P2P mining work retrieved: id="
+                                      << zano_p2pool::hash_to_hex(*result.untrusted_work_received)
+                                      << " untrusted; historical validation pending\n";
+                        }
 
                         const bool share_admitted =
                             (result.status ==

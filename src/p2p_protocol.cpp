@@ -92,7 +92,9 @@ bool p2p_message_type_supported(std::uint8_t value) noexcept {
            value == static_cast<std::uint8_t>(P2pMessageType::ShareRequest) ||
            value == static_cast<std::uint8_t>(P2pMessageType::ShareResponse) ||
            value == static_cast<std::uint8_t>(P2pMessageType::TipAnnounce) ||
-           value == static_cast<std::uint8_t>(P2pMessageType::MiningContextAnnounce);
+           value == static_cast<std::uint8_t>(P2pMessageType::MiningContextAnnounce) ||
+           value == static_cast<std::uint8_t>(P2pMessageType::MiningWorkRequest) ||
+           value == static_cast<std::uint8_t>(P2pMessageType::MiningWorkResponse);
 }
 
 bool is_zero_node_id(const NodeId& node_id) noexcept {

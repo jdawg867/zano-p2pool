@@ -1,6 +1,7 @@
 #include "zano_p2pool/p2p_node.hpp"
 
 #include <optional>
+#include <stdexcept>
 
 namespace zano_p2pool {
 
@@ -32,6 +33,10 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
                 receiver.receive(peer, envelope, now, mode);
             result.status = P2pNodeMessageStatus::ShareProcessed;
             result.share_status = receive.status;
+            if (receive.status == P2pShareReceiveStatus::UnknownWorkContext && work_retrieval_) {
+                const auto share = parse_p2p_share_announce_envelope(envelope);
+                followup = work_retrieval_->begin(peer, {share.zano_height, share.mining_header_hash}, now);
+            }
             if (receive.chain_result.best_tip_changed) {
                 expected_payout_.reset();
                 expected_payout_plan_.reset();
@@ -62,6 +67,11 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
             result.sync_status = sync.status;
             if (sync.share_result.has_value()) {
                 result.share_status = sync.share_result->status;
+                if (result.share_status == P2pShareReceiveStatus::UnknownWorkContext && work_retrieval_) {
+                    const auto response = parse_p2p_share_response_envelope(envelope);
+                    if (response.share) followup = work_retrieval_->begin(
+                        peer, {response.share->zano_height, response.share->mining_header_hash}, now);
+                }
                 if (sync.share_result->chain_result.best_tip_changed) {
                     expected_payout_.reset();
                     expected_payout_plan_.reset();
@@ -125,6 +135,20 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
             result.mining_context_registry_inserted = trust.registry_inserted;
             break;
         }
+        case P2pMessageType::MiningWorkRequest: {
+            if (!work_retrieval_) throw std::runtime_error("work retrieval is disabled");
+            followup = work_retrieval_->answer(peer, envelope);
+            result.status = P2pNodeMessageStatus::MiningWorkRequestAnswered;
+            break;
+        }
+        case P2pMessageType::MiningWorkResponse: {
+            if (!work_retrieval_) throw std::runtime_error("work retrieval is disabled");
+            const auto received = work_retrieval_->receive(peer, envelope, now);
+            followup = received.followup;
+            result.untrusted_work_received = received.received_id;
+            result.status = P2pNodeMessageStatus::MiningWorkResponseProcessed;
+            break;
+        }
         case P2pMessageType::Handshake:
             result.status = P2pNodeMessageStatus::UnexpectedHandshake;
             break;
@@ -160,6 +184,8 @@ std::uint32_t p2p_node_message_penalty(
                    ? kP2pProtocolViolationPenalty
                    : 0;
     case P2pNodeMessageStatus::ShareRequestAnswered:
+    case P2pNodeMessageStatus::MiningWorkRequestAnswered:
+    case P2pNodeMessageStatus::MiningWorkResponseProcessed:
         return 0;
     case P2pNodeMessageStatus::ShareResponseProcessed:
         if (result.sync_status == P2pShareSyncReceiveStatus::CapabilityMissing) {
@@ -293,6 +319,10 @@ const char* p2p_node_message_status_name(
         return "mining-context-processed";
     case P2pNodeMessageStatus::MiningContextDeferred:
         return "mining-context-deferred";
+    case P2pNodeMessageStatus::MiningWorkRequestAnswered:
+        return "mining-work-request-answered";
+    case P2pNodeMessageStatus::MiningWorkResponseProcessed:
+        return "mining-work-response-processed";
     case P2pNodeMessageStatus::UnexpectedHandshake:
         return "unexpected-handshake";
     }

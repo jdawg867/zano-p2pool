@@ -5,6 +5,7 @@
 #include "zano_p2pool/p2p_share.hpp"
 #include "zano_p2pool/p2p_sync.hpp"
 #include "zano_p2pool/p2p_tip.hpp"
+#include "zano_p2pool/p2p_work_retrieval.hpp"
 
 #include <cstdint>
 #include <mutex>
@@ -20,6 +21,8 @@ enum class P2pNodeMessageStatus : std::uint8_t {
     MiningContextProcessed,
     MiningContextDeferred,
     UnexpectedHandshake,
+    MiningWorkRequestAnswered,
+    MiningWorkResponseProcessed,
 };
 
 struct P2pNodeMessageResult {
@@ -30,6 +33,7 @@ struct P2pNodeMessageResult {
     P2pMiningContextTrustStatus mining_context_status{
         P2pMiningContextTrustStatus::ProofsRejected};
     bool mining_context_registry_inserted{false};
+    std::optional<Hash256> untrusted_work_received;
     bool sent_followup{false};
     bool relayed_share{false};
     bool relayed_tip{false};
@@ -52,6 +56,8 @@ public:
         std::uint64_t now,
         ProgPowZContextMode mode = ProgPowZContextMode::Light);
 
+    // Configure before runtime threads start; retrieval must outlive runtime.
+    void set_work_retrieval(P2pWorkRetrieval* retrieval) noexcept { work_retrieval_ = retrieval; }
     void remember_trusted_work(const ShareWorkContext& context);
     void set_local_mining_context(
         const P2pMiningAnchor& anchor,
@@ -80,6 +86,7 @@ public:
     local_mining_context_envelope() const;
 
 private:
+    P2pWorkRetrieval* work_retrieval_{nullptr};
     ShareChain& chain_;
     P2pTrustedWorkRegistry& trusted_work_;
     std::mutex& state_mutex_;

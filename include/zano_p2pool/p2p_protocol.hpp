@@ -24,6 +24,8 @@ enum class P2pMessageType : std::uint8_t {
     ShareResponse = 4,
     TipAnnounce = 5,
     MiningContextAnnounce = 6,
+    MiningWorkRequest = 7,
+    MiningWorkResponse = 8,
 };
 
 enum class P2pNetwork : std::uint8_t {
@@ -36,6 +38,7 @@ using NodeId = Hash256;
 inline constexpr std::uint64_t kP2pCapabilityShareGossip = 1ULL << 0;
 inline constexpr std::uint64_t kP2pCapabilityShareSync = 1ULL << 1;
 inline constexpr std::uint64_t kP2pCapabilityMiningContext = 1ULL << 2;
+inline constexpr std::uint64_t kP2pCapabilityWorkRetrieval = 1ULL << 3;
 inline constexpr std::uint64_t kP2pCapabilitiesV1 =
     kP2pCapabilityShareGossip |
     kP2pCapabilityShareSync |
