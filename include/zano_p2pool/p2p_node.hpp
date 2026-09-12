@@ -1,5 +1,6 @@
 #pragma once
 
+#include "zano_p2pool/historical_trust.hpp"
 #include "zano_p2pool/p2p_mining_context_trust.hpp"
 #include "zano_p2pool/p2p_runtime.hpp"
 #include "zano_p2pool/p2p_share.hpp"
@@ -8,8 +9,12 @@
 #include "zano_p2pool/p2p_work_retrieval.hpp"
 
 #include <cstdint>
+#include <functional>
+#include <map>
 #include <mutex>
 #include <optional>
+#include <utility>
+#include <vector>
 
 namespace zano_p2pool {
 
@@ -34,6 +39,9 @@ struct P2pNodeMessageResult {
         P2pMiningContextTrustStatus::ProofsRejected};
     bool mining_context_registry_inserted{false};
     std::optional<Hash256> untrusted_work_received;
+    std::optional<HistoricalTrustStatus> historical_trust_status;
+    std::optional<Share> historical_share;
+    bool historical_share_retried{false};
     bool sent_followup{false};
     bool relayed_share{false};
     bool relayed_tip{false};
@@ -56,8 +64,14 @@ public:
         std::uint64_t now,
         ProgPowZContextMode mode = ProgPowZContextMode::Light);
 
-    // Configure before runtime threads start; retrieval must outlive runtime.
+    // Configure before runtime threads start; retrieval and callbacks must
+    // outlive runtime. Retrieved peer work remains untrusted until the
+    // historical trust crossing succeeds for the exact waiting share.
     void set_work_retrieval(P2pWorkRetrieval* retrieval) noexcept { work_retrieval_ = retrieval; }
+    void set_historical_trust_sources(
+        const SidechainParameters& params,
+        std::function<std::vector<P2pMiningAnchor>()> load_local_observations,
+        std::function<RpcCanonicalHeader(std::uint64_t)> lookup);
     void remember_trusted_work(const ShareWorkContext& context);
     void set_local_mining_context(
         const P2pMiningAnchor& anchor,
@@ -86,6 +100,22 @@ public:
     local_mining_context_envelope() const;
 
 private:
+    struct PendingHistoricalCandidate {
+        Share share;
+        std::uint64_t required_capability{};
+        std::uint64_t started{};
+    };
+
+    using PendingHistoricalKey = std::pair<NodeId, MiningWorkKey>;
+
+    [[nodiscard]] bool historical_trust_sources_ready_unlocked() const noexcept;
+    void expire_pending_historical(std::uint64_t now);
+    void remember_pending_historical(
+        const P2pHandshake& peer,
+        const Share& share,
+        std::uint64_t required_capability,
+        std::uint64_t now);
+
     P2pWorkRetrieval* work_retrieval_{nullptr};
     ShareChain& chain_;
     P2pTrustedWorkRegistry& trusted_work_;
@@ -95,6 +125,14 @@ private:
     std::optional<P2pPayoutAddress> expected_payout_;
     std::optional<PplnsCoinbasePlan> expected_payout_plan_;
     std::optional<ShareId> expected_payout_parent_id_;
+
+    std::optional<SidechainParameters> historical_params_;
+    std::function<std::vector<P2pMiningAnchor>()>
+        load_historical_observations_;
+    std::function<RpcCanonicalHeader(std::uint64_t)>
+        historical_parent_lookup_;
+    std::map<PendingHistoricalKey, PendingHistoricalCandidate>
+        pending_historical_;
 };
 
 [[nodiscard]] const char* p2p_node_message_status_name(

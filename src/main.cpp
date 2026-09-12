@@ -2,6 +2,7 @@
 #include "zano_p2pool/crypto_hash.hpp"
 #include "zano_p2pool/metrics_server.hpp"
 #include "zano_p2pool/metrics_snapshot.hpp"
+#include "zano_p2pool/historical_work.hpp"
 #include "zano_p2pool/mining_header.hpp"
 #include "zano_p2pool/mining_work_archive.hpp"
 #include "zano_p2pool/p2p_mining_context.hpp"
@@ -938,6 +939,17 @@ int main(int argc, char** argv) {
         zano_p2pool::P2pNodeProtocol p2p_protocol(
             node_chain, trusted_work, node_state_mutex);
         p2p_protocol.set_work_retrieval(work_retrieval.get());
+        if (mining_work_archive && work_retrieval) {
+            p2p_protocol.set_historical_trust_sources(
+                sidechain_parameters,
+                [archive = mining_work_archive.get()] {
+                    return zano_p2pool::load_local_mining_anchors(
+                        *archive);
+                },
+                [&rpc](std::uint64_t height) {
+                    return rpc.get_canonical_header(height);
+                });
+        }
         p2p_protocol.remember_trusted_work(trusted_context_from_live(live));
         set_local_p2p_context(p2p_protocol, live);
 
@@ -983,11 +995,30 @@ int main(int argc, char** argv) {
 
                         if (result.untrusted_work_received) {
                             std::cerr << "P2P mining work retrieved: id="
-                                      << zano_p2pool::hash_to_hex(*result.untrusted_work_received)
-                                      << " untrusted; historical validation pending\n";
+                                      << zano_p2pool::hash_to_hex(
+                                             *result.untrusted_work_received);
+                            if (result.historical_trust_status.has_value()) {
+                                std::cerr
+                                    << " historical-trust="
+                                    << zano_p2pool::
+                                           historical_trust_status_name(
+                                               *result.historical_trust_status);
+                                if (result.historical_share_retried) {
+                                    std::cerr
+                                        << " share-retry="
+                                        << zano_p2pool::
+                                           p2p_share_receive_status_name(
+                                               result.share_status);
+                                }
+                                std::cerr << '\n';
+                            } else {
+                                std::cerr
+                                    << " untrusted; no bound historical "
+                                       "candidate was promoted\n";
+                            }
                         }
 
-                        const bool share_admitted =
+                        const bool direct_share_admitted =
                             (result.status ==
                                  zano_p2pool::P2pNodeMessageStatus::ShareProcessed ||
                              result.status ==
@@ -996,11 +1027,27 @@ int main(int argc, char** argv) {
                                  zano_p2pool::P2pShareReceiveStatus::Connected ||
                              result.share_status ==
                                  zano_p2pool::P2pShareReceiveStatus::Orphan);
+                        const bool historical_share_admitted =
+                            result.status ==
+                                zano_p2pool::P2pNodeMessageStatus::
+                                    MiningWorkResponseProcessed &&
+                            result.historical_share_retried &&
+                            result.historical_share.has_value() &&
+                            (result.share_status ==
+                                 zano_p2pool::P2pShareReceiveStatus::Connected ||
+                             result.share_status ==
+                                 zano_p2pool::P2pShareReceiveStatus::Orphan);
+                        const bool share_admitted =
+                            direct_share_admitted ||
+                            historical_share_admitted;
+
                         if (share_admitted) {
                             p2p_admitted_shares_total.fetch_add(
                                 1,
                                 std::memory_order_relaxed);
-                            if (result.status ==
+                            if (historical_share_admitted) {
+                                persist_share(*result.historical_share);
+                            } else if (result.status ==
                                 zano_p2pool::P2pNodeMessageStatus::ShareProcessed) {
                                 persist_share(
                                     zano_p2pool::parse_p2p_share_announce_envelope(
@@ -1015,12 +1062,19 @@ int main(int argc, char** argv) {
                             }
                         }
 
-                        if ((result.status ==
+                        const bool direct_share_connected =
+                            (result.status ==
                                  zano_p2pool::P2pNodeMessageStatus::ShareProcessed ||
                              result.status ==
                                  zano_p2pool::P2pNodeMessageStatus::ShareResponseProcessed) &&
                             result.share_status ==
-                                zano_p2pool::P2pShareReceiveStatus::Connected) {
+                                zano_p2pool::P2pShareReceiveStatus::Connected;
+                        const bool historical_share_connected =
+                            historical_share_admitted &&
+                            result.share_status ==
+                                zano_p2pool::P2pShareReceiveStatus::Connected;
+                        if (direct_share_connected ||
+                            historical_share_connected) {
                             request_template_refresh();
                         }
 
