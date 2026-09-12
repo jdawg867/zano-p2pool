@@ -4,6 +4,8 @@
 #include <json-c/json.h>
 
 #include <memory>
+#include <algorithm>
+#include <charconv>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -244,6 +246,42 @@ BlockTemplate RpcClient::get_block_template(
 
     return parse_block_template_json(
         call("getblocktemplate", json_to_string(params.get())));
+}
+
+RpcCanonicalHeader RpcClient::get_canonical_header(std::uint64_t height) const {
+    const auto text = call("getblockheaderbyheight",
+        "{\"height\":" + std::to_string(height) + "}");
+    auto root = parse_json(text, "historical header result");
+    const auto field = [](json_object* object, const char* name, json_type type) {
+        json_object* value = nullptr;
+        if (!object || json_object_get_type(object) != json_type_object ||
+            !json_object_object_get_ex(object, name, &value) || !value ||
+            json_object_get_type(value) != type)
+            throw std::runtime_error(std::string("invalid historical header field: ") + name);
+        return value;
+    };
+    const auto string = [](json_object* value) {
+        return std::string(json_object_get_string(value), json_object_get_string_len(value));
+    };
+    if (string(field(root.get(), "status", json_type_string)) != "OK")
+        throw std::runtime_error("historical header RPC status is not OK");
+    auto* header = field(root.get(), "block_header", json_type_object);
+    if (json_object_get_boolean(field(header, "orphan_status", json_type_boolean)))
+        throw std::runtime_error("historical header is orphaned");
+    const std::string encoded_height = json_to_string(field(header, "height", json_type_int));
+    std::uint64_t returned_height = 0;
+    const auto parsed = std::from_chars(encoded_height.data(),
+        encoded_height.data() + encoded_height.size(), returned_height);
+    if (parsed.ec != std::errc{} || parsed.ptr != encoded_height.data() + encoded_height.size() ||
+        returned_height != height)
+        throw std::runtime_error("historical header height mismatch");
+    const auto hex = string(field(header, "hash", json_type_string));
+    if (hex.size() != 64) throw std::runtime_error("invalid historical header hash length");
+    const auto bytes = hex_to_bytes(hex);
+    RpcCanonicalHeader result{height, {}};
+    std::copy(bytes.begin(), bytes.end(), result.hash.begin());
+    if (result.hash == Hash256{}) throw std::runtime_error("zero historical header hash");
+    return result;
 }
 
 RpcBlockSubmissionResult RpcClient::submit_block(

@@ -81,6 +81,10 @@ struct P2pMiningContextCheckResult {
 // Checks only locally anchorable metadata and current HF6 structural bindings,
 // then derives the mining header locally. A successful result remains explicitly
 // unverified with respect to miner-transaction consensus proofs/payout policy.
+// Structural bindings only. No local anchor or trust is established.
+[[nodiscard]] Hash256 validate_p2p_mining_context_structure(
+    const P2pMiningContextProposal& proposal);
+
 [[nodiscard]] P2pMiningContextCheckResult inspect_p2p_mining_context(
     const P2pHandshake& peer,
     const P2pEnvelope& envelope,

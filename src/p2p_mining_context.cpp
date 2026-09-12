@@ -393,6 +393,13 @@ P2pMiningContextId p2p_mining_context_id(
     return cn_fast_hash(payload);
 }
 
+Hash256 validate_p2p_mining_context_structure(const P2pMiningContextProposal& proposal) {
+    const auto work = derive_mining_header_work(proposal.block_template_blob);
+    require_current_hf6_structural_bindings(proposal, work);
+    require_valid_tgc_json(proposal.miner_tx_tgc_json);
+    return work.header_hash;
+}
+
 P2pMiningContextCheckResult inspect_p2p_mining_context(
     const P2pHandshake& peer,
     const P2pEnvelope& envelope,

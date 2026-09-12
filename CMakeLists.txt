@@ -20,6 +20,7 @@ pkg_check_modules(CURL REQUIRED IMPORTED_TARGET libcurl)
 pkg_check_modules(JSONC REQUIRED IMPORTED_TARGET json-c)
 
 add_library(zano_p2pool_core
+    src/historical_work.cpp
     src/block_submitter.cpp
     src/block_template.cpp
     src/crypto_hash.cpp
@@ -202,8 +203,14 @@ target_link_libraries(zano-p2pool PRIVATE zano_p2pool_core)
 add_executable(zano-p2pool-header src/header_check.cpp)
 target_link_libraries(zano-p2pool-header PRIVATE zano_p2pool_core)
 
+add_executable(zano-p2pool-work-audit src/work_audit.cpp)
+target_link_libraries(zano-p2pool-work-audit PRIVATE zano_p2pool_core)
+
 if(ZANO_P2POOL_BUILD_TESTS)
     enable_testing()
+    add_executable(historical_work_test tests/historical_work_test.cpp)
+    target_link_libraries(historical_work_test PRIVATE zano_p2pool_core)
+    add_test(NAME historical_work_test COMMAND historical_work_test)
     add_executable(p2p_work_retrieval_test tests/p2p_work_retrieval_test.cpp)
     target_link_libraries(p2p_work_retrieval_test PRIVATE zano_p2pool_core)
     add_test(NAME p2p_work_retrieval_test COMMAND p2p_work_retrieval_test)

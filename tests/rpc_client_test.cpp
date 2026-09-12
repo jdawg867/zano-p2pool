@@ -103,6 +103,36 @@ zano_p2pool::RpcBlockSubmissionResult submit_with_response(
 }  // namespace
 
 int main() {
+    const std::string parent_hash(64, 'a');
+    const auto header_reply = [&](const std::string& height, const std::string& orphan,
+                                  const std::string& hash, const std::string& status) {
+        return "{\"jsonrpc\":\"2.0\",\"id\":0,\"result\":{\"status\":\"" + status +
+            "\",\"block_header\":{\"height\":" + height + ",\"orphan_status\":" + orphan +
+            ",\"hash\":\"" + hash + "\"}}}";
+    };
+    {
+        OneShotRpcServer server(header_reply("42", "false", parent_hash, "OK"));
+        const auto header = zano_p2pool::RpcClient(server.url()).get_canonical_header(42);
+        CHECK(header.height == 42);
+        CHECK(header.hash[0] == 0xaa);
+    }
+    for (const auto& response : {
+        header_reply("41", "false", parent_hash, "OK"),
+        header_reply("-1", "false", parent_hash, "OK"),
+        header_reply("42.0", "false", parent_hash, "OK"),
+        header_reply("42", "true", parent_hash, "OK"),
+        header_reply("42", "0", parent_hash, "OK"),
+        header_reply("42", "false", "a", "OK"),
+        header_reply("42", "false", std::string(64, 'z'), "OK"),
+        header_reply("42", "false", std::string(64, '0'), "OK"),
+        header_reply("42", "false", parent_hash, "BUSY")}) {
+        OneShotRpcServer server(response);
+        bool failed = false;
+        try { static_cast<void>(zano_p2pool::RpcClient(server.url()).get_canonical_header(42)); }
+        catch (const std::exception&) { failed = true; }
+        CHECK(failed);
+    }
+
     using namespace zano_p2pool;
 
     CHECK(submit_with_response(

@@ -6,6 +6,7 @@
 #include <string_view>
 
 #include "zano_p2pool/block_template.hpp"
+#include "zano_p2pool/crypto_hash.hpp"
 
 namespace zano_p2pool {
 
@@ -30,6 +31,13 @@ private:
     std::string rpc_message_;
 };
 
+// Minimal canonical membership evidence; intentionally excludes block difficulty
+// and reward, which are not the next PoW template's difficulty/base reward.
+struct RpcCanonicalHeader {
+    std::uint64_t height{};
+    Hash256 hash{};
+};
+
 class RpcClient {
 public:
     explicit RpcClient(
@@ -42,6 +50,8 @@ public:
 
     [[nodiscard]] RpcBlockSubmissionResult submit_block(
         const std::string& block_blob_hex) const;
+
+    [[nodiscard]] RpcCanonicalHeader get_canonical_header(std::uint64_t height) const;
 
 private:
     [[nodiscard]] std::string call(
