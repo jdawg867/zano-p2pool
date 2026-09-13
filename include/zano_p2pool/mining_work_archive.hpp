@@ -18,6 +18,12 @@ public:
     // The ID is cn_fast_hash(payload), matching p2p_mining_context_id().
     [[nodiscard]] Hash256 put(std::span<const std::uint8_t> payload);
     [[nodiscard]] std::vector<std::uint8_t> read(const Hash256& id) const;
+    // Returns every complete record ID in deterministic order while validating
+    // each record's sidechain binding, length, content ID and checksum.
+    // Interrupted unpublished .tmp-* files are ignored. Any other unexpected
+    // directory entry fails closed.
+    [[nodiscard]] std::vector<Hash256> list_ids(
+        std::size_t max_records = 10000) const;
     // Checks complete records one at a time (bounded memory). Interrupted
     // unpublished .tmp-* files are ignored, never treated as evidence.
     [[nodiscard]] std::size_t verify_all() const;
