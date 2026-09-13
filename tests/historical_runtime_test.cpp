@@ -402,6 +402,286 @@ struct RuntimeCaseResult {
     return result;
 }
 
+
+struct RecursiveParentSyncResult {
+    bool failed{false};
+    bool completed{false};
+    bool admitted_order_matches{false};
+    std::size_t admitted_count{};
+    std::size_t trusted_work_count{};
+    std::size_t connected_share_count{};
+    bool grandparent_present{false};
+    bool parent_present{false};
+    bool child_present{false};
+    bool grandparent_validated{false};
+    bool parent_validated{false};
+    bool child_validated{false};
+    int lookup_calls{};
+    int observation_loads{};
+    int work_requests{};
+    int share_requests{};
+};
+
+[[nodiscard]] RecursiveParentSyncResult
+run_recursive_parent_sync_case() {
+    TemporaryDirectory temp("zano-historical-parent-sync");
+    RuntimeFixture fixture = make_runtime_fixture();
+
+    const SidechainId chain_id = sidechain_id(fixture.params);
+
+    MiningWorkArchive provider_archive(
+        temp.path / "provider-work",
+        chain_id);
+    MiningWorkArchive receiver_archive(
+        temp.path / "receiver-work",
+        chain_id);
+
+    static_cast<void>(provider_archive.put(
+        serialize_p2p_mining_context_payload(fixture.proposal)));
+    static_cast<void>(receiver_archive.put(
+        serialize_p2p_mining_context_payload(fixture.proposal)));
+
+    P2pWorkRetrieval provider_retrieval(provider_archive);
+    P2pWorkRetrieval receiver_retrieval(receiver_archive);
+
+    const Share base = fixture.parent;
+    const ShareId base_id = share_id(base);
+
+    Share grandparent = fixture.candidate;
+    grandparent.parent_id = base_id;
+    grandparent.share_height = 1;
+    grandparent.timestamp = 101;
+    grandparent.nonce = 9;
+    const ShareId grandparent_id = share_id(grandparent);
+
+    Share parent = fixture.candidate;
+    parent.parent_id = grandparent_id;
+    parent.share_height = 2;
+    parent.timestamp = 102;
+    parent.nonce = 10;
+    const ShareId parent_id = share_id(parent);
+
+    Share child = fixture.candidate;
+    child.parent_id = parent_id;
+    child.share_height = 3;
+    child.timestamp = 103;
+    child.nonce = 11;
+    const ShareId child_id = share_id(child);
+
+    ShareChain provider_chain(fixture.params);
+    CHECK(provider_chain.add_share_unchecked(base).disposition ==
+          ShareDisposition::Connected);
+    CHECK(provider_chain.add_share_unchecked(grandparent).disposition ==
+          ShareDisposition::Connected);
+    CHECK(provider_chain.add_share_unchecked(parent).disposition ==
+          ShareDisposition::Connected);
+    CHECK(provider_chain.add_share_unchecked(child).disposition ==
+          ShareDisposition::Connected);
+
+    ShareChain receiver_chain(fixture.params);
+    P2pTrustedWorkRegistry provider_trusted_work;
+    P2pTrustedWorkRegistry receiver_trusted_work;
+    std::mutex provider_state_mutex;
+    std::mutex receiver_state_mutex;
+
+    const ShareWorkContext base_context{
+        base.zano_height,
+        base.mining_header_hash,
+        base.network_difficulty,
+    };
+    CHECK(receiver_chain.submit_share(
+              base,
+              base_context,
+              200,
+              ProgPowZContextMode::Light)
+              .disposition == ShareDisposition::Connected);
+    CHECK(receiver_chain.find(base_id) != nullptr);
+    CHECK(receiver_chain.find(base_id)->validated_ancestry);
+
+    P2pNodeProtocol provider_node(
+        provider_chain,
+        provider_trusted_work,
+        provider_state_mutex);
+    P2pNodeProtocol receiver_node(
+        receiver_chain,
+        receiver_trusted_work,
+        receiver_state_mutex);
+
+    provider_node.set_work_retrieval(&provider_retrieval);
+    receiver_node.set_work_retrieval(&receiver_retrieval);
+
+    std::atomic<int> lookup_calls{0};
+    std::atomic<int> observation_loads{0};
+    receiver_node.set_historical_trust_sources(
+        fixture.params,
+        [&receiver_archive, &observation_loads] {
+            ++observation_loads;
+            return load_local_mining_anchors(
+                receiver_archive);
+        },
+        [&fixture, &lookup_calls](std::uint64_t height) {
+            ++lookup_calls;
+            CHECK(height == fixture.proposal.zano_height - 1);
+            return RpcCanonicalHeader{
+                height,
+                fixture.proposal.prev_hash,
+            };
+        });
+
+    const P2pHandshake provider_handshake =
+        runtime_handshake(0x24, chain_id);
+    const P2pHandshake receiver_handshake =
+        runtime_handshake(0x74, chain_id);
+
+    std::atomic<bool> completed{false};
+    std::atomic<bool> failed{false};
+    std::atomic<bool> admitted_order_matches{false};
+    std::atomic<std::size_t> admitted_count{0};
+    std::atomic<int> work_requests{0};
+    std::atomic<int> share_requests{0};
+
+    P2pRuntime* provider_runtime_ptr = nullptr;
+    P2pRuntime* receiver_runtime_ptr = nullptr;
+
+    P2pRuntime provider_runtime(
+        P2pRuntimeConfig{
+            P2pEndpoint{"127.0.0.1", 0},
+            provider_handshake,
+        },
+        [&](const P2pHandshake& peer,
+            const P2pEnvelope& envelope) {
+            try {
+                if (envelope.type ==
+                    P2pMessageType::MiningWorkRequest) {
+                    ++work_requests;
+                } else if (
+                    envelope.type ==
+                    P2pMessageType::ShareRequest) {
+                    ++share_requests;
+                }
+                if (provider_runtime_ptr != nullptr) {
+                    static_cast<void>(
+                        provider_node.handle(
+                            *provider_runtime_ptr,
+                            peer,
+                            envelope,
+                            200,
+                            ProgPowZContextMode::Light));
+                }
+            } catch (...) {
+                failed.store(true);
+            }
+        });
+
+    P2pRuntime receiver_runtime(
+        P2pRuntimeConfig{
+            P2pEndpoint{"127.0.0.1", 0},
+            receiver_handshake,
+        },
+        [&](const P2pHandshake& peer,
+            const P2pEnvelope& envelope) {
+            try {
+                if (receiver_runtime_ptr == nullptr) {
+                    return;
+                }
+                const P2pNodeMessageResult result =
+                    receiver_node.handle(
+                        *receiver_runtime_ptr,
+                        peer,
+                        envelope,
+                        200,
+                        ProgPowZContextMode::Light);
+
+                if (result.historical_admitted_shares.size() == 3) {
+                    admitted_count.store(
+                        result.historical_admitted_shares.size());
+                    admitted_order_matches.store(
+                        share_id(result.historical_admitted_shares[0]) ==
+                            grandparent_id &&
+                        share_id(result.historical_admitted_shares[1]) ==
+                            parent_id &&
+                        share_id(result.historical_admitted_shares[2]) ==
+                            child_id);
+                    completed.store(true);
+                }
+            } catch (...) {
+                failed.store(true);
+            }
+        });
+
+    provider_runtime_ptr = &provider_runtime;
+    receiver_runtime_ptr = &receiver_runtime;
+
+    provider_runtime.start();
+    receiver_runtime.start();
+    receiver_runtime.connect_peer(
+        P2pEndpoint{
+            "127.0.0.1",
+            provider_runtime.listen_port(),
+        });
+
+    CHECK(wait_for([&] {
+        return provider_runtime.peer_count() == 1 &&
+               receiver_runtime.peer_count() == 1;
+    }));
+
+    // Only the child is announced. The receiver must walk backward with two
+    // ShareRequest messages, then resume forward once the grandparent can be
+    // validated against the already trusted base share.
+    provider_runtime.broadcast(
+        make_p2p_share_announce_envelope(child));
+
+    CHECK(wait_for([&] {
+        return completed.load() || failed.load();
+    }));
+
+    receiver_runtime.stop();
+    provider_runtime.stop();
+
+    RecursiveParentSyncResult result;
+    result.failed = failed.load();
+    result.completed = completed.load();
+    result.admitted_order_matches =
+        admitted_order_matches.load();
+    result.admitted_count = admitted_count.load();
+    result.trusted_work_count =
+        receiver_node.trusted_work_count();
+    result.connected_share_count =
+        receiver_node.connected_share_count();
+    result.lookup_calls = lookup_calls.load();
+    result.observation_loads = observation_loads.load();
+    result.work_requests = work_requests.load();
+    result.share_requests = share_requests.load();
+
+    {
+        std::lock_guard lock(receiver_state_mutex);
+        const ConnectedShare* connected_grandparent =
+            receiver_chain.find(grandparent_id);
+        const ConnectedShare* connected_parent =
+            receiver_chain.find(parent_id);
+        const ConnectedShare* connected_child =
+            receiver_chain.find(child_id);
+
+        result.grandparent_present =
+            connected_grandparent != nullptr;
+        result.parent_present =
+            connected_parent != nullptr;
+        result.child_present =
+            connected_child != nullptr;
+        result.grandparent_validated =
+            connected_grandparent != nullptr &&
+            connected_grandparent->validated_ancestry;
+        result.parent_validated =
+            connected_parent != nullptr &&
+            connected_parent->validated_ancestry;
+        result.child_validated =
+            connected_child != nullptr &&
+            connected_child->validated_ancestry;
+    }
+
+    return result;
+}
+
 }  // namespace
 
 int main() {
@@ -446,6 +726,33 @@ int main() {
     CHECK(trusted.candidate_present);
     CHECK(trusted.candidate_validated_ancestry);
     CHECK(trusted.lookup_calls == 4);
+
+    // End-to-end backward historical synchronization. Child and parent both
+    // initially fail only because their explicit sidechain parents are
+    // missing. The grandparent is validated against an existing checked base;
+    // then parent and child are fully re-audited and admitted in order.
+    const RecursiveParentSyncResult recursive =
+        run_recursive_parent_sync_case();
+    CHECK(!recursive.failed);
+    CHECK(recursive.completed);
+    CHECK(recursive.admitted_count == 3);
+    CHECK(recursive.admitted_order_matches);
+    CHECK(recursive.trusted_work_count == 3);
+    CHECK(recursive.connected_share_count == 4);
+    CHECK(recursive.grandparent_present);
+    CHECK(recursive.parent_present);
+    CHECK(recursive.child_present);
+    CHECK(recursive.grandparent_validated);
+    CHECK(recursive.parent_validated);
+    CHECK(recursive.child_validated);
+
+    // One mining-work retrieval is enough: the same untrusted proposal is
+    // retained only after the first child reaches ParentMissing, and each
+    // candidate still reruns the full historical trust crossing.
+    CHECK(recursive.work_requests == 1);
+    CHECK(recursive.share_requests == 2);
+    CHECK(recursive.observation_loads == 5);
+    CHECK(recursive.lookup_calls == 16);
 
     return 0;
 }

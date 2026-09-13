@@ -1027,27 +1027,12 @@ int main(int argc, char** argv) {
                                  zano_p2pool::P2pShareReceiveStatus::Connected ||
                              result.share_status ==
                                  zano_p2pool::P2pShareReceiveStatus::Orphan);
-                        const bool historical_share_admitted =
-                            result.status ==
-                                zano_p2pool::P2pNodeMessageStatus::
-                                    MiningWorkResponseProcessed &&
-                            result.historical_share_retried &&
-                            result.historical_share.has_value() &&
-                            (result.share_status ==
-                                 zano_p2pool::P2pShareReceiveStatus::Connected ||
-                             result.share_status ==
-                                 zano_p2pool::P2pShareReceiveStatus::Orphan);
-                        const bool share_admitted =
-                            direct_share_admitted ||
-                            historical_share_admitted;
 
-                        if (share_admitted) {
-                            p2p_admitted_shares_total.fetch_add(
-                                1,
-                                std::memory_order_relaxed);
-                            if (historical_share_admitted) {
-                                persist_share(*result.historical_share);
-                            } else if (result.status ==
+                        std::size_t admitted_count =
+                            result.historical_admitted_shares.size();
+                        if (direct_share_admitted) {
+                            ++admitted_count;
+                            if (result.status ==
                                 zano_p2pool::P2pNodeMessageStatus::ShareProcessed) {
                                 persist_share(
                                     zano_p2pool::parse_p2p_share_announce_envelope(
@@ -1061,6 +1046,15 @@ int main(int argc, char** argv) {
                                 }
                             }
                         }
+                        for (const auto& admitted :
+                             result.historical_admitted_shares) {
+                            persist_share(admitted);
+                        }
+                        if (admitted_count != 0) {
+                            p2p_admitted_shares_total.fetch_add(
+                                admitted_count,
+                                std::memory_order_relaxed);
+                        }
 
                         const bool direct_share_connected =
                             (result.status ==
@@ -1069,12 +1063,8 @@ int main(int argc, char** argv) {
                                  zano_p2pool::P2pNodeMessageStatus::ShareResponseProcessed) &&
                             result.share_status ==
                                 zano_p2pool::P2pShareReceiveStatus::Connected;
-                        const bool historical_share_connected =
-                            historical_share_admitted &&
-                            result.share_status ==
-                                zano_p2pool::P2pShareReceiveStatus::Connected;
                         if (direct_share_connected ||
-                            historical_share_connected) {
+                            result.historical_share_connected) {
                             request_template_refresh();
                         }
 

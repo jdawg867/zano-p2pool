@@ -41,7 +41,9 @@ struct P2pNodeMessageResult {
     std::optional<Hash256> untrusted_work_received;
     std::optional<HistoricalTrustStatus> historical_trust_status;
     std::optional<Share> historical_share;
+    std::vector<Share> historical_admitted_shares;
     bool historical_share_retried{false};
+    bool historical_share_connected{false};
     bool sent_followup{false};
     bool relayed_share{false};
     bool relayed_tip{false};
@@ -106,13 +108,37 @@ private:
         std::uint64_t started{};
     };
 
+    struct HistoricalEvidence {
+        P2pMiningContextProposal proposal;
+        P2pHandshake source_peer;
+        std::uint64_t received{};
+    };
+
+    struct DeferredHistoricalCandidate {
+        Share share;
+        P2pHandshake candidate_peer;
+        HistoricalEvidence evidence;
+        std::uint64_t required_capability{};
+        std::uint64_t started{};
+    };
+
     using PendingHistoricalKey = std::pair<NodeId, MiningWorkKey>;
 
     [[nodiscard]] bool historical_trust_sources_ready_unlocked() const noexcept;
-    void expire_pending_historical(std::uint64_t now);
+    void expire_historical_state(std::uint64_t now);
     void remember_pending_historical(
         const P2pHandshake& peer,
         const Share& share,
+        std::uint64_t required_capability,
+        std::uint64_t now);
+    void remember_historical_evidence(
+        const MiningWorkKey& key,
+        HistoricalEvidence evidence,
+        std::uint64_t now);
+    [[nodiscard]] bool remember_deferred_historical(
+        const Share& share,
+        const P2pHandshake& candidate_peer,
+        const HistoricalEvidence& evidence,
         std::uint64_t required_capability,
         std::uint64_t now);
 
@@ -133,6 +159,10 @@ private:
         historical_parent_lookup_;
     std::map<PendingHistoricalKey, PendingHistoricalCandidate>
         pending_historical_;
+    std::map<MiningWorkKey, HistoricalEvidence>
+        historical_evidence_;
+    std::map<ShareId, DeferredHistoricalCandidate>
+        deferred_historical_;
 };
 
 [[nodiscard]] const char* p2p_node_message_status_name(
