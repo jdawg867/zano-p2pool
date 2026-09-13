@@ -5,6 +5,7 @@
 #include "zano_p2pool/historical_work.hpp"
 #include "zano_p2pool/mining_header.hpp"
 #include "zano_p2pool/mining_work_archive.hpp"
+#include "zano_p2pool/restart_recovery.hpp"
 #include "zano_p2pool/p2p_mining_context.hpp"
 #include "zano_p2pool/p2p_node.hpp"
 #include "zano_p2pool/p2p_runtime.hpp"
@@ -891,6 +892,54 @@ int main(int argc, char** argv) {
         if (mining_work_archive) {
             work_retrieval = std::make_unique<zano_p2pool::P2pWorkRetrieval>(*mining_work_archive);
         }
+
+        // ShareStore replay intentionally reconstructs only structural linkage.
+        // Before any live payout/template logic consumes that history, attempt
+        // to re-cross the restart trust boundary from exact locally archived
+        // work. Partial recovery is allowed: every share that cannot
+        // independently complete the crossing remains validated_ancestry=false.
+        if (mining_work_archive && node_chain.connected_size() != 0) {
+            try {
+                const zano_p2pool::RestartRecoveryResult restart_recovery =
+                    zano_p2pool::recover_replayed_history(
+                        node_chain,
+                        sidechain_parameters,
+                        *mining_work_archive,
+                        [&rpc](std::uint64_t height) {
+                            return rpc.get_canonical_header(height);
+                        },
+                        unix_time_seconds(),
+                        zano_p2pool::ProgPowZContextMode::Light);
+
+                std::cout
+                    << "Restart history recovery: archive="
+                    << restart_recovery.archive_records
+                    << " connected="
+                    << restart_recovery.connected_considered
+                    << " revalidated="
+                    << restart_recovery.revalidated
+                    << " already="
+                    << restart_recovery.already_validated
+                    << " missing-work="
+                    << restart_recovery.missing_local_work
+                    << " parent-unvalidated="
+                    << restart_recovery.parent_unvalidated
+                    << " rejected="
+                    << restart_recovery.rejected
+                    << '\n';
+            } catch (const std::exception& e) {
+                // Recovery is an upgrade of replayed history, not permission to
+                // trust it. A transient RPC or recovery failure therefore
+                // leaves all not-yet-crossed records untrusted while allowing
+                // the node to continue and recover/sync through normal runtime
+                // paths.
+                std::cerr
+                    << "Restart history recovery incomplete: "
+                    << e.what()
+                    << "; unrevalidated replay history remains untrusted\n";
+            }
+        }
+
         const auto archive_work = [&](const auto& work) {
             if (!mining_work_archive) return;
             try {
