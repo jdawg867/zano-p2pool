@@ -2,6 +2,7 @@
 
 #include <optional>
 #include <stdexcept>
+#include <vector>
 
 namespace zano_p2pool {
 
@@ -13,6 +14,109 @@ P2pNodeProtocol::P2pNodeProtocol(
       trusted_work_(trusted_work),
       state_mutex_(state_mutex) {}
 
+bool P2pNodeProtocol::historical_trust_sources_ready_unlocked() const noexcept {
+    return historical_params_.has_value() &&
+           static_cast<bool>(load_historical_observations_) &&
+           static_cast<bool>(historical_parent_lookup_);
+}
+
+void P2pNodeProtocol::expire_historical_state(std::uint64_t now) {
+    for (auto it = pending_historical_.begin();
+         it != pending_historical_.end();) {
+        if (now < it->second.started ||
+            now - it->second.started >= kMiningWorkRequestLifetime) {
+            it = pending_historical_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    for (auto it = historical_evidence_.begin();
+         it != historical_evidence_.end();) {
+        if (now < it->second.received ||
+            now - it->second.received >= kMiningWorkRequestLifetime) {
+            it = historical_evidence_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    for (auto it = deferred_historical_.begin();
+         it != deferred_historical_.end();) {
+        if (now < it->second.started ||
+            now - it->second.started >= kMiningWorkRequestLifetime) {
+            it = deferred_historical_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+void P2pNodeProtocol::remember_pending_historical(
+    const P2pHandshake& peer,
+    const Share& share,
+    std::uint64_t required_capability,
+    std::uint64_t now) {
+    expire_historical_state(now);
+    if (pending_historical_.size() >= kMiningWorkMaxPending) {
+        return;
+    }
+
+    const MiningWorkKey work_key{
+        share.zano_height,
+        share.mining_header_hash,
+    };
+    pending_historical_.try_emplace(
+        PendingHistoricalKey{peer.node_id, work_key},
+        PendingHistoricalCandidate{
+            share,
+            required_capability,
+            now,
+        });
+}
+
+void P2pNodeProtocol::remember_historical_evidence(
+    const MiningWorkKey& key,
+    HistoricalEvidence evidence,
+    std::uint64_t now) {
+    expire_historical_state(now);
+    evidence.received = now;
+    if (!historical_evidence_.contains(key) &&
+        historical_evidence_.size() >= kMiningWorkMaxReceived) {
+        historical_evidence_.erase(historical_evidence_.begin());
+    }
+    historical_evidence_.insert_or_assign(key, std::move(evidence));
+}
+
+bool P2pNodeProtocol::remember_deferred_historical(
+    const Share& share,
+    const P2pHandshake& candidate_peer,
+    const HistoricalEvidence& evidence,
+    std::uint64_t required_capability,
+    std::uint64_t now) {
+    expire_historical_state(now);
+    if ((candidate_peer.capabilities & kP2pCapabilityShareSync) == 0) {
+        return false;
+    }
+
+    const ShareId id = share_id(share);
+    if (!deferred_historical_.contains(id) &&
+        deferred_historical_.size() >= kMiningWorkMaxPending) {
+        return false;
+    }
+
+    deferred_historical_.insert_or_assign(
+        id,
+        DeferredHistoricalCandidate{
+            share,
+            candidate_peer,
+            evidence,
+            required_capability,
+            now,
+        });
+    return true;
+}
+
 P2pNodeMessageResult P2pNodeProtocol::handle(
     P2pRuntime& runtime,
     const P2pHandshake& peer,
@@ -22,8 +126,156 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
     try {
         P2pNodeMessageResult result;
         std::optional<P2pEnvelope> followup;
+        NodeId followup_peer = peer.node_id;
         std::optional<P2pEnvelope> relay_share;
         std::optional<P2pEnvelope> relay_tip;
+
+        const auto attempt_historical =
+            [&](const Share& candidate_share,
+                const P2pHandshake& candidate_peer,
+                const HistoricalEvidence& evidence,
+                std::uint64_t required_capability,
+                bool allow_parent_defer)
+                -> std::optional<ShareId> {
+            if (!historical_trust_sources_ready_unlocked()) {
+                return std::nullopt;
+            }
+
+            const std::vector<P2pMiningAnchor> observations =
+                load_historical_observations_();
+            const HistoricalTrustResult trust =
+                promote_historical_mining_context(
+                    trusted_work_,
+                    chain_,
+                    *historical_params_,
+                    candidate_share,
+                    evidence.source_peer,
+                    evidence.proposal,
+                    observations,
+                    historical_parent_lookup_);
+            result.historical_trust_status = trust.status;
+
+            const MiningWorkKey candidate_work_key{
+                candidate_share.zano_height,
+                candidate_share.mining_header_hash,
+            };
+
+            if (trust.status != HistoricalTrustStatus::Trusted) {
+                const bool parent_missing =
+                    allow_parent_defer &&
+                    trust.status == HistoricalTrustStatus::PayoutRejected &&
+                    trust.payout.status ==
+                        HistoricalPayoutStatus::ParentMissing;
+                if (parent_missing &&
+                    remember_deferred_historical(
+                        candidate_share,
+                        candidate_peer,
+                        evidence,
+                        required_capability,
+                        now)) {
+                    // Keep only evidence that crossed candidate binding and
+                    // local anchoring and is blocked solely on sidechain
+                    // ancestry. It remains untrusted and is fully rechecked
+                    // when the parent arrives.
+                    remember_historical_evidence(
+                        candidate_work_key,
+                        evidence,
+                        now);
+                    followup = make_p2p_share_request_envelope(
+                        candidate_share.parent_id);
+                    followup_peer = candidate_peer.node_id;
+                } else {
+                    // Never let malformed/stale evidence poison reuse of this
+                    // height/header key. A later peer may provide fresh bytes.
+                    historical_evidence_.erase(candidate_work_key);
+                }
+                return std::nullopt;
+            }
+
+            // Trusted evidence may be reused by another share with the same
+            // Zano work key, but every candidate still reruns the complete
+            // parent-bound historical trust crossing.
+            remember_historical_evidence(
+                candidate_work_key,
+                evidence,
+                now);
+
+            P2pShareReceiver receiver(chain_, trusted_work_);
+            const P2pShareReceiveResult retried =
+                receiver.receive_share(
+                    candidate_peer,
+                    candidate_share,
+                    required_capability,
+                    now,
+                    mode);
+            result.historical_share = candidate_share;
+            result.historical_share_retried = true;
+            if (result.status ==
+                P2pNodeMessageStatus::MiningWorkResponseProcessed) {
+                result.share_status = retried.status;
+            }
+
+            if (retried.chain_result.best_tip_changed) {
+                expected_payout_.reset();
+                expected_payout_plan_.reset();
+                expected_payout_parent_id_.reset();
+            }
+            if (retried.missing_parent_id.has_value()) {
+                followup = make_p2p_share_request_envelope(
+                    *retried.missing_parent_id);
+                followup_peer = candidate_peer.node_id;
+            }
+            if (retried.status == P2pShareReceiveStatus::Connected ||
+                retried.status == P2pShareReceiveStatus::Orphan) {
+                result.historical_admitted_shares.push_back(
+                    candidate_share);
+            }
+            if (retried.status == P2pShareReceiveStatus::Connected) {
+                result.historical_share_connected = true;
+                relay_share = make_p2p_share_announce_envelope(
+                    candidate_share);
+                relay_tip = make_p2p_tip_announce_envelope(
+                    p2p_tip_hint_from_chain(chain_));
+                return share_id(candidate_share);
+            }
+            return std::nullopt;
+        };
+
+        const auto resume_deferred_descendants =
+            [&](const ShareId& connected_parent_id) {
+            std::vector<ShareId> queue{connected_parent_id};
+            for (std::size_t index = 0; index < queue.size(); ++index) {
+                const ShareId parent_id = queue[index];
+                std::vector<ShareId> ready;
+                for (const auto& [candidate_id, deferred] :
+                     deferred_historical_) {
+                    if (deferred.share.parent_id == parent_id) {
+                        ready.push_back(candidate_id);
+                    }
+                }
+
+                for (const ShareId& candidate_id : ready) {
+                    const auto it =
+                        deferred_historical_.find(candidate_id);
+                    if (it == deferred_historical_.end()) {
+                        continue;
+                    }
+                    const DeferredHistoricalCandidate deferred =
+                        it->second;
+                    deferred_historical_.erase(it);
+
+                    const auto connected = attempt_historical(
+                        deferred.share,
+                        deferred.candidate_peer,
+                        deferred.evidence,
+                        deferred.required_capability,
+                        false);
+                    if (connected.has_value()) {
+                        queue.push_back(*connected);
+                    }
+                }
+            }
+        };
 
         switch (envelope.type) {
         case P2pMessageType::ShareAnnounce: {
@@ -33,9 +285,42 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
                 receiver.receive(peer, envelope, now, mode);
             result.status = P2pNodeMessageStatus::ShareProcessed;
             result.share_status = receive.status;
-            if (receive.status == P2pShareReceiveStatus::UnknownWorkContext && work_retrieval_) {
-                const auto share = parse_p2p_share_announce_envelope(envelope);
-                followup = work_retrieval_->begin(peer, {share.zano_height, share.mining_header_hash}, now);
+            if (receive.status == P2pShareReceiveStatus::UnknownWorkContext &&
+                work_retrieval_) {
+                const auto share =
+                    parse_p2p_share_announce_envelope(envelope);
+                const MiningWorkKey work_key{
+                    share.zano_height,
+                    share.mining_header_hash,
+                };
+                expire_historical_state(now);
+                const auto evidence_it =
+                    historical_evidence_.find(work_key);
+                if (evidence_it != historical_evidence_.end() &&
+                    historical_trust_sources_ready_unlocked()) {
+                    const auto connected = attempt_historical(
+                        share,
+                        peer,
+                        evidence_it->second,
+                        kP2pCapabilityShareGossip,
+                        true);
+                    if (connected.has_value()) {
+                        resume_deferred_descendants(*connected);
+                    }
+                } else {
+                    auto work_request =
+                        work_retrieval_->begin(peer, work_key, now);
+                    if (work_request.has_value()) {
+                        followup = std::move(work_request);
+                        if (historical_trust_sources_ready_unlocked()) {
+                            remember_pending_historical(
+                                peer,
+                                share,
+                                kP2pCapabilityShareGossip,
+                                now);
+                        }
+                    }
+                }
             }
             if (receive.chain_result.best_tip_changed) {
                 expected_payout_.reset();
@@ -50,6 +335,7 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
                 relay_share = envelope;
                 relay_tip = make_p2p_tip_announce_envelope(
                     p2p_tip_hint_from_chain(chain_));
+                resume_deferred_descendants(receive.chain_result.id);
             }
             break;
         }
@@ -68,10 +354,48 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
             result.sync_status = sync.status;
             if (sync.share_result.has_value()) {
                 result.share_status = sync.share_result->status;
-                if (result.share_status == P2pShareReceiveStatus::UnknownWorkContext && work_retrieval_) {
-                    const auto response = parse_p2p_share_response_envelope(envelope);
-                    if (response.share) followup = work_retrieval_->begin(
-                        peer, {response.share->zano_height, response.share->mining_header_hash}, now);
+                if (result.share_status ==
+                        P2pShareReceiveStatus::UnknownWorkContext &&
+                    work_retrieval_) {
+                    const auto response =
+                        parse_p2p_share_response_envelope(envelope);
+                    if (response.share.has_value()) {
+                        const MiningWorkKey work_key{
+                            response.share->zano_height,
+                            response.share->mining_header_hash,
+                        };
+                        expire_historical_state(now);
+                        const auto evidence_it =
+                            historical_evidence_.find(work_key);
+                        if (evidence_it != historical_evidence_.end() &&
+                            historical_trust_sources_ready_unlocked()) {
+                            const auto connected = attempt_historical(
+                                *response.share,
+                                peer,
+                                evidence_it->second,
+                                kP2pCapabilityShareSync,
+                                true);
+                            if (connected.has_value()) {
+                                resume_deferred_descendants(*connected);
+                            }
+                        } else {
+                            auto work_request =
+                                work_retrieval_->begin(
+                                    peer,
+                                    work_key,
+                                    now);
+                            if (work_request.has_value()) {
+                                followup = std::move(work_request);
+                                if (historical_trust_sources_ready_unlocked()) {
+                                    remember_pending_historical(
+                                        peer,
+                                        *response.share,
+                                        kP2pCapabilityShareSync,
+                                        now);
+                                }
+                            }
+                        }
+                    }
                 }
                 if (sync.share_result->chain_result.best_tip_changed) {
                     expected_payout_.reset();
@@ -90,6 +414,8 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
                             *response.share);
                         relay_tip = make_p2p_tip_announce_envelope(
                             p2p_tip_hint_from_chain(chain_));
+                        resume_deferred_descendants(
+                            sync.share_result->chain_result.id);
                     }
                 }
             }
@@ -147,11 +473,75 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
             break;
         }
         case P2pMessageType::MiningWorkResponse: {
-            if (!work_retrieval_) throw std::runtime_error("work retrieval is disabled");
-            const auto received = work_retrieval_->receive(peer, envelope, now);
+            if (!work_retrieval_) {
+                throw std::runtime_error("work retrieval is disabled");
+            }
+
+            const MiningWorkResponse response =
+                parse_mining_work_response(envelope);
+            const MiningWorkKey work_key = response.request.key;
+            MiningWorkReceiveResult received;
+            try {
+                received = work_retrieval_->receive(peer, envelope, now);
+            } catch (...) {
+                std::lock_guard lock(state_mutex_);
+                pending_historical_.erase(
+                    PendingHistoricalKey{peer.node_id, work_key});
+                throw;
+            }
+
             followup = received.followup;
             result.untrusted_work_received = received.received_id;
             result.status = P2pNodeMessageStatus::MiningWorkResponseProcessed;
+
+            if (response.total_size == 0) {
+                std::lock_guard lock(state_mutex_);
+                pending_historical_.erase(
+                    PendingHistoricalKey{peer.node_id, work_key});
+                break;
+            }
+            if (!received.received_id.has_value()) {
+                break;
+            }
+
+            std::lock_guard lock(state_mutex_);
+            expire_historical_state(now);
+
+            const auto pending_it = pending_historical_.find(
+                PendingHistoricalKey{peer.node_id, work_key});
+            if (!historical_trust_sources_ready_unlocked() ||
+                pending_it == pending_historical_.end()) {
+                // With no exact waiting candidate, leave the structurally
+                // checked bytes in P2pWorkRetrieval's untrusted cache.
+                break;
+            }
+
+            const auto work_bytes =
+                work_retrieval_->take_untrusted(work_key);
+            if (!work_bytes.has_value()) {
+                throw std::runtime_error(
+                    "completed historical work is missing from untrusted cache");
+            }
+
+            HistoricalEvidence evidence{
+                deserialize_p2p_mining_context_payload(*work_bytes),
+                peer,
+                now,
+            };
+
+            const PendingHistoricalCandidate candidate =
+                pending_it->second;
+            pending_historical_.erase(pending_it);
+
+            const auto connected = attempt_historical(
+                candidate.share,
+                peer,
+                evidence,
+                candidate.required_capability,
+                true);
+            if (connected.has_value()) {
+                resume_deferred_descendants(*connected);
+            }
             break;
         }
         case P2pMessageType::Handshake:
@@ -165,7 +555,8 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
         }
 
         if (followup.has_value()) {
-            result.sent_followup = runtime.send_to(peer.node_id, *followup);
+            result.sent_followup =
+                runtime.send_to(followup_peer, *followup);
         }
         if (relay_share.has_value()) {
             runtime.broadcast_except(peer.node_id, *relay_share);
@@ -219,6 +610,26 @@ std::uint32_t p2p_node_message_penalty(
         return kP2pProtocolViolationPenalty;
     }
     return 0;
+}
+
+void P2pNodeProtocol::set_historical_trust_sources(
+    const SidechainParameters& params,
+    std::function<std::vector<P2pMiningAnchor>()> load_local_observations,
+    std::function<RpcCanonicalHeader(std::uint64_t)> lookup) {
+    if (!load_local_observations || !lookup) {
+        throw std::invalid_argument(
+            "historical trust sources must be callable");
+    }
+
+    std::lock_guard lock(state_mutex_);
+    if (!chain_.matches_sidechain_parameters(params)) {
+        throw std::runtime_error(
+            "historical trust sidechain parameters do not match chain");
+    }
+    historical_params_ = params;
+    load_historical_observations_ =
+        std::move(load_local_observations);
+    historical_parent_lookup_ = std::move(lookup);
 }
 
 void P2pNodeProtocol::remember_trusted_work(
