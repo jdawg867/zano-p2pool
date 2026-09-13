@@ -665,6 +665,15 @@ bool apply_canonical_pplns_template(
         return false;
     }
 
+    // Structurally replayed history is not payout authority. Keep the node
+    // online for P2P/history recovery, but do not attempt canonical PPLNS
+    // construction until the best chain has crossed ancestry validation.
+    const zano_p2pool::ConnectedShare* tip = chain.best_tip();
+    if (tip == nullptr || !tip->validated_ancestry) {
+        live.payout_plan.reset();
+        return false;
+    }
+
     zano_p2pool::PplnsTemplateResult rebuilt =
         zano_p2pool::build_canonical_pplns_template(
             live.block,
@@ -977,11 +986,27 @@ int main(int argc, char** argv) {
             }
         };
 
-        static_cast<void>(apply_canonical_pplns_template(
-            live,
-            node_chain,
-            node_state_mutex,
-            sidechain_parameters));
+        const bool initial_canonical_pplns =
+            apply_canonical_pplns_template(
+                live,
+                node_chain,
+                node_state_mutex,
+                sidechain_parameters);
+
+        bool initial_chain_empty = false;
+        {
+            std::lock_guard lock(node_state_mutex);
+            initial_chain_empty = node_chain.connected_size() == 0;
+        }
+
+        const bool initial_stratum_ready =
+            initial_canonical_pplns || initial_chain_empty;
+
+        if (options.stratum && !initial_stratum_ready) {
+            std::cerr
+                << "Stratum deferred: connected replay history has not "
+                   "completed ancestry revalidation\n";
+        }
 
         archive_work(live);
 
@@ -1193,7 +1218,7 @@ int main(int argc, char** argv) {
         }
 
         std::unique_ptr<zano_p2pool::BlockCandidateSubmitter> block_submitter;
-        if (options.stratum) {
+        if (options.stratum && initial_stratum_ready) {
             block_submitter =
                 std::make_unique<zano_p2pool::BlockCandidateSubmitter>(
                     [&](const std::string& block_blob_hex)
@@ -1269,7 +1294,7 @@ int main(int argc, char** argv) {
 
         std::unique_ptr<zano_p2pool::StratumTcpServer> server;
         std::uint64_t job_sequence = 0;
-        if (options.stratum) {
+        if (options.stratum && initial_stratum_ready) {
             zano_p2pool::StratumServerConfig server_config;
             server_config.bind_address = options.stratum_bind;
             server_config.port = options.stratum_port;

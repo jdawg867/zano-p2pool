@@ -259,6 +259,37 @@ int main() {
     CHECK(find_work(bounded, miner(0x09)) != nullptr);
     CHECK(find_work(bounded, miner(0x28)) != nullptr);
 
+    // A consensus-configured chain may contain structurally connected replay
+    // records whose ancestry has not crossed the validation boundary yet.
+    // Such records must never contribute even one unit of live PPLNS work.
+    SidechainParameters guarded_policy = canonical_sidechain_parameters(
+        SidechainParentNetwork::Testnet);
+    guarded_policy.minimum_share_difficulty = 1;
+
+    ShareChain unchecked_guard(guarded_policy);
+    const PayoutPublicKeys guarded_payout = payout(0x71);
+    ShareId unchecked_parent{};
+    unchecked_parent = append_share_v2(
+        unchecked_guard,
+        unchecked_parent,
+        0,
+        "1",
+        guarded_payout);
+
+    CHECK(unchecked_guard.find(unchecked_parent) != nullptr);
+    CHECK(!unchecked_guard.find(unchecked_parent)->validated_ancestry);
+
+    bool unchecked_pplns_threw = false;
+    try {
+        static_cast<void>(build_sidechain_pplns_window(
+            unchecked_guard,
+            guarded_policy,
+            difficulty128_from_decimal("1")));
+    } catch (const std::logic_error&) {
+        unchecked_pplns_threw = true;
+    }
+    CHECK(unchecked_pplns_threw);
+
     ShareChain empty;
     const PplnsWindow empty_window = build_pplns_window(empty, work("100"));
     CHECK(!empty_window.complete);
