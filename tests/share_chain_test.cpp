@@ -424,6 +424,114 @@ int main() {
     CHECK(unavailable_chain.connected_size() == 0);
 #endif
 
+
+#ifdef ZANO_P2POOL_HAVE_PROGPOWZ
+    // Persistence replay deliberately creates connected but unvalidated
+    // ancestry. Recovery may upgrade an existing record only from an already
+    // trusted work context, and descendants must wait for the exact parent.
+    SidechainParameters recovery_params =
+        canonical_sidechain_parameters(SidechainParentNetwork::Testnet);
+    recovery_params.minimum_share_difficulty = 3;
+    recovery_params.target_share_seconds = 10;
+    recovery_params.difficulty_window_shares = 20;
+
+    Share recovery_root = make_v2_share("3", 200);
+    recovery_root.timestamp = 1'700'100'000;
+    recovery_root.zano_height = 0;
+    recovery_root.mining_header_hash = hash_from_hex(
+        "ffeeddccbbaa9988776655443322110000112233445566778899aabbccddeeff");
+    recovery_root.nonce = UINT64_C(0x123456789abcdef0);
+    recovery_root.network_difficulty = difficulty128_from_decimal("4");
+
+    ShareChain recovery_chain(recovery_params);
+    CHECK(recovery_chain.add_share_unchecked(recovery_root).disposition ==
+          ShareDisposition::Connected);
+    const ShareId recovery_root_id = share_id(recovery_root);
+    CHECK(recovery_chain.find(recovery_root_id) != nullptr);
+    CHECK(!recovery_chain.find(recovery_root_id)->validated_ancestry);
+
+    Share recovery_child = make_v2_child(
+        recovery_root,
+        "3",
+        201);
+    recovery_child.zano_height = recovery_root.zano_height;
+    recovery_child.mining_header_hash = recovery_root.mining_header_hash;
+    recovery_child.nonce = recovery_root.nonce;
+    recovery_child.network_difficulty = recovery_root.network_difficulty;
+    recovery_child.share_difficulty =
+        recovery_chain.expected_child_share_difficulty(
+            recovery_root_id,
+            recovery_child.network_difficulty);
+
+    CHECK(recovery_chain.add_share_unchecked(recovery_child).disposition ==
+          ShareDisposition::Connected);
+    const ShareId recovery_child_id = share_id(recovery_child);
+    CHECK(!recovery_chain.find(recovery_child_id)->validated_ancestry);
+
+    const RevalidateShareResult child_first =
+        recovery_chain.revalidate_connected_share(
+            recovery_child_id,
+            context_for(recovery_child),
+            recovery_child.timestamp,
+            ProgPowZContextMode::Light);
+    CHECK(child_first.status == RevalidateShareStatus::ParentUnvalidated);
+    CHECK(!recovery_chain.find(recovery_child_id)->validated_ancestry);
+
+    ShareWorkContext bad_recovery_context = context_for(recovery_root);
+    bad_recovery_context.mining_header_hash[0] ^= 0xffU;
+    const RevalidateShareResult bad_recovery =
+        recovery_chain.revalidate_connected_share(
+            recovery_root_id,
+            bad_recovery_context,
+            recovery_root.timestamp,
+            ProgPowZContextMode::Light);
+    CHECK(bad_recovery.status == RevalidateShareStatus::Rejected);
+    CHECK(bad_recovery.reject_reason == ShareRejectReason::MiningHeaderMismatch);
+    CHECK(!recovery_chain.find(recovery_root_id)->validated_ancestry);
+
+    const RevalidateShareResult root_revalidated =
+        recovery_chain.revalidate_connected_share(
+            recovery_root_id,
+            context_for(recovery_root),
+            recovery_root.timestamp,
+            ProgPowZContextMode::Light);
+    CHECK(root_revalidated.status == RevalidateShareStatus::Validated);
+    CHECK(recovery_chain.find(recovery_root_id)->validated_ancestry);
+    CHECK(recovery_chain.find(recovery_root_id)->pow_validation.has_value());
+
+    const RevalidateShareResult root_again =
+        recovery_chain.revalidate_connected_share(
+            recovery_root_id,
+            context_for(recovery_root),
+            recovery_root.timestamp,
+            ProgPowZContextMode::Light);
+    CHECK(root_again.status == RevalidateShareStatus::AlreadyValidated);
+
+    const RevalidateShareResult child_revalidated =
+        recovery_chain.revalidate_connected_share(
+            recovery_child_id,
+            context_for(recovery_child),
+            recovery_child.timestamp,
+            ProgPowZContextMode::Light);
+    CHECK(child_revalidated.status == RevalidateShareStatus::Validated);
+    CHECK(recovery_chain.find(recovery_child_id)->validated_ancestry);
+    CHECK(recovery_chain.find(recovery_child_id)->pow_validation.has_value());
+
+    ShareId missing_recovery_id{};
+    missing_recovery_id[0] = 0x7f;
+    const RevalidateShareResult missing_recovery =
+        recovery_chain.revalidate_connected_share(
+            missing_recovery_id,
+            context_for(recovery_root),
+            recovery_root.timestamp,
+            ProgPowZContextMode::Light);
+    CHECK(missing_recovery.status == RevalidateShareStatus::NotConnected);
+
+    CHECK(std::string(revalidate_share_status_name(
+              RevalidateShareStatus::ParentUnvalidated)) ==
+          "parent-unvalidated");
+#endif
+
     CHECK(std::string(share_disposition_name(ShareDisposition::Connected)) ==
           "connected");
     CHECK(std::string(share_reject_reason_name(

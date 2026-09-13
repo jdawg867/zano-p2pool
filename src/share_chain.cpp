@@ -476,6 +476,121 @@ AddShareResult ShareChain::submit_share(
         difficulty_policy_.has_value());
 }
 
+RevalidateShareResult ShareChain::revalidate_connected_share(
+    const ShareId& id,
+    const ShareWorkContext& trusted_context,
+    std::uint64_t now,
+    ProgPowZContextMode mode) {
+    RevalidateShareResult result;
+    result.id = id;
+
+    const auto it = connected_.find(id);
+    if (it == connected_.end()) {
+        result.status = RevalidateShareStatus::NotConnected;
+        return result;
+    }
+
+    ConnectedShare& connected = it->second;
+    if (connected.validated_ancestry) {
+        result.status = RevalidateShareStatus::AlreadyValidated;
+        return result;
+    }
+
+    // Recovery is only meaningful on a consensus-configured chain. Otherwise
+    // there is no branch-relative difficulty policy to re-establish.
+    if (!difficulty_policy_.has_value()) {
+        result.status = RevalidateShareStatus::Rejected;
+        result.reject_reason = ShareRejectReason::UnexpectedShareDifficulty;
+        return result;
+    }
+
+    const Share& share = connected.share;
+
+    result.reject_reason = structural_reject_reason(share);
+    if (result.reject_reason != ShareRejectReason::None) {
+        result.status = RevalidateShareStatus::Rejected;
+        return result;
+    }
+
+    result.reject_reason =
+        trusted_context_reject_reason(share, trusted_context);
+    if (result.reject_reason != ShareRejectReason::None) {
+        result.status = RevalidateShareStatus::Rejected;
+        return result;
+    }
+
+    result.reject_reason = absolute_timestamp_reject_reason(share, now);
+    if (result.reject_reason != ShareRejectReason::None) {
+        result.status = RevalidateShareStatus::Rejected;
+        return result;
+    }
+
+    if (!is_zero_share_id(share.parent_id)) {
+        const auto parent_it = connected_.find(share.parent_id);
+        if (parent_it == connected_.end()) {
+            // A connected share with a missing parent violates ShareChain's
+            // invariant. Fail closed without mutating recovery state.
+            result.status = RevalidateShareStatus::Rejected;
+            result.reject_reason = ShareRejectReason::ParentHeightMismatch;
+            return result;
+        }
+
+        const ConnectedShare& parent = parent_it->second;
+        if (!parent.validated_ancestry) {
+            result.status = RevalidateShareStatus::ParentUnvalidated;
+            return result;
+        }
+
+        if (parent.share.share_height == UINT64_MAX ||
+            share.share_height != parent.share.share_height + 1) {
+            result.status = RevalidateShareStatus::Rejected;
+            result.reject_reason = ShareRejectReason::ParentHeightMismatch;
+            return result;
+        }
+
+        result.reject_reason =
+            parent_timestamp_reject_reason(share, parent.share);
+        if (result.reject_reason != ShareRejectReason::None) {
+            result.status = RevalidateShareStatus::Rejected;
+            return result;
+        }
+    }
+
+    result.reject_reason = expected_difficulty_reject_reason(share);
+    if (result.reject_reason != ShareRejectReason::None) {
+        result.status = RevalidateShareStatus::Rejected;
+        return result;
+    }
+
+    if (!progpowz_available()) {
+        result.status = RevalidateShareStatus::Rejected;
+        result.reject_reason = ShareRejectReason::PowBackendUnavailable;
+        return result;
+    }
+
+    const CandidateValidation validation = validate_candidate(
+        trusted_context.zano_height,
+        trusted_context.mining_header_hash,
+        share.nonce,
+        difficulty128_to_decimal(share.share_difficulty),
+        difficulty128_to_decimal(trusted_context.network_difficulty),
+        mode);
+
+    if (!validation.meets_share_difficulty ||
+        validation.classification == CandidateClassification::Invalid) {
+        result.status = RevalidateShareStatus::Rejected;
+        result.reject_reason = ShareRejectReason::InvalidPow;
+        return result;
+    }
+
+    // The record is already connected, so cumulative work and tip selection do
+    // not change. Only freshly reconstructed validation state is installed.
+    connected.pow_validation = validation;
+    connected.validated_ancestry = true;
+    result.status = RevalidateShareStatus::Validated;
+    return result;
+}
+
 const ConnectedShare* ShareChain::find(const ShareId& id) const noexcept {
     const auto it = connected_.find(id);
     return it == connected_.end() ? nullptr : &it->second;
@@ -539,6 +654,23 @@ const char* share_disposition_name(ShareDisposition disposition) noexcept {
         return "rejected";
     }
     return "unknown";
+}
+
+const char* revalidate_share_status_name(
+    RevalidateShareStatus status) noexcept {
+    switch (status) {
+    case RevalidateShareStatus::Validated:
+        return "validated";
+    case RevalidateShareStatus::AlreadyValidated:
+        return "already-validated";
+    case RevalidateShareStatus::NotConnected:
+        return "not-connected";
+    case RevalidateShareStatus::ParentUnvalidated:
+        return "parent-unvalidated";
+    case RevalidateShareStatus::Rejected:
+        return "rejected";
+    }
+    return "rejected";
 }
 
 const char* share_reject_reason_name(ShareRejectReason reason) noexcept {

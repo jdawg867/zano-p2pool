@@ -68,6 +68,20 @@ struct AddShareResult {
     bool best_tip_changed{false};
 };
 
+enum class RevalidateShareStatus : std::uint8_t {
+    Validated,
+    AlreadyValidated,
+    NotConnected,
+    ParentUnvalidated,
+    Rejected,
+};
+
+struct RevalidateShareResult {
+    RevalidateShareStatus status{RevalidateShareStatus::NotConnected};
+    ShareRejectReason reject_reason{ShareRejectReason::None};
+    ShareId id{};
+};
+
 struct ConnectedShare {
     Share share{};
     ShareId id{};
@@ -96,6 +110,17 @@ public:
         ProgPowZContextMode mode = ProgPowZContextMode::Light);
 
     [[nodiscard]] AddShareResult add_share_unchecked(const Share& share);
+
+    // Re-run production admission checks for an already-connected record that
+    // entered through unchecked persistence replay. This API does not establish
+    // mining-work trust by itself: trusted_context must already have crossed an
+    // independent trust boundary. A non-root share can only be upgraded after
+    // its exact parent has validated ancestry.
+    [[nodiscard]] RevalidateShareResult revalidate_connected_share(
+        const ShareId& id,
+        const ShareWorkContext& trusted_context,
+        std::uint64_t now,
+        ProgPowZContextMode mode = ProgPowZContextMode::Light);
 
     [[nodiscard]] const ConnectedShare* find(const ShareId& id) const noexcept;
     [[nodiscard]] const Share* find_orphan_share(const ShareId& id) const noexcept;
@@ -184,6 +209,8 @@ private:
 
 [[nodiscard]] const char* share_disposition_name(
     ShareDisposition disposition) noexcept;
+[[nodiscard]] const char* revalidate_share_status_name(
+    RevalidateShareStatus status) noexcept;
 [[nodiscard]] const char* share_reject_reason_name(
     ShareRejectReason reason) noexcept;
 
