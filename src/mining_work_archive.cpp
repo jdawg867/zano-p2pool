@@ -156,15 +156,25 @@ Hash256 MiningWorkArchive::put(std::span<const std::uint8_t> payload) {
     return id;
 }
 
-std::size_t MiningWorkArchive::verify_all() const {
-    std::size_t count = 0;
+std::vector<Hash256> MiningWorkArchive::list_ids(
+    std::size_t max_records) const {
+    std::vector<Hash256> ids;
     for (const auto& entry : std::filesystem::directory_iterator(directory_)) {
         if (entry.path().filename().string().starts_with(".tmp-")) continue;
         if (entry.path().extension() != ".work")
             throw std::runtime_error("unexpected file in mining-work archive");
-        static_cast<void>(read(id_from_filename(entry.path())));
-        ++count;
+        if (ids.size() >= max_records)
+            throw std::runtime_error(
+                "mining-work archive scan limit exceeded");
+        const Hash256 id = id_from_filename(entry.path());
+        static_cast<void>(read(id));
+        ids.push_back(id);
     }
-    return count;
+    std::sort(ids.begin(), ids.end());
+    return ids;
+}
+
+std::size_t MiningWorkArchive::verify_all() const {
+    return list_ids().size();
 }
 } // namespace zano_p2pool

@@ -133,6 +133,10 @@ public:
 
     [[nodiscard]] std::size_t connected_size() const noexcept;
     [[nodiscard]] std::size_t orphan_size() const noexcept;
+    // Snapshot of currently connected IDs. Callers that need ancestry order
+    // must explicitly sort by share_height; map key order has no consensus
+    // meaning.
+    [[nodiscard]] std::vector<ShareId> connected_share_ids() const;
 
     [[nodiscard]] bool enforces_sidechain_difficulty() const noexcept {
         return difficulty_policy_.has_value();

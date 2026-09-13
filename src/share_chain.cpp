@@ -642,6 +642,16 @@ std::size_t ShareChain::orphan_size() const noexcept {
     return orphans_.size();
 }
 
+std::vector<ShareId> ShareChain::connected_share_ids() const {
+    std::vector<ShareId> ids;
+    ids.reserve(connected_.size());
+    for (const auto& [id, connected] : connected_) {
+        static_cast<void>(connected);
+        ids.push_back(id);
+    }
+    return ids;
+}
+
 const char* share_disposition_name(ShareDisposition disposition) noexcept {
     switch (disposition) {
     case ShareDisposition::Connected:
