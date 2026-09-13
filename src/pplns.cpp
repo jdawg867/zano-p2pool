@@ -45,6 +45,20 @@ struct CreditedWork {
     std::optional<PayoutPublicKeys> payout;
 };
 
+void require_validated_payout_ancestry(
+    const ShareChain& chain,
+    const ConnectedShare& connected) {
+    // Generic/unconfigured ShareChain instances are also used by the pure
+    // accounting tests and helpers. Once a chain carries the consensus
+    // difficulty policy, however, structural linkage alone is never authority
+    // to credit payout work.
+    if (chain.enforces_sidechain_difficulty() &&
+        !connected.validated_ancestry) {
+        throw std::logic_error(
+            "PPLNS encountered connected share without validated ancestry");
+    }
+}
+
 void merge_payout_identity(
     CreditedWork& credited,
     const Share& share) {
@@ -80,6 +94,8 @@ PplnsWindow build_pplns_window_at_parent(
     if (!is_zero_share_id(parent_id) && !current)
         throw std::invalid_argument("PPLNS parent is not connected");
     while (current != nullptr && remaining != 0) {
+        require_validated_payout_ancestry(chain, *current);
+
         const cpp_int current_work = work_to_int(
             share_work(current->share.share_difficulty));
         if (current_work == 0) {
@@ -152,6 +168,8 @@ PplnsWindow build_sidechain_pplns_window_at_parent(
     cpp_int recent_work = 0;
     std::size_t counted = 0;
     while (current != nullptr && counted < params.pplns_window_shares) {
+        require_validated_payout_ancestry(chain, *current);
+
         const cpp_int current_work = work_to_int(
             share_work(current->share.share_difficulty));
         if (current_work == 0) {

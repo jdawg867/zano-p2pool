@@ -48,22 +48,55 @@ int main() {
     CHECK(derive_historical_payout_plan(unchecked, params, root_id, one, 100).status ==
         HistoricalPayoutStatus::UnverifiedAncestry);
 
-    // Accounting at an explicit historical parent stays fixed as the best tip moves.
+    // The low-level PPLNS primitive must now enforce the same ancestry trust
+    // boundary when the ShareChain carries consensus sidechain parameters.
     const auto child = make_share(root_id, 1, 3);
     const auto child_id = share_id(child);
     CHECK(unchecked.add_share_unchecked(child).disposition == ShareDisposition::Connected);
-    const auto historical = build_sidechain_pplns_window_at_parent(unchecked, root_id, params, one);
-    CHECK(historical.included_shares == 1);
-    CHECK(historical.miners.size() == 1 && historical.miners[0].miner_id == root.miner_id);
-    CHECK(build_sidechain_pplns_window(unchecked, params, one).included_shares == 2);
-    CHECK(build_sidechain_pplns_window_at_parent(unchecked, {}, params, one).included_shares == 0);
-    ShareId unknown{}; unknown[0] = 99;
+
+    bool unchecked_parent_threw = false;
+    try {
+        static_cast<void>(build_sidechain_pplns_window_at_parent(
+            unchecked, root_id, params, one));
+    } catch (const std::logic_error&) {
+        unchecked_parent_threw = true;
+    }
+    CHECK(unchecked_parent_threw);
+
+    bool unchecked_tip_threw = false;
+    try {
+        static_cast<void>(build_sidechain_pplns_window(
+            unchecked, params, one));
+    } catch (const std::logic_error&) {
+        unchecked_tip_threw = true;
+    }
+    CHECK(unchecked_tip_threw);
+
+    CHECK(build_sidechain_pplns_window_at_parent(
+        unchecked, {}, params, one).included_shares == 0);
+
+    ShareId unknown{};
+    unknown[0] = 99;
     bool missing = false;
-    try { static_cast<void>(build_sidechain_pplns_window_at_parent(unchecked, unknown, params, one)); }
-    catch (const std::invalid_argument&) { missing = true; }
+    try {
+        static_cast<void>(build_sidechain_pplns_window_at_parent(
+            unchecked, unknown, params, one));
+    } catch (const std::invalid_argument&) {
+        missing = true;
+    }
     CHECK(missing);
-    auto capped = params; capped.pplns_max_network_difficulty_multiplier = 1;
-    CHECK(build_sidechain_pplns_window_at_parent(unchecked, child_id, capped, one).included_shares == 1);
+
+    auto capped = params;
+    capped.pplns_max_network_difficulty_multiplier = 1;
+
+    bool unchecked_child_threw = false;
+    try {
+        static_cast<void>(build_sidechain_pplns_window_at_parent(
+            unchecked, child_id, capped, one));
+    } catch (const std::logic_error&) {
+        unchecked_child_threw = true;
+    }
+    CHECK(unchecked_child_threw);
 
     if (!progpowz_available()) return 0;
     // Difficulty one makes these real PoW checks deterministic without nonce searching.
