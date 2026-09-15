@@ -1177,6 +1177,10 @@ int main(int argc, char** argv) {
                         std::cerr
                             << "P2P message rejected: " << e.what() << '\n';
                     }
+                },
+                [&](const zano_p2pool::P2pHandshake& peer)
+                    -> std::optional<zano_p2pool::P2pEnvelope> {
+                    return p2p_protocol.initial_sync_request(peer);
                 });
             p2p_runtime->start();
 
@@ -1218,7 +1222,7 @@ int main(int argc, char** argv) {
         }
 
         std::unique_ptr<zano_p2pool::BlockCandidateSubmitter> block_submitter;
-        if (options.stratum && initial_stratum_ready) {
+        if (options.stratum) {
             block_submitter =
                 std::make_unique<zano_p2pool::BlockCandidateSubmitter>(
                     [&](const std::string& block_blob_hex)
@@ -1284,17 +1288,19 @@ int main(int argc, char** argv) {
                     },
                     8,
                     16);
-            if (live.payout_plan.has_value()) {
+            if (initial_canonical_pplns) {
                 block_submitter->remember_template(
                     live.mining_work.header_hash,
                     live.block.blocktemplate_blob);
             }
-            block_submitter->start();
+            if (initial_stratum_ready) {
+                block_submitter->start();
+            }
         }
 
         std::unique_ptr<zano_p2pool::StratumTcpServer> server;
         std::uint64_t job_sequence = 0;
-        if (options.stratum && initial_stratum_ready) {
+        if (options.stratum) {
             zano_p2pool::StratumServerConfig server_config;
             server_config.bind_address = options.stratum_bind;
             server_config.port = options.stratum_port;
@@ -1370,31 +1376,33 @@ int main(int argc, char** argv) {
                 &node_state_mutex,
                 std::move(accepted_share));
 
-            job_sequence = server->publish_template(
-                live.mining_work.header_hash,
-                live.seed_hash,
-                live.block.height,
-                live.network_difficulty);
-            server->start();
+            if (initial_stratum_ready) {
+                job_sequence = server->publish_template(
+                    live.mining_work.header_hash,
+                    live.seed_hash,
+                    live.block.height,
+                    live.network_difficulty);
+                server->start();
 
-            std::cout << "\nStratum listening: "
-                      << server_config.bind_address << ':'
-                      << server->bound_port() << '\n';
-            std::cout << "Sidechain target interval: "
-                      << sidechain_parameters.target_share_seconds
-                      << " seconds\n";
-            std::cout << "Minimum share difficulty: "
-                      << sidechain_parameters.minimum_share_difficulty << '\n';
-            std::cout << "Payout mode: "
-                      << (live.payout_plan.has_value()
-                              ? "canonical PPLNS"
-                              : "bootstrap share establishment")
-                      << '\n';
-            std::cout << "Block submission: "
-                      << (live.payout_plan.has_value()
-                              ? "enabled for canonical PPLNS work"
-                              : "deferred until the first sidechain share")
-                      << '\n';
+                std::cout << "\nStratum listening: "
+                          << server_config.bind_address << ':'
+                          << server->bound_port() << '\n';
+                std::cout << "Sidechain target interval: "
+                          << sidechain_parameters.target_share_seconds
+                          << " seconds\n";
+                std::cout << "Minimum share difficulty: "
+                          << sidechain_parameters.minimum_share_difficulty << '\n';
+                std::cout << "Payout mode: "
+                          << (live.payout_plan.has_value()
+                                  ? "canonical PPLNS"
+                                  : "bootstrap share establishment")
+                          << '\n';
+                std::cout << "Block submission: "
+                          << (live.payout_plan.has_value()
+                                  ? "enabled for canonical PPLNS work"
+                                  : "deferred until the first sidechain share")
+                          << '\n';
+            }
         }
 
         std::unique_ptr<zano_p2pool::MetricsHttpServer> metrics_server;
@@ -1428,12 +1436,14 @@ int main(int argc, char** argv) {
                         : 0;
                     snapshot.p2p_trusted_work_contexts =
                         p2p_protocol.trusted_work_count();
-                    snapshot.stratum_connections = server
-                        ? server->client_count()
-                        : 0;
-                    snapshot.stratum_job_sequence = server
-                        ? server->current_template_version()
-                        : 0;
+                    snapshot.stratum_connections =
+                        server && server->running()
+                            ? server->client_count()
+                            : 0;
+                    snapshot.stratum_job_sequence =
+                        server && server->running()
+                            ? server->current_template_version()
+                            : 0;
                     snapshot.stratum_accepted_shares_total =
                         stratum_accepted_shares_total.load(
                             std::memory_order_relaxed);
@@ -1522,6 +1532,14 @@ int main(int argc, char** argv) {
                     node_state_mutex,
                     sidechain_parameters);
 
+                bool chain_empty = false;
+                {
+                    std::lock_guard lock(node_state_mutex);
+                    chain_empty = node_chain.connected_size() == 0;
+                }
+                const bool stratum_ready =
+                    canonical_pplns || chain_empty;
+
                 archive_work(next);
 
                 if (block_submitter && canonical_pplns) {
@@ -1534,13 +1552,81 @@ int main(int argc, char** argv) {
                     trusted_context_from_live(next));
                 set_local_p2p_context(p2p_protocol, next);
 
-                if (server) {
+                if (options.stratum &&
+                    server &&
+                    block_submitter &&
+                    !stratum_ready) {
+                    const bool stratum_was_running = server->running();
+                    const bool submitter_was_running =
+                        block_submitter->running();
+
+                    // Stop miner work publication before the block submitter.
+                    // This makes loss of payout-authoritative ancestry fail
+                    // closed even if the transition happens during runtime.
+                    if (stratum_was_running) {
+                        server->stop();
+                    }
+                    if (submitter_was_running) {
+                        block_submitter->stop();
+                    }
+                    job_sequence = 0;
+
+                    if (stratum_was_running || submitter_was_running) {
+                        std::cerr
+                            << "Stratum deferred: current connected sidechain "
+                               "history has not completed ancestry validation\n";
+                    }
+                } else if (
+                    options.stratum &&
+                    server &&
+                    block_submitter &&
+                    stratum_ready) {
+                    const bool activating = !server->running();
+
+                    // Publishing while stopped is safe and ensures a newly
+                    // opened listener can never expose stale pre-transition
+                    // work to its first miner.
                     const std::uint64_t next_version =
                         server->publish_template(
                             next.mining_work.header_hash,
                             next.seed_hash,
                             next.block.height,
                             next.network_difficulty);
+
+                    if (!block_submitter->running()) {
+                        block_submitter->start();
+                    }
+
+                    if (activating) {
+                        try {
+                            server->start();
+                        } catch (...) {
+                            // Do not leave block submission active when the
+                            // miner-facing listener failed to activate.
+                            block_submitter->stop();
+                            throw;
+                        }
+
+                        std::cout
+                            << "\nStratum activated after ancestry recovery\n";
+                        std::cout
+                            << "Stratum listening: "
+                            << server->config().bind_address << ':'
+                            << server->bound_port() << '\n';
+                        std::cout
+                            << "Payout mode: "
+                            << (canonical_pplns
+                                    ? "canonical PPLNS"
+                                    : "bootstrap share establishment")
+                            << '\n';
+                        std::cout
+                            << "Block submission: "
+                            << (canonical_pplns
+                                    ? "enabled for canonical PPLNS work"
+                                    : "deferred until the first sidechain share")
+                            << '\n';
+                    }
+
                     if (next_version != job_sequence) {
                         job_sequence = next_version;
                         std::cout

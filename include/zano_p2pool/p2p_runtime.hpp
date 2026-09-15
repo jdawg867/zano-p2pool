@@ -12,6 +12,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <thread>
 #include <vector>
 
@@ -31,6 +32,10 @@ using P2pMessageHandler = std::function<void(
     const P2pHandshake& peer,
     const P2pEnvelope& envelope)>;
 
+using P2pPeerConnectedHandler =
+    std::function<std::optional<P2pEnvelope>(
+        const P2pHandshake& peer)>;
+
 // Long-lived transport runtime for a single P2Pool node. It owns the listener,
 // inbound/outbound peer sockets, reader threads and shutdown ordering. Protocol
 // semantics (share validation, sync, mining-context trust) deliberately remain
@@ -39,7 +44,8 @@ class P2pRuntime {
 public:
     explicit P2pRuntime(
         P2pRuntimeConfig config,
-        P2pMessageHandler handler = {});
+        P2pMessageHandler handler = {},
+        P2pPeerConnectedHandler peer_connected_handler = {});
     ~P2pRuntime();
 
     P2pRuntime(const P2pRuntime&) = delete;
@@ -105,6 +111,7 @@ private:
 
     P2pRuntimeConfig config_;
     P2pMessageHandler handler_;
+    P2pPeerConnectedHandler peer_connected_handler_;
     P2pPeerScoreBook peer_scores_;
 
     std::atomic<bool> running_{false};

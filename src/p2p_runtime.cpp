@@ -65,9 +65,11 @@ struct P2pRuntime::OutboundTarget {
 
 P2pRuntime::P2pRuntime(
     P2pRuntimeConfig config,
-    P2pMessageHandler handler)
+    P2pMessageHandler handler,
+    P2pPeerConnectedHandler peer_connected_handler)
     : config_(std::move(config)),
       handler_(std::move(handler)),
+      peer_connected_handler_(std::move(peer_connected_handler)),
       peer_scores_(config_.peer_score) {}
 
 P2pRuntime::~P2pRuntime() {
@@ -497,9 +499,26 @@ std::shared_ptr<P2pRuntime::Peer> P2pRuntime::add_peer(
     }
 
     try {
-        peer->reader_thread = std::thread(&P2pRuntime::peer_loop, this, peer);
+        // The handshake has already crossed transport validation. Give the
+        // protocol layer one chance to derive an initial sync request and send
+        // it before the reader thread can process later peer traffic.
+        if (peer_connected_handler_) {
+            const std::optional<P2pEnvelope> initial =
+                peer_connected_handler_(
+                    peer->connection.peer_handshake());
+
+            if (initial.has_value() &&
+                !send_peer(peer, *initial)) {
+                throw std::runtime_error(
+                    "P2P initial peer sync send failed");
+            }
+        }
+
+        peer->reader_thread =
+            std::thread(&P2pRuntime::peer_loop, this, peer);
     } catch (...) {
         peer->alive.store(false);
+        peer->connection.shutdown();
         peer->connection.close();
         throw;
     }
