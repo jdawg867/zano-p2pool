@@ -100,8 +100,20 @@ bool P2pNodeProtocol::remember_deferred_historical(
     }
 
     const ShareId id = share_id(share);
+
+    // Historical recovery walks ancestry sequentially and is not equivalent to
+    // concurrent mining-work pressure. Bound the deferred ancestry path by the
+    // locally configured consensus history horizon rather than the much smaller
+    // network-request concurrency limit. If no validated prefix is reachable
+    // within that horizon, recovery remains fail-closed.
+    if (!historical_params_.has_value()) {
+        return false;
+    }
+    const std::size_t max_deferred =
+        static_cast<std::size_t>(
+            historical_params_->difficulty_window_shares);
     if (!deferred_historical_.contains(id) &&
-        deferred_historical_.size() >= kMiningWorkMaxPending) {
+        deferred_historical_.size() >= max_deferred) {
         return false;
     }
 

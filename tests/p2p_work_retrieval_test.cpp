@@ -152,6 +152,36 @@ int main() {
     CHECK(parse_mining_work_response(not_found).total_size==0);
     CHECK(!receiver.receive(peer,not_found,102).received_id);
     CHECK(!receiver.begin(peer,unknown,103));
+
+    // Finished requests remain same-key cooldown entries, but they must not
+    // consume the two active-request slots for this peer. Historical ancestry
+    // recovery can require more than two sequential work keys.
+    auto third_key=key;
+    third_key.first+=2;
+    auto third_request=receiver.begin(peer,third_key,103);
+    CHECK(third_request);
+    auto third_not_found=provider.answer(peer,*third_request);
+    CHECK(parse_mining_work_response(third_not_found).total_size==0);
+    CHECK(!receiver.receive(peer,third_not_found,103).received_id);
+
+    // The bounded pending table must also continue making sequential progress
+    // beyond kMiningWorkMaxPending completed cooldown entries. Finished entries
+    // may be recycled, while the existing all-active hard limit stays intact.
+    P2pWorkRetrieval sequential(receiver_archive);
+    for (std::size_t i=0;i<kMiningWorkMaxPending+4;++i) {
+        auto sequential_key=key;
+        sequential_key.first+=100+i;
+        auto sequential_request=
+            sequential.begin(peer,sequential_key,300);
+        CHECK(sequential_request);
+        auto sequential_not_found=
+            provider.answer(peer,*sequential_request);
+        CHECK(parse_mining_work_response(
+                  sequential_not_found).total_size==0);
+        CHECK(!sequential.receive(
+                  peer,sequential_not_found,300).received_id);
+    }
+
     auto old_peer=peer; old_peer.capabilities=kP2pCapabilitiesV1;
     CHECK(!receiver.begin(old_peer,key,200));
     CHECK(throws_runtime_error([&] { static_cast<void>(provider.answer(old_peer,*unknown_request)); }));

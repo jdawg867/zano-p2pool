@@ -431,6 +431,8 @@ struct RecursiveParentSyncResult {
     std::size_t admitted_count{};
     std::size_t trusted_work_count{};
     std::size_t connected_share_count{};
+    std::size_t descendant_count{};
+    bool all_descendants_validated{false};
     bool grandparent_present{false};
     bool parent_present{false};
     bool child_present{false};
@@ -490,15 +492,41 @@ run_recursive_parent_sync_case(
     child.nonce = 11;
     const ShareId child_id = share_id(child);
 
+    std::vector<Share> descendants{
+        grandparent,
+        parent,
+        child,
+    };
+
+    // The original regression covered only three replayed descendants. The
+    // production failure occurred after sixteen deferred ancestors, so make
+    // the authenticated-handshake replay case cross that exact old boundary.
+    if (replay_existing) {
+        constexpr std::size_t kDeepReplayDescendants = 18;
+        while (descendants.size() < kDeepReplayDescendants) {
+            Share next = fixture.candidate;
+            next.parent_id = share_id(descendants.back());
+            next.share_height =
+                descendants.back().share_height + 1;
+            next.timestamp =
+                descendants.back().timestamp + 1;
+            next.nonce =
+                descendants.back().nonce + 1;
+            descendants.push_back(next);
+        }
+    }
+
+    const ShareId replay_tip_id =
+        share_id(descendants.back());
+
     ShareChain provider_chain(fixture.params);
     CHECK(provider_chain.add_share_unchecked(base).disposition ==
           ShareDisposition::Connected);
-    CHECK(provider_chain.add_share_unchecked(grandparent).disposition ==
-          ShareDisposition::Connected);
-    CHECK(provider_chain.add_share_unchecked(parent).disposition ==
-          ShareDisposition::Connected);
-    CHECK(provider_chain.add_share_unchecked(child).disposition ==
-          ShareDisposition::Connected);
+    for (const Share& descendant : descendants) {
+        CHECK(provider_chain.add_share_unchecked(
+                  descendant).disposition ==
+              ShareDisposition::Connected);
+    }
 
     ShareChain receiver_chain(fixture.params);
     P2pTrustedWorkRegistry provider_trusted_work;
@@ -521,22 +549,17 @@ run_recursive_parent_sync_case(
     CHECK(receiver_chain.find(base_id)->validated_ancestry);
 
     if (replay_existing) {
-        CHECK(receiver_chain.add_share_unchecked(
-                  grandparent).disposition ==
-              ShareDisposition::Connected);
-        CHECK(receiver_chain.add_share_unchecked(
-                  parent).disposition ==
-              ShareDisposition::Connected);
-        CHECK(receiver_chain.add_share_unchecked(
-                  child).disposition ==
-              ShareDisposition::Connected);
+        for (const Share& descendant : descendants) {
+            CHECK(receiver_chain.add_share_unchecked(
+                      descendant).disposition ==
+                  ShareDisposition::Connected);
 
-        CHECK(!receiver_chain.find(
-                  grandparent_id)->validated_ancestry);
-        CHECK(!receiver_chain.find(
-                  parent_id)->validated_ancestry);
-        CHECK(!receiver_chain.find(
-                  child_id)->validated_ancestry);
+            const ConnectedShare* replayed =
+                receiver_chain.find(
+                    share_id(descendant));
+            CHECK(replayed != nullptr);
+            CHECK(!replayed->validated_ancestry);
+        }
     }
 
     P2pNodeProtocol provider_node(
@@ -572,9 +595,10 @@ run_recursive_parent_sync_case(
     P2pHandshake provider_handshake =
         runtime_handshake(0x24, chain_id);
     if (replay_existing) {
-        provider_handshake.best_share_id = child_id;
+        provider_handshake.best_share_id =
+            replay_tip_id;
         provider_handshake.best_share_height =
-            child.share_height;
+            descendants.back().share_height;
     }
 
     const P2pHandshake receiver_handshake =
@@ -656,10 +680,11 @@ run_recursive_parent_sync_case(
                 if (replay_existing &&
                     result.historical_share_connected) {
                     std::lock_guard lock(receiver_state_mutex);
-                    const ConnectedShare* connected_child =
-                        receiver_chain.find(child_id);
-                    if (connected_child != nullptr &&
-                        connected_child->validated_ancestry) {
+                    const ConnectedShare* connected_tip =
+                        receiver_chain.find(
+                            replay_tip_id);
+                    if (connected_tip != nullptr &&
+                        connected_tip->validated_ancestry) {
                         completed.store(true);
                     }
                 }
@@ -718,6 +743,8 @@ run_recursive_parent_sync_case(
         receiver_node.trusted_work_count();
     result.connected_share_count =
         receiver_node.connected_share_count();
+    result.descendant_count =
+        descendants.size();
     result.lookup_calls = lookup_calls.load();
     result.observation_loads = observation_loads.load();
     result.work_requests = work_requests.load();
@@ -725,6 +752,19 @@ run_recursive_parent_sync_case(
 
     {
         std::lock_guard lock(receiver_state_mutex);
+
+        result.all_descendants_validated = true;
+        for (const Share& descendant : descendants) {
+            const ConnectedShare* connected =
+                receiver_chain.find(
+                    share_id(descendant));
+            if (connected == nullptr ||
+                !connected->validated_ancestry) {
+                result.all_descendants_validated = false;
+                break;
+            }
+        }
+
         const ConnectedShare* connected_grandparent =
             receiver_chain.find(grandparent_id);
         const ConnectedShare* connected_parent =
@@ -856,8 +896,14 @@ int main() {
     CHECK(!replay_recursive.failed);
     CHECK(replay_recursive.completed);
     CHECK(replay_recursive.admitted_count == 0);
-    CHECK(replay_recursive.trusted_work_count == 3);
-    CHECK(replay_recursive.connected_share_count == 4);
+    CHECK(replay_recursive.descendant_count == 18);
+    CHECK(replay_recursive.descendant_count >
+          kMiningWorkMaxPending);
+    CHECK(replay_recursive.all_descendants_validated);
+    CHECK(replay_recursive.trusted_work_count ==
+          replay_recursive.descendant_count);
+    CHECK(replay_recursive.connected_share_count ==
+          replay_recursive.descendant_count + 1);
     CHECK(replay_recursive.grandparent_present);
     CHECK(replay_recursive.parent_present);
     CHECK(replay_recursive.child_present);
@@ -865,9 +911,12 @@ int main() {
     CHECK(replay_recursive.parent_validated);
     CHECK(replay_recursive.child_validated);
     CHECK(replay_recursive.work_requests == 1);
-    CHECK(replay_recursive.share_requests == 3);
-    CHECK(replay_recursive.observation_loads == 5);
-    CHECK(replay_recursive.lookup_calls == 16);
+    CHECK(replay_recursive.share_requests ==
+          replay_recursive.descendant_count);
+    CHECK(replay_recursive.observation_loads ==
+          (2 * replay_recursive.descendant_count) - 1);
+    CHECK(replay_recursive.lookup_calls ==
+          (6 * replay_recursive.descendant_count) - 2);
 
     return 0;
 }
