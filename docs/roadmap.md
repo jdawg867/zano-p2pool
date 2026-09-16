@@ -398,6 +398,32 @@ rate, and peer limits; and fail-closed behavior. The specification is derived
 from the canonical serializers, parsers, and pinned regression vectors so the
 document distinguishes transport validity from local consensus acceptance.
 
+Checkpoint 10 hardens restart-history consensus recovery. Durable share-store
+records restore structural sidechain history, but replayed consensus-configured
+shares do not become payout or mining authority until their historical ancestry
+has been independently revalidated. Restart recovery binds archived work to exact
+height/header context, re-audits local observations against canonical Zano
+headers, and leaves descendants fail-closed when required work or validated
+ancestry is unavailable.
+
+Authenticated P2P historical-work retrieval can then walk those replayed shares
+parent-first until a validated boundary is reached. Trusted replay shares are
+revalidated in place rather than appended again as newly admitted shares.
+Completed mining-work cooldown entries no longer consume active request capacity
+for unrelated keys, and deferred historical ancestry is bounded by the canonical
+2160-share difficulty-history horizon rather than the 16-request concurrency
+limit.
+
+The same-process late-activation path was validated with an isolated immutable
+testnet fixture of 96 connected shares and 106 archived work contexts. A
+controlled restart produced `revalidated=62`, `missing-work=18`,
+`parent-unvalidated=16`, and `rejected=0`, with Stratum correctly deferred.
+After restoring the exact archived evidence and connecting an authenticated P2P
+provider, historical recovery reached `historical-trust=trusted`, revalidated
+the replayed share in place, and automatically activated Stratum without
+restarting the receiver. The final exact-Zano Release suite passed **45/45**
+locally on 2026-09-15.
+
 ## Phase 8 — operator and release readiness
 
 - [x] packaged Linux systemd service and environment template

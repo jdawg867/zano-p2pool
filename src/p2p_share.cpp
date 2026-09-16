@@ -102,10 +102,31 @@ P2pShareReceiveResult P2pShareReceiver::receive_share(
         return result;
     }
 
-    if (chain_.contains(result.chain_result.id) ||
-        chain_.is_orphan(result.chain_result.id)) {
+    if (const ConnectedShare* connected =
+            chain_.find(result.chain_result.id);
+        connected != nullptr) {
+        // On a production consensus chain an unchecked persistence replay is
+        // structurally known but is not yet authoritative. Route it through
+        // historical-work recovery instead of suppressing it as an ordinary
+        // duplicate. Generic/test chains retain the historical duplicate
+        // behavior because they have no consensus difficulty policy.
+        if (chain_.enforces_sidechain_difficulty() &&
+            !connected->validated_ancestry) {
+            result.status =
+                P2pShareReceiveStatus::UnknownWorkContext;
+            return result;
+        }
+
         result.status = P2pShareReceiveStatus::Duplicate;
-        result.chain_result.disposition = ShareDisposition::Duplicate;
+        result.chain_result.disposition =
+            ShareDisposition::Duplicate;
+        return result;
+    }
+
+    if (chain_.is_orphan(result.chain_result.id)) {
+        result.status = P2pShareReceiveStatus::Duplicate;
+        result.chain_result.disposition =
+            ShareDisposition::Duplicate;
         return result;
     }
 

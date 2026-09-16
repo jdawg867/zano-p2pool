@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <functional>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -182,6 +183,7 @@ struct RuntimeCaseResult {
         P2pShareReceiveStatus::Rejected};
     bool historical_share_retried{false};
     bool failed{false};
+    std::size_t historical_admitted_count{};
     std::size_t trusted_work_count{};
     std::size_t connected_share_count{};
     bool candidate_present{false};
@@ -190,7 +192,8 @@ struct RuntimeCaseResult {
 };
 
 [[nodiscard]] RuntimeCaseResult run_runtime_case(
-    bool corrupt_remote_seed) {
+    bool corrupt_remote_seed,
+    bool replay_candidate = false) {
     TemporaryDirectory temp("zano-historical-runtime");
     RuntimeFixture fixture = make_runtime_fixture();
 
@@ -242,6 +245,19 @@ struct RuntimeCaseResult {
     CHECK(receiver_chain.find(
               share_id(fixture.parent))->validated_ancestry);
 
+    if (replay_candidate) {
+        CHECK(receiver_chain.add_share_unchecked(
+                  fixture.candidate).disposition ==
+              ShareDisposition::Connected);
+
+        const ConnectedShare* replayed =
+            receiver_chain.find(
+                share_id(fixture.candidate));
+
+        CHECK(replayed != nullptr);
+        CHECK(!replayed->validated_ancestry);
+    }
+
     P2pNodeProtocol provider_node(
         provider_chain,
         provider_trusted_work,
@@ -284,6 +300,7 @@ struct RuntimeCaseResult {
         static_cast<int>(
             P2pShareReceiveStatus::Rejected)};
     std::atomic<bool> retried{false};
+    std::atomic<std::size_t> admitted_count{0};
 
     P2pRuntime* provider_runtime_ptr = nullptr;
     P2pRuntime* receiver_runtime_ptr = nullptr;
@@ -339,6 +356,8 @@ struct RuntimeCaseResult {
                         static_cast<int>(result.share_status));
                     retried.store(
                         result.historical_share_retried);
+                    admitted_count.store(
+                        result.historical_admitted_shares.size());
                     completed.store(true);
                 }
             } catch (...) {
@@ -382,6 +401,8 @@ struct RuntimeCaseResult {
             share_status.load());
     result.historical_share_retried = retried.load();
     result.failed = failed.load();
+    result.historical_admitted_count =
+        admitted_count.load();
     result.trusted_work_count =
         receiver_node.trusted_work_count();
     result.connected_share_count =
@@ -410,6 +431,8 @@ struct RecursiveParentSyncResult {
     std::size_t admitted_count{};
     std::size_t trusted_work_count{};
     std::size_t connected_share_count{};
+    std::size_t descendant_count{};
+    bool all_descendants_validated{false};
     bool grandparent_present{false};
     bool parent_present{false};
     bool child_present{false};
@@ -423,7 +446,8 @@ struct RecursiveParentSyncResult {
 };
 
 [[nodiscard]] RecursiveParentSyncResult
-run_recursive_parent_sync_case() {
+run_recursive_parent_sync_case(
+    bool replay_existing = false) {
     TemporaryDirectory temp("zano-historical-parent-sync");
     RuntimeFixture fixture = make_runtime_fixture();
 
@@ -468,15 +492,41 @@ run_recursive_parent_sync_case() {
     child.nonce = 11;
     const ShareId child_id = share_id(child);
 
+    std::vector<Share> descendants{
+        grandparent,
+        parent,
+        child,
+    };
+
+    // The original regression covered only three replayed descendants. The
+    // production failure occurred after sixteen deferred ancestors, so make
+    // the authenticated-handshake replay case cross that exact old boundary.
+    if (replay_existing) {
+        constexpr std::size_t kDeepReplayDescendants = 18;
+        while (descendants.size() < kDeepReplayDescendants) {
+            Share next = fixture.candidate;
+            next.parent_id = share_id(descendants.back());
+            next.share_height =
+                descendants.back().share_height + 1;
+            next.timestamp =
+                descendants.back().timestamp + 1;
+            next.nonce =
+                descendants.back().nonce + 1;
+            descendants.push_back(next);
+        }
+    }
+
+    const ShareId replay_tip_id =
+        share_id(descendants.back());
+
     ShareChain provider_chain(fixture.params);
     CHECK(provider_chain.add_share_unchecked(base).disposition ==
           ShareDisposition::Connected);
-    CHECK(provider_chain.add_share_unchecked(grandparent).disposition ==
-          ShareDisposition::Connected);
-    CHECK(provider_chain.add_share_unchecked(parent).disposition ==
-          ShareDisposition::Connected);
-    CHECK(provider_chain.add_share_unchecked(child).disposition ==
-          ShareDisposition::Connected);
+    for (const Share& descendant : descendants) {
+        CHECK(provider_chain.add_share_unchecked(
+                  descendant).disposition ==
+              ShareDisposition::Connected);
+    }
 
     ShareChain receiver_chain(fixture.params);
     P2pTrustedWorkRegistry provider_trusted_work;
@@ -497,6 +547,20 @@ run_recursive_parent_sync_case() {
               .disposition == ShareDisposition::Connected);
     CHECK(receiver_chain.find(base_id) != nullptr);
     CHECK(receiver_chain.find(base_id)->validated_ancestry);
+
+    if (replay_existing) {
+        for (const Share& descendant : descendants) {
+            CHECK(receiver_chain.add_share_unchecked(
+                      descendant).disposition ==
+                  ShareDisposition::Connected);
+
+            const ConnectedShare* replayed =
+                receiver_chain.find(
+                    share_id(descendant));
+            CHECK(replayed != nullptr);
+            CHECK(!replayed->validated_ancestry);
+        }
+    }
 
     P2pNodeProtocol provider_node(
         provider_chain,
@@ -528,8 +592,15 @@ run_recursive_parent_sync_case() {
             };
         });
 
-    const P2pHandshake provider_handshake =
+    P2pHandshake provider_handshake =
         runtime_handshake(0x24, chain_id);
+    if (replay_existing) {
+        provider_handshake.best_share_id =
+            replay_tip_id;
+        provider_handshake.best_share_height =
+            descendants.back().share_height;
+    }
+
     const P2pHandshake receiver_handshake =
         runtime_handshake(0x74, chain_id);
 
@@ -592,7 +663,8 @@ run_recursive_parent_sync_case() {
                         200,
                         ProgPowZContextMode::Light);
 
-                if (result.historical_admitted_shares.size() == 3) {
+                if (!replay_existing &&
+                    result.historical_admitted_shares.size() == 3) {
                     admitted_count.store(
                         result.historical_admitted_shares.size());
                     admitted_order_matches.store(
@@ -604,9 +676,25 @@ run_recursive_parent_sync_case() {
                             child_id);
                     completed.store(true);
                 }
+
+                if (replay_existing &&
+                    result.historical_share_connected) {
+                    std::lock_guard lock(receiver_state_mutex);
+                    const ConnectedShare* connected_tip =
+                        receiver_chain.find(
+                            replay_tip_id);
+                    if (connected_tip != nullptr &&
+                        connected_tip->validated_ancestry) {
+                        completed.store(true);
+                    }
+                }
             } catch (...) {
                 failed.store(true);
             }
+        },
+        [&](const P2pHandshake& peer)
+            -> std::optional<P2pEnvelope> {
+            return receiver_node.initial_sync_request(peer);
         });
 
     provider_runtime_ptr = &provider_runtime;
@@ -625,11 +713,18 @@ run_recursive_parent_sync_case() {
                receiver_runtime.peer_count() == 1;
     }));
 
-    // Only the child is announced. The receiver must walk backward with two
-    // ShareRequest messages, then resume forward once the grandparent can be
-    // validated against the already trusted base share.
-    provider_runtime.broadcast(
-        make_p2p_share_announce_envelope(child));
+    if (replay_existing) {
+        // No application-level announcement is sent here. The provider's
+        // authenticated handshake advertised the structurally known replayed
+        // child as its best tip, so connection establishment itself must begin
+        // exact-share recovery.
+    } else {
+        // Only the child is announced. The receiver must walk backward with
+        // two ShareRequest messages, then resume forward once the grandparent
+        // can be validated against the already trusted base share.
+        provider_runtime.broadcast(
+            make_p2p_share_announce_envelope(child));
+    }
 
     CHECK(wait_for([&] {
         return completed.load() || failed.load();
@@ -648,6 +743,8 @@ run_recursive_parent_sync_case() {
         receiver_node.trusted_work_count();
     result.connected_share_count =
         receiver_node.connected_share_count();
+    result.descendant_count =
+        descendants.size();
     result.lookup_calls = lookup_calls.load();
     result.observation_loads = observation_loads.load();
     result.work_requests = work_requests.load();
@@ -655,6 +752,19 @@ run_recursive_parent_sync_case() {
 
     {
         std::lock_guard lock(receiver_state_mutex);
+
+        result.all_descendants_validated = true;
+        for (const Share& descendant : descendants) {
+            const ConnectedShare* connected =
+                receiver_chain.find(
+                    share_id(descendant));
+            if (connected == nullptr ||
+                !connected->validated_ancestry) {
+                result.all_descendants_validated = false;
+                break;
+            }
+        }
+
         const ConnectedShare* connected_grandparent =
             receiver_chain.find(grandparent_id);
         const ConnectedShare* connected_parent =
@@ -700,6 +810,7 @@ int main() {
     CHECK(rejected.trust_status ==
           HistoricalTrustStatus::AnchorRejected);
     CHECK(!rejected.historical_share_retried);
+    CHECK(rejected.historical_admitted_count == 0);
     CHECK(rejected.trusted_work_count == 0);
     CHECK(rejected.connected_share_count == 1);
     CHECK(!rejected.candidate_present);
@@ -719,6 +830,7 @@ int main() {
     CHECK(trusted.trust_status ==
           HistoricalTrustStatus::Trusted);
     CHECK(trusted.historical_share_retried);
+    CHECK(trusted.historical_admitted_count == 1);
     CHECK(trusted.share_status ==
           P2pShareReceiveStatus::Connected);
     CHECK(trusted.trusted_work_count == 1);
@@ -726,6 +838,25 @@ int main() {
     CHECK(trusted.candidate_present);
     CHECK(trusted.candidate_validated_ancestry);
     CHECK(trusted.lookup_calls == 4);
+
+    // An unchecked ShareStore replay must cross the exact same historical
+    // trust boundary. Success upgrades the existing record in place and must
+    // not report a second structural admission.
+    const RuntimeCaseResult replayed =
+        run_runtime_case(false, true);
+
+    CHECK(!replayed.failed);
+    CHECK(replayed.trust_status ==
+          HistoricalTrustStatus::Trusted);
+    CHECK(replayed.historical_share_retried);
+    CHECK(replayed.historical_admitted_count == 0);
+    CHECK(replayed.share_status ==
+          P2pShareReceiveStatus::Connected);
+    CHECK(replayed.trusted_work_count == 1);
+    CHECK(replayed.connected_share_count == 2);
+    CHECK(replayed.candidate_present);
+    CHECK(replayed.candidate_validated_ancestry);
+    CHECK(replayed.lookup_calls == 4);
 
     // End-to-end backward historical synchronization. Child and parent both
     // initially fail only because their explicit sidechain parents are
@@ -753,6 +884,39 @@ int main() {
     CHECK(recursive.share_requests == 2);
     CHECK(recursive.observation_loads == 5);
     CHECK(recursive.lookup_calls == 16);
+
+    // Same ancestry, but every descendant was restored by unchecked durable
+    // replay before P2P starts. The authenticated connection handshake alone
+    // must initiate recovery. The initial exact-tip ShareRequest plus the two
+    // parent requests walks back to the validated base, after which deferred
+    // evidence revalidates all three existing records in place.
+    const RecursiveParentSyncResult replay_recursive =
+        run_recursive_parent_sync_case(true);
+
+    CHECK(!replay_recursive.failed);
+    CHECK(replay_recursive.completed);
+    CHECK(replay_recursive.admitted_count == 0);
+    CHECK(replay_recursive.descendant_count == 18);
+    CHECK(replay_recursive.descendant_count >
+          kMiningWorkMaxPending);
+    CHECK(replay_recursive.all_descendants_validated);
+    CHECK(replay_recursive.trusted_work_count ==
+          replay_recursive.descendant_count);
+    CHECK(replay_recursive.connected_share_count ==
+          replay_recursive.descendant_count + 1);
+    CHECK(replay_recursive.grandparent_present);
+    CHECK(replay_recursive.parent_present);
+    CHECK(replay_recursive.child_present);
+    CHECK(replay_recursive.grandparent_validated);
+    CHECK(replay_recursive.parent_validated);
+    CHECK(replay_recursive.child_validated);
+    CHECK(replay_recursive.work_requests == 1);
+    CHECK(replay_recursive.share_requests ==
+          replay_recursive.descendant_count);
+    CHECK(replay_recursive.observation_loads ==
+          (2 * replay_recursive.descendant_count) - 1);
+    CHECK(replay_recursive.lookup_calls ==
+          (6 * replay_recursive.descendant_count) - 2);
 
     return 0;
 }
