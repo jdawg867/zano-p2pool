@@ -94,14 +94,38 @@ std::optional<P2pEnvelope> P2pWorkRetrieval::begin(
     const P2pHandshake& peer,const MiningWorkKey& key,std::uint64_t now) {
     if (!(peer.capabilities & kP2pCapabilityWorkRetrieval)) return std::nullopt;
     const auto request=make_mining_work_request({key,0});
+    const auto pending_key=std::make_pair(peer.node_id,key);
     std::lock_guard lock(mutex_); expire(now);
-    if (received_.contains(key) || pending_.contains({peer.node_id,key}) ||
-        pending_.size()>=kMiningWorkMaxPending) return std::nullopt;
-    const auto peer_count=std::count_if(pending_.begin(),pending_.end(),[&](const auto& item) {
-        return item.first.first==peer.node_id;
-    });
+
+    // A completed entry remains briefly as a same-key cooldown, but it is no
+    // longer an active network request. In particular, parent-first historical
+    // recovery may need many sequential work contexts from one peer.
+    if (received_.contains(key) || pending_.contains(pending_key))
+        return std::nullopt;
+
+    const auto peer_count=std::count_if(
+        pending_.begin(),pending_.end(),[&](const auto& item) {
+            return item.first.first==peer.node_id && !item.second.finished;
+        });
     if (peer_count>=2) return std::nullopt;
-    pending_.emplace(std::make_pair(peer.node_id,key),Pending{now,0,false,{}});
+
+    // Keep the request table bounded without letting completed cooldown entries
+    // permanently consume active-request capacity. Under pressure, recycle the
+    // oldest finished entry. If every slot is still active, fail closed.
+    if (pending_.size()>=kMiningWorkMaxPending) {
+        auto reusable=pending_.end();
+        for (auto it=pending_.begin();it!=pending_.end();++it) {
+            if (!it->second.finished) continue;
+            if (reusable==pending_.end() ||
+                it->second.started<reusable->second.started) {
+                reusable=it;
+            }
+        }
+        if (reusable==pending_.end()) return std::nullopt;
+        pending_.erase(reusable);
+    }
+
+    pending_.emplace(pending_key,Pending{now,0,false,{}});
     return request;
 }
 P2pEnvelope P2pWorkRetrieval::answer(const P2pHandshake& peer,const P2pEnvelope& envelope) {

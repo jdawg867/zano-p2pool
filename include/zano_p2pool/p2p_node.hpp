@@ -66,6 +66,12 @@ public:
         std::uint64_t now,
         ProgPowZContextMode mode = ProgPowZContextMode::Light);
 
+    // The authenticated transport handshake already carries the peer's best
+    // share id/height. Use it as a synchronization hint immediately on
+    // connection instead of waiting for an incidental TipAnnounce.
+    [[nodiscard]] std::optional<P2pEnvelope>
+    initial_sync_request(const P2pHandshake& peer);
+
     // Configure before runtime threads start; retrieval and callbacks must
     // outlive runtime. Retrieved peer work remains untrusted until the
     // historical trust crossing succeeds for the exact waiting share.

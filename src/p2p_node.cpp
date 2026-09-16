@@ -100,8 +100,20 @@ bool P2pNodeProtocol::remember_deferred_historical(
     }
 
     const ShareId id = share_id(share);
+
+    // Historical recovery walks ancestry sequentially and is not equivalent to
+    // concurrent mining-work pressure. Bound the deferred ancestry path by the
+    // locally configured consensus history horizon rather than the much smaller
+    // network-request concurrency limit. If no validated prefix is reachable
+    // within that horizon, recovery remains fail-closed.
+    if (!historical_params_.has_value()) {
+        return false;
+    }
+    const std::size_t max_deferred =
+        static_cast<std::size_t>(
+            historical_params_->difficulty_window_shares);
     if (!deferred_historical_.contains(id) &&
-        deferred_historical_.size() >= kMiningWorkMaxPending) {
+        deferred_historical_.size() >= max_deferred) {
         return false;
     }
 
@@ -115,6 +127,43 @@ bool P2pNodeProtocol::remember_deferred_historical(
             now,
         });
     return true;
+}
+
+std::optional<P2pEnvelope>
+P2pNodeProtocol::initial_sync_request(
+    const P2pHandshake& peer) {
+    std::lock_guard lock(state_mutex_);
+
+    const P2pTipHint hint =
+        p2p_tip_hint_from_handshake(peer);
+    const P2pTipSyncDecision decision =
+        plan_p2p_tip_sync(peer, hint, chain_);
+
+    if (decision.requested_id.has_value()) {
+        return make_p2p_share_request_envelope(
+            *decision.requested_id);
+    }
+
+    if (decision.status !=
+            P2pTipSyncStatus::KnownConnectedTip ||
+        !work_retrieval_ ||
+        !historical_trust_sources_ready_unlocked()) {
+        return std::nullopt;
+    }
+
+    const ConnectedShare* connected =
+        chain_.find(hint.share_id);
+
+    if (connected == nullptr ||
+        connected->validated_ancestry) {
+        return std::nullopt;
+    }
+
+    // Structural replay is not synchronization completion. Re-request the
+    // exact known tip so historical recovery can walk backward through
+    // UnverifiedAncestry until it reaches a validated parent boundary.
+    return make_p2p_share_request_envelope(
+        hint.share_id);
 }
 
 P2pNodeMessageResult P2pNodeProtocol::handle(
@@ -161,12 +210,16 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
             };
 
             if (trust.status != HistoricalTrustStatus::Trusted) {
-                const bool parent_missing =
+                const bool parent_blocked =
                     allow_parent_defer &&
-                    trust.status == HistoricalTrustStatus::PayoutRejected &&
-                    trust.payout.status ==
-                        HistoricalPayoutStatus::ParentMissing;
-                if (parent_missing &&
+                    !is_zero_share_id(candidate_share.parent_id) &&
+                    trust.status ==
+                        HistoricalTrustStatus::PayoutRejected &&
+                    (trust.payout.status ==
+                         HistoricalPayoutStatus::ParentMissing ||
+                     trust.payout.status ==
+                         HistoricalPayoutStatus::UnverifiedAncestry);
+                if (parent_blocked &&
                     remember_deferred_historical(
                         candidate_share,
                         candidate_peer,
@@ -175,8 +228,10 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
                         now)) {
                     // Keep only evidence that crossed candidate binding and
                     // local anchoring and is blocked solely on sidechain
-                    // ancestry. It remains untrusted and is fully rechecked
-                    // when the parent arrives.
+                    // ancestry. The parent may be absent or merely replayed
+                    // without validated ancestry. The evidence remains
+                    // untrusted and is fully rechecked after exact-parent
+                    // recovery.
                     remember_historical_evidence(
                         candidate_work_key,
                         evidence,
@@ -200,6 +255,82 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
                 evidence,
                 now);
 
+            result.historical_share = candidate_share;
+            result.historical_share_retried = true;
+
+            const ShareId candidate_id =
+                share_id(candidate_share);
+
+            if (const ConnectedShare* replayed =
+                    chain_.find(candidate_id);
+                replayed != nullptr &&
+                !replayed->validated_ancestry) {
+                const ShareWorkContext* trusted =
+                    trusted_work_.find(
+                        candidate_share.zano_height,
+                        candidate_share.mining_header_hash,
+                        candidate_share.parent_id);
+
+                if (trusted == nullptr) {
+                    throw std::logic_error(
+                        "trusted historical replay work was not registered");
+                }
+
+                const RevalidateShareResult revalidated =
+                    chain_.revalidate_connected_share(
+                        candidate_id,
+                        *trusted,
+                        now,
+                        mode);
+
+                if (result.status ==
+                    P2pNodeMessageStatus::
+                        MiningWorkResponseProcessed) {
+                    switch (revalidated.status) {
+                    case RevalidateShareStatus::Validated:
+                        result.share_status =
+                            P2pShareReceiveStatus::Connected;
+                        break;
+                    case RevalidateShareStatus::AlreadyValidated:
+                        result.share_status =
+                            P2pShareReceiveStatus::Duplicate;
+                        break;
+                    case RevalidateShareStatus::ParentUnvalidated:
+                    case RevalidateShareStatus::NotConnected:
+                    case RevalidateShareStatus::Rejected:
+                        result.share_status =
+                            P2pShareReceiveStatus::Rejected;
+                        break;
+                    }
+                }
+
+                switch (revalidated.status) {
+                case RevalidateShareStatus::Validated:
+                    // Trust state changed in place. This is deliberately not
+                    // appended to historical_admitted_shares because the share
+                    // already exists in durable structural history.
+                    result.historical_share_connected = true;
+                    return candidate_id;
+
+                case RevalidateShareStatus::AlreadyValidated:
+                    return std::nullopt;
+
+                case RevalidateShareStatus::ParentUnvalidated:
+                    // Historical trust cannot be Trusted unless its explicit
+                    // payout parent had validated ancestry. Reaching this state
+                    // would violate the crossing invariant.
+                    throw std::logic_error(
+                        "historical replay parent lost validated ancestry");
+
+                case RevalidateShareStatus::NotConnected:
+                    throw std::logic_error(
+                        "historical replay disappeared during revalidation");
+
+                case RevalidateShareStatus::Rejected:
+                    return std::nullopt;
+                }
+            }
+
             P2pShareReceiver receiver(chain_, trusted_work_);
             const P2pShareReceiveResult retried =
                 receiver.receive_share(
@@ -208,8 +339,6 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
                     required_capability,
                     now,
                     mode);
-            result.historical_share = candidate_share;
-            result.historical_share_retried = true;
             if (result.status ==
                 P2pNodeMessageStatus::MiningWorkResponseProcessed) {
                 result.share_status = retried.status;
@@ -429,7 +558,27 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
             result.status = P2pNodeMessageStatus::TipProcessed;
             result.tip_status = decision.status;
             if (decision.requested_id.has_value()) {
-                followup = make_p2p_share_request_envelope(*decision.requested_id);
+                followup =
+                    make_p2p_share_request_envelope(
+                        *decision.requested_id);
+            } else if (
+                decision.status ==
+                    P2pTipSyncStatus::KnownConnectedTip &&
+                work_retrieval_ &&
+                historical_trust_sources_ready_unlocked()) {
+                const ConnectedShare* connected =
+                    chain_.find(hint.share_id);
+
+                if (connected != nullptr &&
+                    !connected->validated_ancestry) {
+                    // Structural replay is not synchronization completion.
+                    // Ask for the exact advertised share so the normal
+                    // historical trust path can walk backward parent-first.
+                    followup =
+                        make_p2p_share_request_envelope(
+                            hint.share_id);
+                    followup_peer = peer.node_id;
+                }
             }
             break;
         }
