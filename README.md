@@ -85,23 +85,122 @@ Milestone 0.4 was validated with a local exact-Zano Release build passing all 13
 
 ## Milestone 0.5
 
-Current work builds the node-to-node P2P foundation. Completed checkpoints now include:
+The fifth milestone completes the core node-to-node P2P network:
 
-- deterministic `ZP2P` v1 binary framing with a strict 64 KiB payload limit;
-- network/version/node-ID handshake and capability negotiation;
-- configurable TCP listener/client sessions with bounded stream framing;
-- canonical `ShareAnnounce` gossip using the existing 165-byte `Share` serialization;
-- locally trusted work-context lookup before peer work can be hashed/admitted;
-- duplicate peer-share suppression before expensive ProgPoWZ verification;
-- `ShareRequest` / `ShareResponse` synchronization by exact `ShareId`;
-- explicit not-found responses and response-ID binding;
-- exact-Zano orphan recovery: child-first reception, parent fetch, local parent rehash, and deterministic orphan promotion;
-- handshake and later `TipAnnounce` best-share hints containing only `ShareId + height`;
-- unknown advertised tips are fetched by exact ID, while known-height mismatches are flagged and peer-claimed height/work never selects the local tip.
+- deterministic versioned binary framing and capability negotiation;
+- sidechain/network identity binding during handshake;
+- configurable TCP listener/client sessions with bounded framing;
+- `ShareAnnounce`, `ShareRequest`, `ShareResponse`, and tip synchronization;
+- exact parent/orphan recovery by `ShareId`;
+- independently verified mining-context exchange;
+- trusted historical mining-work retrieval;
+- managed reconnect/backoff;
+- deterministic peer scoring and temporary bans;
+- consensus/reorg convergence tests;
+- adversarial parser fuzzing;
+- live two-node Zano testnet validation.
 
-Checkpoint 5 brings the test suite to 18 tests. Normal and exact-Zano CI are green; local exact-Zano confirmation is the remaining checkpoint gate. Best-share hints are synchronization hints only. Local verified cumulative work remains the sole best-tip selection input.
+Peer-provided height, cumulative work, mining headers, payout data, and mining
+contexts are never accepted as consensus authority on their own. Local
+verification and trusted-work promotion remain mandatory before peer shares can
+affect the sidechain.
 
-A key remaining design constraint is mining-context synchronization. Independent `zanod getblocktemplate` calls can produce different mining headers at the same Zano height, so true multi-node P2Pool mining needs a shared or reconstructable mining context rather than trusting arbitrary peer headers.
+Milestone 0.5 is complete and merged to `main`. By completion of the core P2P
+phase, the exact-Zano regression suite had grown to 33 tests and the complete
+two-node share-propagation path had been validated with real
+SRBMiner-MULTI `progpow_zano` shares.
+
+## Milestone 0.6
+
+The sixth milestone completes deterministic PPLNS accounting and direct
+non-custodial payout construction:
+
+- deterministic best-chain PPLNS window construction;
+- exact work-weighted reward allocation;
+- deterministic remainder handling;
+- payout-capable share v2 identity binding;
+- current Zano HF6 miner-transaction consensus audit;
+- direct multi-recipient coinbase construction;
+- canonical balance/range-proof generation and verification;
+- P2P payout-plan verification;
+- live multi-recipient Zano testnet block submission.
+
+The current HF6 consensus rules support the required direct multi-recipient
+coinbase path, so a temporary custodial payout layer is not required.
+
+Milestone 0.6 is complete and merged to `main`.
+
+## Milestone 0.7
+
+The seventh milestone hardens the node for persistent multi-node operation:
+
+- canonical mainnet/testnet sidechain parameters and `SidechainId`;
+- branch-relative share-difficulty consensus;
+- restart-safe append-only share persistence;
+- Prometheus-style metrics and health endpoints;
+- bounded Stratum and P2P admission/rate limits;
+- adversarial runtime regression tests;
+- seed-node bootstrap framework;
+- published P2P protocol-v2 specification;
+- packaged Linux systemd/operator assets;
+- release-archive installation smoke testing.
+
+The built-in seed framework is complete, but permanent public seed
+infrastructure remains intentionally deferred until mainnet readiness.
+
+Core Milestone 0.7 hardening is merged to `main`; operator/release readiness
+continues on testnet.
+
+## Milestone 0.8
+
+Current work hardens restart-history trust recovery and automatic miner-service
+activation after replay.
+
+A persisted share record proves durable structural history, but structural replay
+alone does not make old consensus history trusted. The restart path therefore
+distinguishes connected shares from shares whose ancestry has been independently
+revalidated.
+
+Completed checkpoints include:
+
+- replayed shares are initially structural unless historical work can be
+  revalidated;
+- historical mining work is bound to exact Zano height/header context;
+- local archived observations are re-audited against canonical daemon headers;
+- missing historical work can be retrieved from an authenticated P2P peer;
+- recovery walks ancestry parent-first until it reaches a validated boundary;
+- connected replay shares are revalidated in place rather than re-admitted;
+- PPLNS authority remains unavailable while required ancestry is unvalidated;
+- Stratum stays fail-closed for non-empty replay history that has not completed
+  ancestry recovery;
+- finished mining-work cooldown entries no longer consume active request
+  capacity for unrelated historical keys;
+- deferred historical ancestry is bounded by the consensus history horizon
+  instead of the much smaller concurrent-request limit;
+- once replay ancestry becomes canonical in the same running process, the block
+  submitter and Stratum server activate automatically.
+
+The Milestone 0.8 implementation passes the complete
+**45/45 exact-Zano regression suite**.
+
+Runtime validation used an isolated immutable testnet fixture containing
+96 accepted/connected shares and 106 archived work contexts. A controlled
+receiver restart with selected work temporarily unavailable produced:
+
+- `revalidated=62`;
+- `missing-work=18`;
+- `parent-unvalidated=16`;
+- `rejected=0`;
+- Stratum deferred with no listener.
+
+The exact original work was then restored byte-for-byte while the receiver stayed
+running. After authenticated P2P recovery, the node crossed
+`historical-trust=trusted`, revalidated the replayed share in place, kept
+`p2p_admitted_shares_total=0`, advanced the Stratum job sequence from 0 to 1,
+and opened the Stratum listener automatically.
+
+This provides the positive runtime proof for late Stratum activation without
+weakening the historical trust boundary.
 
 ## Requirements
 
