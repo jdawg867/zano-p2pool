@@ -64,6 +64,27 @@ P2pMiningContextTrustResult promote_p2p_mining_context_impl(
 
 }  // namespace
 
+P2pMiningContextTrustResult
+promote_bootstrap_p2p_mining_context(
+    P2pTrustedWorkRegistry& trusted_work,
+    const P2pHandshake& peer,
+    const P2pEnvelope& envelope,
+    const P2pMiningAnchor& local_anchor) {
+    return promote_p2p_mining_context_impl(
+        trusted_work,
+        peer,
+        envelope,
+        local_anchor,
+        ShareId{},
+        [](
+            const P2pMiningContextProposal& proposal,
+            const P2pMiningContextCheckResult& check) {
+            return verify_p2p_mining_context_bootstrap_proofs(
+                proposal,
+                check);
+        });
+}
+
 P2pMiningContextTrustResult promote_p2p_mining_context(
     P2pTrustedWorkRegistry& trusted_work,
     const P2pHandshake& peer,

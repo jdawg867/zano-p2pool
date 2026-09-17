@@ -54,6 +54,17 @@ struct P2pPayoutPolicyResult {
     std::uint64_t txs_fee,
     const P2pPayoutAddress& expected_payout) noexcept;
 
+
+// Bootstrap work predates the first sidechain payout identity. Its Zano
+// coinbase recipient is therefore not sidechain consensus. This still verifies
+// TGC binding, reward accounting, native assets and amount commitments.
+[[nodiscard]] P2pPayoutPolicyResult verify_miner_tx_bootstrap_policy(
+    std::span<const std::uint8_t> miner_tx_prefix,
+    std::string_view miner_tx_tgc_json,
+    std::uint64_t block_reward_without_fee,
+    std::uint64_t block_reward,
+    std::uint64_t txs_fee) noexcept;
+
 // Multi-recipient variant for canonical PPLNS payouts. Output ordering and
 // per-recipient splitting are not trusted: every actual output must derive to
 // exactly one destination in expected_plan, and the verified TGC amounts are
@@ -70,6 +81,14 @@ struct P2pPayoutPolicyResult {
     const P2pMiningContextProposal& proposal,
     const P2pMiningContextCheckResult& anchored_check,
     const P2pPayoutAddress& expected_payout) noexcept;
+
+
+// Anchored bootstrap variant. This does not authorize or infer a payout
+// identity from the peer or from the historical bootstrap coinbase.
+[[nodiscard]] P2pPayoutPolicyResult
+verify_p2p_mining_context_bootstrap_payout_policy(
+    const P2pMiningContextProposal& proposal,
+    const P2pMiningContextCheckResult& anchored_check) noexcept;
 
 [[nodiscard]] P2pPayoutPolicyResult verify_p2p_mining_context_payout_policy(
     const P2pMiningContextProposal& proposal,

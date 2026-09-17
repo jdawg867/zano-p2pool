@@ -421,6 +421,9 @@ int main() {
     CHECK(verify_p2p_mining_context_balance_proof(
               bad_balance, bad_balance_anchored, payout).status ==
           P2pMinerTxProofStatus::InvalidBalanceProof);
+    CHECK(verify_p2p_mining_context_bootstrap_balance_proof(
+              bad_balance, bad_balance_anchored).status ==
+          P2pMinerTxProofStatus::InvalidBalanceProof);
 
     // 6B.3b: a genuine BPP+ proof and matching UG aggregation proof must pass
     // the integrated gate after 6B.1, 6B.2 and 6B.3a.
@@ -437,6 +440,15 @@ int main() {
     CHECK(std::string(p2p_miner_tx_proof_status_name(full.status)) ==
           "proofs-verified");
 
+    const auto bootstrap_full =
+        verify_p2p_mining_context_bootstrap_proofs(
+            full_proposal,
+            full_anchored);
+    CHECK(bootstrap_full.status ==
+          P2pMinerTxProofStatus::ProofsVerified);
+    CHECK(bootstrap_full.payout_status ==
+          P2pPayoutPolicyStatus::Verified);
+
     std::vector<std::uint8_t> bad_bpp_range = valid_range;
     CHECK(bad_bpp_range.size() > 1);
     bad_bpp_range[1] ^= 0x01U;  // first serialized L point
@@ -445,6 +457,9 @@ int main() {
     const auto bad_bpp_anchored = inspect(bad_bpp);
     CHECK(verify_p2p_mining_context_proofs(
               bad_bpp, bad_bpp_anchored, payout).status ==
+          P2pMinerTxProofStatus::InvalidRangeProof);
+    CHECK(verify_p2p_mining_context_bootstrap_proofs(
+              bad_bpp, bad_bpp_anchored).status ==
           P2pMinerTxProofStatus::InvalidRangeProof);
 
     std::vector<std::uint8_t> bad_aggregation_range = valid_range;
@@ -480,6 +495,12 @@ int main() {
     CHECK(verify_p2p_mining_context_proofs(
               full_proposal, full_anchored, wrong_payout).status ==
           P2pMinerTxProofStatus::PayoutPolicyFailed);
+
+    // The same fully valid historical bootstrap transaction remains valid when
+    // no future sidechain payout identity is treated as bootstrap authority.
+    CHECK(verify_p2p_mining_context_bootstrap_proofs(
+              full_proposal, full_anchored).status ==
+          P2pMinerTxProofStatus::ProofsVerified);
 
     P2pMiningContextCheckResult not_anchored = full_anchored;
     not_anchored.proposal_id[0] ^= 0x01U;

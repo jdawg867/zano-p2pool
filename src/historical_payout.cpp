@@ -38,6 +38,8 @@ const char* historical_payout_status_name(
         return "parameter-mismatch";
     case HistoricalPayoutStatus::BootstrapHistoryRequired:
         return "bootstrap-history-required";
+    case HistoricalPayoutStatus::BootstrapRoot:
+        return "bootstrap-root";
     case HistoricalPayoutStatus::ParentMissing:
         return "parent-missing";
     case HistoricalPayoutStatus::UnverifiedAncestry:

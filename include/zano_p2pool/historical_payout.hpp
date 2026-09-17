@@ -6,6 +6,7 @@ enum class HistoricalPayoutStatus {
     PlanDerived,
     ParameterMismatch,
     BootstrapHistoryRequired,
+    BootstrapRoot,
     ParentMissing,
     UnverifiedAncestry,
     PlanUnavailable,

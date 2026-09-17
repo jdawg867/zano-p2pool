@@ -122,20 +122,30 @@ int main() {
 
     const auto good = verify_miner_tx_payout_policy(
         prefix, tgc, 2, 2, 12345, payout);
+    const auto bootstrap_good = verify_miner_tx_bootstrap_policy(
+        prefix, tgc, 2, 2, 12345);
+
     if (!zano_curve_backend_available()) {
         CHECK(good.status == P2pPayoutPolicyStatus::BackendUnavailable);
+        CHECK(bootstrap_good.status ==
+              P2pPayoutPolicyStatus::BackendUnavailable);
         CHECK(std::string(p2p_payout_policy_status_name(good.status)) ==
               "backend-unavailable");
         return 0;
     }
 
     CHECK(good.status == P2pPayoutPolicyStatus::Verified);
+    CHECK(bootstrap_good.status == P2pPayoutPolicyStatus::Verified);
+    CHECK(bootstrap_good.output_count == 2);
+    CHECK(bootstrap_good.verified_reward == 2);
     CHECK(good.output_count == 2);
     CHECK(good.verified_reward == 2);
     CHECK(std::string(p2p_payout_policy_status_name(good.status)) == "verified");
 
     // HF6 burns transaction fees; template reward must equal base reward.
     CHECK(verify_miner_tx_payout_policy(prefix, tgc, 1, 2, 1, payout).status ==
+          P2pPayoutPolicyStatus::RewardMetadataMismatch);
+    CHECK(verify_miner_tx_bootstrap_policy(prefix, tgc, 1, 2, 1).status ==
           P2pPayoutPolicyStatus::RewardMetadataMismatch);
 
     // If metadata agrees on a larger reward but commitments sum to two, reject.
@@ -155,12 +165,21 @@ int main() {
               bad_destination_prefix, tgc, 2, 2, 0, payout).status ==
           P2pPayoutPolicyStatus::DestinationMismatch);
 
+    // Bootstrap predates the first sidechain payout identity, so destination
+    // mismatch against that future identity is deliberately not a rejection.
+    CHECK(verify_miner_tx_bootstrap_policy(
+              bad_destination_prefix, tgc, 2, 2, 0).status ==
+          P2pPayoutPolicyStatus::Verified);
+
     ZanoCurveKey bad_commitment = native_asset;
     bad_commitment[0] ^= 0x01U;
     const auto bad_commitment_prefix =
         make_prefix(basepoint, stealths, bad_commitment, native_asset);
     CHECK(verify_miner_tx_payout_policy(
               bad_commitment_prefix, tgc, 2, 2, 0, payout).status ==
+          P2pPayoutPolicyStatus::AmountCommitmentMismatch);
+    CHECK(verify_miner_tx_bootstrap_policy(
+              bad_commitment_prefix, tgc, 2, 2, 0).status ==
           P2pPayoutPolicyStatus::AmountCommitmentMismatch);
 
     ZanoCurveKey non_native = native_asset;
@@ -169,6 +188,9 @@ int main() {
         make_prefix(basepoint, stealths, native_asset, non_native);
     CHECK(verify_miner_tx_payout_policy(
               non_native_prefix, tgc, 2, 2, 0, payout).status ==
+          P2pPayoutPolicyStatus::NonNativeAsset);
+    CHECK(verify_miner_tx_bootstrap_policy(
+              non_native_prefix, tgc, 2, 2, 0).status ==
           P2pPayoutPolicyStatus::NonNativeAsset);
 
     const auto nonzero_asset_mask_tgc =
@@ -197,6 +219,9 @@ int main() {
     const auto bad_keypair_tgc = make_tgc(kScalarTwoHex, 2);
     CHECK(verify_miner_tx_payout_policy(
               prefix, bad_keypair_tgc, 2, 2, 0, payout).status ==
+          P2pPayoutPolicyStatus::KeyBindingFailed);
+    CHECK(verify_miner_tx_bootstrap_policy(
+              prefix, bad_keypair_tgc, 2, 2, 0).status ==
           P2pPayoutPolicyStatus::KeyBindingFailed);
 
     return 0;

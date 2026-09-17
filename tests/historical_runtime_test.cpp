@@ -931,24 +931,81 @@ int main() {
     // A fresh receiver also cannot currently cross the historical payout
     // boundary for the provider's first zero-parent sidechain share. This is
     // intentionally captured as a failing bootstrap condition, not silently
-    // treated as trusted history.
+    // A fresh receiver may now admit the first zero-parent sidechain share
+    // after independent historical anchoring and the bootstrap miner-tx proof
+    // crossing. The root share's own v2 payout identity establishes subsequent
+    // sidechain payout history; it is not compared to the older bootstrap
+    // template's node-specific coinbase recipient.
     const RuntimeCaseResult fresh_root =
         run_runtime_case(false, false, true, true);
 
     CHECK(!fresh_root.failed);
     CHECK(fresh_root.trust_status ==
-          HistoricalTrustStatus::PayoutRejected);
+          HistoricalTrustStatus::Trusted);
     CHECK(!fresh_root.anchor_status.has_value());
-    CHECK(fresh_root.payout_status.has_value());
-    CHECK(*fresh_root.payout_status ==
-          HistoricalPayoutStatus::BootstrapHistoryRequired);
-    CHECK(!fresh_root.historical_share_retried);
-    CHECK(fresh_root.historical_admitted_count == 0);
-    CHECK(fresh_root.trusted_work_count == 0);
-    CHECK(fresh_root.connected_share_count == 0);
-    CHECK(!fresh_root.candidate_present);
-    CHECK(!fresh_root.candidate_validated_ancestry);
-    CHECK(fresh_root.lookup_calls == 2);
+    CHECK(!fresh_root.payout_status.has_value());
+    CHECK(fresh_root.share_status ==
+          P2pShareReceiveStatus::Connected);
+    CHECK(fresh_root.historical_share_retried);
+    CHECK(fresh_root.historical_admitted_count == 1);
+    CHECK(fresh_root.trusted_work_count == 1);
+    CHECK(fresh_root.connected_share_count == 1);
+    CHECK(fresh_root.candidate_present);
+    CHECK(fresh_root.candidate_validated_ancestry);
+
+    // This is the fresh-node/VPS-B regression: the receiver never observed
+    // the provider's exact template locally. Canonical local Zano history
+    // reconstructs the missing historical PoW context, after which the same
+    // bootstrap proof crossing must admit and validate the root share.
+    const RuntimeCaseResult fresh_root_from_canonical_history =
+        run_runtime_case(
+            false,  // remote seed is intact
+            false,  // candidate was not structurally replayed
+            false,  // no exact local mining-work observation
+            true,   // zero-parent root
+            true);  // canonical historical PoW context is available
+
+    CHECK(!fresh_root_from_canonical_history.failed);
+    CHECK(fresh_root_from_canonical_history.trust_status ==
+          HistoricalTrustStatus::Trusted);
+    CHECK(!fresh_root_from_canonical_history.anchor_status.has_value());
+    CHECK(!fresh_root_from_canonical_history.payout_status.has_value());
+    CHECK(fresh_root_from_canonical_history.share_status ==
+          P2pShareReceiveStatus::Connected);
+    CHECK(fresh_root_from_canonical_history.historical_share_retried);
+    CHECK(fresh_root_from_canonical_history.historical_admitted_count == 1);
+    CHECK(fresh_root_from_canonical_history.trusted_work_count == 1);
+    CHECK(fresh_root_from_canonical_history.connected_share_count == 1);
+    CHECK(fresh_root_from_canonical_history.candidate_present);
+    CHECK(fresh_root_from_canonical_history.candidate_validated_ancestry);
+    CHECK(fresh_root_from_canonical_history.lookup_calls > 0);
+    CHECK(fresh_root_from_canonical_history.historical_pow_lookup_calls > 0);
+
+    // Bootstrap destination independence is not peer authority. If this fresh
+    // receiver has neither an exact local observation nor reconstructable
+    // canonical historical PoW context, the root must remain untrusted.
+    const RuntimeCaseResult fresh_root_without_local_authority =
+        run_runtime_case(
+            false,
+            false,
+            false,
+            true,
+            false);
+
+    CHECK(!fresh_root_without_local_authority.failed);
+    CHECK(fresh_root_without_local_authority.trust_status ==
+          HistoricalTrustStatus::AnchorRejected);
+    CHECK(fresh_root_without_local_authority.anchor_status.has_value());
+    CHECK(*fresh_root_without_local_authority.anchor_status ==
+          HistoricalAnchorStatus::CanonicalPowContextUnavailable);
+    CHECK(!fresh_root_without_local_authority.payout_status.has_value());
+    CHECK(!fresh_root_without_local_authority.historical_share_retried);
+    CHECK(fresh_root_without_local_authority.historical_admitted_count == 0);
+    CHECK(fresh_root_without_local_authority.trusted_work_count == 0);
+    CHECK(fresh_root_without_local_authority.connected_share_count == 0);
+    CHECK(!fresh_root_without_local_authority.candidate_present);
+    CHECK(!fresh_root_without_local_authority.candidate_validated_ancestry);
+    CHECK(fresh_root_without_local_authority.historical_pow_lookup_calls > 0);
 
     // Without the exact Zano curve/proof backend the runtime must never turn a
     // retrieved peer proposal into trusted work. HistoricalTrustTest covers the

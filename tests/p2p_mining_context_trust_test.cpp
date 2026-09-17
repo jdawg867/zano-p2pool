@@ -61,6 +61,14 @@ int main() {
         local_anchor,
         payout);
 
+    P2pTrustedWorkRegistry bootstrap_registry;
+    const P2pMiningContextTrustResult bootstrap_promoted =
+        promote_bootstrap_p2p_mining_context(
+            bootstrap_registry,
+            peer,
+            envelope,
+            local_anchor);
+
     // The PPLNS-plan crossing exercises the same balance/range proof pipeline,
     // but replaces the old one-wallet payout assumption with the complete
     // locally derived coinbase plan.
@@ -77,6 +85,13 @@ int main() {
         CHECK(promoted.proof_status == P2pMinerTxProofStatus::BackendUnavailable);
         CHECK(!promoted.registry_inserted);
         CHECK(trusted_work.size() == 0);
+        CHECK(bootstrap_promoted.status ==
+              P2pMiningContextTrustStatus::ProofsRejected);
+        CHECK(bootstrap_promoted.proof_status ==
+              P2pMinerTxProofStatus::BackendUnavailable);
+        CHECK(!bootstrap_promoted.registry_inserted);
+        CHECK(bootstrap_registry.size() == 0);
+
         CHECK(plan_promoted.status == P2pMiningContextTrustStatus::ProofsRejected);
         CHECK(plan_promoted.proof_status ==
               P2pMinerTxProofStatus::BackendUnavailable);
@@ -101,6 +116,30 @@ int main() {
               promoted.trusted_context.mining_header_hash) != nullptr);
     CHECK(std::string(p2p_mining_context_trust_status_name(promoted.status)) ==
           "trusted");
+
+    CHECK(bootstrap_promoted.status ==
+          P2pMiningContextTrustStatus::Trusted);
+    CHECK(bootstrap_promoted.check_status ==
+          P2pMiningContextCheckStatus::AnchoredUnverifiedMinerTx);
+    CHECK(bootstrap_promoted.proof_status ==
+          P2pMinerTxProofStatus::ProofsVerified);
+    CHECK(bootstrap_promoted.payout_status ==
+          P2pPayoutPolicyStatus::Verified);
+    CHECK(bootstrap_promoted.registry_inserted);
+    CHECK(bootstrap_registry.size() == 1);
+
+    CHECK(bootstrap_registry.find(
+              bootstrap_promoted.trusted_context.zano_height,
+              bootstrap_promoted.trusted_context.mining_header_hash,
+              ShareId{}) != nullptr);
+
+    ShareId nonzero_bootstrap_parent{};
+    nonzero_bootstrap_parent.back() = 0x01;
+
+    CHECK(bootstrap_registry.find(
+              bootstrap_promoted.trusted_context.zano_height,
+              bootstrap_promoted.trusted_context.mining_header_hash,
+              nonzero_bootstrap_parent) == nullptr);
 
     CHECK(plan_promoted.status == P2pMiningContextTrustStatus::Trusted);
     CHECK(plan_promoted.check_status ==
@@ -226,6 +265,22 @@ int main() {
     CHECK(proof_result.status == P2pMiningContextTrustStatus::ProofsRejected);
     CHECK(proof_result.proof_status == P2pMinerTxProofStatus::InvalidRangeProof);
     CHECK(proof_registry.size() == 0);
+
+    P2pTrustedWorkRegistry bootstrap_proof_registry;
+
+    const auto bootstrap_proof_result =
+        promote_bootstrap_p2p_mining_context(
+            bootstrap_proof_registry,
+            peer,
+            make_p2p_mining_context_envelope(bad_proposal),
+            anchor_for(bad_proposal));
+
+    CHECK(bootstrap_proof_result.status ==
+          P2pMiningContextTrustStatus::ProofsRejected);
+    CHECK(bootstrap_proof_result.proof_status ==
+          P2pMinerTxProofStatus::InvalidRangeProof);
+    CHECK(!bootstrap_proof_result.registry_inserted);
+    CHECK(bootstrap_proof_registry.size() == 0);
 
     return 0;
 }
