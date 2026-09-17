@@ -51,7 +51,9 @@ std::vector<P2pMiningAnchor> load_local_mining_anchors(
 HistoricalAnchorResult audit_historical_local_anchor(
     const P2pMiningContextProposal& proposal,
     std::span<const P2pMiningAnchor> observations,
-    const std::function<RpcCanonicalHeader(std::uint64_t)>& lookup) {
+    const std::function<RpcCanonicalHeader(std::uint64_t)>& lookup,
+    const std::function<std::optional<RpcHistoricalPowContext>(
+        std::uint64_t)>& historical_pow_lookup) {
     HistoricalAnchorResult result;
     const auto seed = progpowz_seed(proposal.zano_height);
     const auto parent = audit_historical_parent(proposal, lookup);
@@ -76,13 +78,61 @@ HistoricalAnchorResult audit_historical_local_anchor(
         }
         expected = observation;
     }
-    if (!expected) return result;
-    if (proposal.network_difficulty != expected->network_difficulty ||
-        proposal.block_reward_without_fee != expected->block_reward_without_fee) {
-        result.status = HistoricalAnchorStatus::LocalObservationMismatch;
+    if (expected) {
+        if (proposal.network_difficulty != expected->network_difficulty ||
+            proposal.block_reward_without_fee !=
+                expected->block_reward_without_fee) {
+            result.status =
+                HistoricalAnchorStatus::LocalObservationMismatch;
+            return result;
+        }
+
+        result.status =
+            HistoricalAnchorStatus::AnchorMatchedUntrusted;
         return result;
     }
-    result.status = HistoricalAnchorStatus::AnchorMatchedUntrusted;
+
+    // A fresh independent node may never have sampled this exact historical
+    // template locally. In that case, and only in that case, allow the
+    // operator's own canonical Zano daemon to reconstruct the consensus fields.
+    //
+    // Peer metadata is never used as authority here:
+    //   * parent membership was already checked above by height,
+    //   * the ProgPoW seed was derived locally from height,
+    //   * next-PoW difficulty and base reward come from local canonical history.
+    //
+    // Existing matching local observations remain preferred. A local conflict
+    // or mismatch above must never fall through to this oracle.
+    if (!historical_pow_lookup) {
+        result.status =
+            HistoricalAnchorStatus::LocalObservationMissing;
+        return result;
+    }
+
+    const auto historical =
+        historical_pow_lookup(proposal.zano_height);
+
+    if (!historical.has_value()) {
+        result.status =
+            HistoricalAnchorStatus::CanonicalPowContextUnavailable;
+        return result;
+    }
+
+    if (historical->height != proposal.zano_height ||
+        historical->parent_hash != proposal.prev_hash ||
+        historical->network_difficulty !=
+            proposal.network_difficulty ||
+        historical->block_reward_without_fee !=
+            proposal.block_reward_without_fee ||
+        historical->confirming_pow_height <
+            proposal.zano_height) {
+        result.status =
+            HistoricalAnchorStatus::CanonicalPowContextMismatch;
+        return result;
+    }
+
+    result.status =
+        HistoricalAnchorStatus::AnchorMatchedUntrusted;
     return result;
 }
 
@@ -95,6 +145,8 @@ const char* historical_anchor_status_name(HistoricalAnchorStatus status) noexcep
     case HistoricalAnchorStatus::LocalObservationMissing: return "local-observation-missing";
     case HistoricalAnchorStatus::LocalObservationConflict: return "local-observation-conflict";
     case HistoricalAnchorStatus::LocalObservationMismatch: return "local-observation-mismatch";
+    case HistoricalAnchorStatus::CanonicalPowContextUnavailable: return "canonical-pow-context-unavailable";
+    case HistoricalAnchorStatus::CanonicalPowContextMismatch: return "canonical-pow-context-mismatch";
     }
     return "unknown";
 }

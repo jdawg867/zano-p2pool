@@ -1022,6 +1022,9 @@ int main(int argc, char** argv) {
                 },
                 [&rpc](std::uint64_t height) {
                     return rpc.get_canonical_header(height);
+                },
+                [&rpc](std::uint64_t height) {
+                    return rpc.get_historical_pow_context(height);
                 });
         }
         p2p_protocol.remember_trusted_work(trusted_context_from_live(live));

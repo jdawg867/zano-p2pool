@@ -17,7 +17,8 @@ P2pNodeProtocol::P2pNodeProtocol(
 bool P2pNodeProtocol::historical_trust_sources_ready_unlocked() const noexcept {
     return historical_params_.has_value() &&
            static_cast<bool>(load_historical_observations_) &&
-           static_cast<bool>(historical_parent_lookup_);
+           static_cast<bool>(historical_parent_lookup_) &&
+           static_cast<bool>(historical_pow_lookup_);
 }
 
 void P2pNodeProtocol::expire_historical_state(std::uint64_t now) {
@@ -201,7 +202,8 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
                     evidence.source_peer,
                     evidence.proposal,
                     observations,
-                    historical_parent_lookup_);
+                    historical_parent_lookup_,
+                    historical_pow_lookup_);
             result.historical_trust_status = trust.status;
 
             if (trust.status ==
@@ -781,8 +783,12 @@ std::uint32_t p2p_node_message_penalty(
 void P2pNodeProtocol::set_historical_trust_sources(
     const SidechainParameters& params,
     std::function<std::vector<P2pMiningAnchor>()> load_local_observations,
-    std::function<RpcCanonicalHeader(std::uint64_t)> lookup) {
-    if (!load_local_observations || !lookup) {
+    std::function<RpcCanonicalHeader(std::uint64_t)> lookup,
+    std::function<std::optional<RpcHistoricalPowContext>(
+        std::uint64_t)> historical_pow_lookup) {
+    if (!load_local_observations ||
+        !lookup ||
+        !historical_pow_lookup) {
         throw std::invalid_argument(
             "historical trust sources must be callable");
     }
@@ -796,6 +802,8 @@ void P2pNodeProtocol::set_historical_trust_sources(
     load_historical_observations_ =
         std::move(load_local_observations);
     historical_parent_lookup_ = std::move(lookup);
+    historical_pow_lookup_ =
+        std::move(historical_pow_lookup);
 }
 
 void P2pNodeProtocol::remember_trusted_work(

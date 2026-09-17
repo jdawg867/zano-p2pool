@@ -191,13 +191,15 @@ struct RuntimeCaseResult {
     bool candidate_present{false};
     bool candidate_validated_ancestry{false};
     int lookup_calls{};
+    int historical_pow_lookup_calls{};
 };
 
 [[nodiscard]] RuntimeCaseResult run_runtime_case(
     bool corrupt_remote_seed,
     bool replay_candidate = false,
     bool receiver_has_local_observation = true,
-    bool fresh_root = false) {
+    bool fresh_root = false,
+    bool receiver_has_historical_pow_context = true) {
     TemporaryDirectory temp("zano-historical-runtime");
     RuntimeFixture fixture = make_runtime_fixture();
 
@@ -288,6 +290,7 @@ struct RuntimeCaseResult {
     receiver_node.set_work_retrieval(&receiver_retrieval);
 
     std::atomic<int> lookup_calls{0};
+    std::atomic<int> historical_pow_lookup_calls{0};
     receiver_node.set_historical_trust_sources(
         fixture.params,
         [&receiver_archive] {
@@ -300,6 +303,26 @@ struct RuntimeCaseResult {
             return RpcCanonicalHeader{
                 height,
                 fixture.proposal.prev_hash,
+            };
+        },
+        [&fixture,
+         &historical_pow_lookup_calls,
+         receiver_has_historical_pow_context](
+            std::uint64_t height)
+            -> std::optional<RpcHistoricalPowContext> {
+            ++historical_pow_lookup_calls;
+            CHECK(height == fixture.proposal.zano_height);
+
+            if (!receiver_has_historical_pow_context) {
+                return std::nullopt;
+            }
+
+            return RpcHistoricalPowContext{
+                fixture.proposal.zano_height,
+                fixture.proposal.prev_hash,
+                fixture.proposal.network_difficulty,
+                fixture.proposal.block_reward_without_fee,
+                fixture.proposal.zano_height + 2,
             };
         });
 
@@ -452,6 +475,8 @@ struct RuntimeCaseResult {
     result.connected_share_count =
         receiver_node.connected_share_count();
     result.lookup_calls = lookup_calls.load();
+    result.historical_pow_lookup_calls =
+        historical_pow_lookup_calls.load();
 
     {
         std::lock_guard lock(receiver_state_mutex);
@@ -633,6 +658,17 @@ run_recursive_parent_sync_case(
             return RpcCanonicalHeader{
                 height,
                 fixture.proposal.prev_hash,
+            };
+        },
+        [&fixture](std::uint64_t height)
+            -> std::optional<RpcHistoricalPowContext> {
+            CHECK(height == fixture.proposal.zano_height);
+            return RpcHistoricalPowContext{
+                fixture.proposal.zano_height,
+                fixture.proposal.prev_hash,
+                fixture.proposal.network_difficulty,
+                fixture.proposal.block_reward_without_fee,
+                fixture.proposal.zano_height,
             };
         });
 
@@ -865,27 +901,32 @@ int main() {
           HistoricalAnchorStatus::SeedMismatch);
     CHECK(!rejected.payout_status.has_value());
 
-    // Fresh independent receivers do not necessarily have a locally archived
-    // observation for work produced by another node. This reproduces the
-    // multi-node soak failure: structurally valid peer work remains untrusted
-    // and no share is admitted when the local observation is absent.
-    const RuntimeCaseResult missing_local_observation =
-        run_runtime_case(false, false, false, false);
+    // A fresh independent receiver may have no locally archived observation.
+    // If its own daemon has not yet advanced far enough to reconstruct the
+    // historical PoW context, trust must remain fail-closed.
+    const RuntimeCaseResult historical_oracle_unavailable =
+        run_runtime_case(
+            false,
+            false,
+            false,
+            false,
+            false);
 
-    CHECK(!missing_local_observation.failed);
-    CHECK(missing_local_observation.trust_status ==
+    CHECK(!historical_oracle_unavailable.failed);
+    CHECK(historical_oracle_unavailable.trust_status ==
           HistoricalTrustStatus::AnchorRejected);
-    CHECK(missing_local_observation.anchor_status.has_value());
-    CHECK(*missing_local_observation.anchor_status ==
-          HistoricalAnchorStatus::LocalObservationMissing);
-    CHECK(!missing_local_observation.payout_status.has_value());
-    CHECK(!missing_local_observation.historical_share_retried);
-    CHECK(missing_local_observation.historical_admitted_count == 0);
-    CHECK(missing_local_observation.trusted_work_count == 0);
-    CHECK(missing_local_observation.connected_share_count == 1);
-    CHECK(!missing_local_observation.candidate_present);
-    CHECK(!missing_local_observation.candidate_validated_ancestry);
-    CHECK(missing_local_observation.lookup_calls == 2);
+    CHECK(historical_oracle_unavailable.anchor_status.has_value());
+    CHECK(*historical_oracle_unavailable.anchor_status ==
+          HistoricalAnchorStatus::CanonicalPowContextUnavailable);
+    CHECK(!historical_oracle_unavailable.payout_status.has_value());
+    CHECK(!historical_oracle_unavailable.historical_share_retried);
+    CHECK(historical_oracle_unavailable.historical_admitted_count == 0);
+    CHECK(historical_oracle_unavailable.trusted_work_count == 0);
+    CHECK(historical_oracle_unavailable.connected_share_count == 1);
+    CHECK(!historical_oracle_unavailable.candidate_present);
+    CHECK(!historical_oracle_unavailable.candidate_validated_ancestry);
+    CHECK(historical_oracle_unavailable.lookup_calls == 2);
+    CHECK(historical_oracle_unavailable.historical_pow_lookup_calls == 1);
 
     // A fresh receiver also cannot currently cross the historical payout
     // boundary for the provider's first zero-parent sidechain share. This is
@@ -915,6 +956,35 @@ int main() {
     if (!zano_curve_backend_available()) {
         return 0;
     }
+
+    // With no matching local archive record, a fresh independent receiver can
+    // now reconstruct the missing authority entirely from its own canonical
+    // Zano history and then cross the unchanged payout/proof trust boundary.
+    const RuntimeCaseResult reconstructed_fresh_receiver =
+        run_runtime_case(
+            false,
+            false,
+            false,
+            false,
+            true);
+
+    CHECK(!reconstructed_fresh_receiver.failed);
+    CHECK(reconstructed_fresh_receiver.trust_status ==
+          HistoricalTrustStatus::Trusted);
+    CHECK(!reconstructed_fresh_receiver.anchor_status.has_value());
+    CHECK(!reconstructed_fresh_receiver.payout_status.has_value());
+    CHECK(reconstructed_fresh_receiver.historical_share_retried);
+    CHECK(reconstructed_fresh_receiver.historical_admitted_count == 1);
+    CHECK(reconstructed_fresh_receiver.share_status ==
+          P2pShareReceiveStatus::Connected);
+    CHECK(reconstructed_fresh_receiver.trusted_work_count == 1);
+    CHECK(reconstructed_fresh_receiver.connected_share_count == 2);
+    CHECK(reconstructed_fresh_receiver.candidate_present);
+    CHECK(reconstructed_fresh_receiver.candidate_validated_ancestry);
+    CHECK(reconstructed_fresh_receiver.lookup_calls == 4);
+    CHECK(
+        reconstructed_fresh_receiver.historical_pow_lookup_calls ==
+        2);
 
     const RuntimeCaseResult trusted =
         run_runtime_case(false);

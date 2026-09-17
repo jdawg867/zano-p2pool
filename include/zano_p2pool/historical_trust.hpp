@@ -39,6 +39,8 @@ struct HistoricalTrustResult {
 //
 // local_observations must contain only work captured from this node's own
 // daemon. The lookup callback must query the operator's local daemon by height.
+// historical_pow_lookup may reconstruct missing exact-template authority only
+// from that same local daemon's canonical history.
 //
 // The local anchor is checked once before payout reconstruction and again
 // immediately before the existing miner-tx/proof trust crossing. The second
@@ -59,7 +61,9 @@ struct HistoricalTrustResult {
     const P2pHandshake& peer,
     const P2pMiningContextProposal& proposal,
     std::span<const P2pMiningAnchor> local_observations,
-    const std::function<RpcCanonicalHeader(std::uint64_t)>& lookup);
+    const std::function<RpcCanonicalHeader(std::uint64_t)>& lookup,
+    const std::function<std::optional<RpcHistoricalPowContext>(
+        std::uint64_t)>& historical_pow_lookup = {});
 
 [[nodiscard]] const char* historical_trust_status_name(
     HistoricalTrustStatus status) noexcept;

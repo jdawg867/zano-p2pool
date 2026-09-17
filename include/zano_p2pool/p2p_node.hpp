@@ -81,7 +81,9 @@ public:
     void set_historical_trust_sources(
         const SidechainParameters& params,
         std::function<std::vector<P2pMiningAnchor>()> load_local_observations,
-        std::function<RpcCanonicalHeader(std::uint64_t)> lookup);
+        std::function<RpcCanonicalHeader(std::uint64_t)> lookup,
+        std::function<std::optional<RpcHistoricalPowContext>(
+            std::uint64_t)> historical_pow_lookup);
     void remember_trusted_work(const ShareWorkContext& context);
     void set_local_mining_context(
         const P2pMiningAnchor& anchor,
@@ -165,6 +167,9 @@ private:
         load_historical_observations_;
     std::function<RpcCanonicalHeader(std::uint64_t)>
         historical_parent_lookup_;
+    std::function<std::optional<RpcHistoricalPowContext>(
+        std::uint64_t)>
+        historical_pow_lookup_;
     std::map<PendingHistoricalKey, PendingHistoricalCandidate>
         pending_historical_;
     std::map<MiningWorkKey, HistoricalEvidence>

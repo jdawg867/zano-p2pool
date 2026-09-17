@@ -12,7 +12,9 @@ HistoricalTrustResult promote_historical_mining_context(
     const P2pHandshake& peer,
     const P2pMiningContextProposal& proposal,
     std::span<const P2pMiningAnchor> local_observations,
-    const std::function<RpcCanonicalHeader(std::uint64_t)>& lookup) {
+    const std::function<RpcCanonicalHeader(std::uint64_t)>& lookup,
+    const std::function<std::optional<RpcHistoricalPowContext>(
+        std::uint64_t)>& historical_pow_lookup) {
     HistoricalTrustResult result;
     result.candidate_id = share_id(candidate_share);
 
@@ -28,7 +30,10 @@ HistoricalTrustResult promote_historical_mining_context(
     }
 
     result.initial_anchor = audit_historical_local_anchor(
-        proposal, local_observations, lookup);
+        proposal,
+        local_observations,
+        lookup,
+        historical_pow_lookup);
     if (result.initial_anchor.status !=
         HistoricalAnchorStatus::AnchorMatchedUntrusted) {
         result.status = HistoricalTrustStatus::AnchorRejected;
@@ -58,7 +63,10 @@ HistoricalTrustResult promote_historical_mining_context(
     // insert trusted work. This catches a parent reorg/change that happened
     // while the branch-relative payout plan was being reconstructed.
     result.final_anchor = audit_historical_local_anchor(
-        proposal, local_observations, lookup);
+        proposal,
+        local_observations,
+        lookup,
+        historical_pow_lookup);
     if (result.final_anchor.status !=
             HistoricalAnchorStatus::AnchorMatchedUntrusted ||
         result.final_anchor.mining_header_hash !=
