@@ -179,6 +179,8 @@ struct RuntimeFixture {
 struct RuntimeCaseResult {
     HistoricalTrustStatus trust_status{
         HistoricalTrustStatus::CandidateMismatch};
+    std::optional<HistoricalAnchorStatus> anchor_status;
+    std::optional<HistoricalPayoutStatus> payout_status;
     P2pShareReceiveStatus share_status{
         P2pShareReceiveStatus::Rejected};
     bool historical_share_retried{false};
@@ -193,9 +195,17 @@ struct RuntimeCaseResult {
 
 [[nodiscard]] RuntimeCaseResult run_runtime_case(
     bool corrupt_remote_seed,
-    bool replay_candidate = false) {
+    bool replay_candidate = false,
+    bool receiver_has_local_observation = true,
+    bool fresh_root = false) {
     TemporaryDirectory temp("zano-historical-runtime");
     RuntimeFixture fixture = make_runtime_fixture();
+
+    Share candidate = fixture.candidate;
+    if (fresh_root) {
+        candidate.parent_id = ShareId{};
+        candidate.share_height = 0;
+    }
 
     const SidechainId chain_id = sidechain_id(fixture.params);
 
@@ -209,8 +219,13 @@ struct RuntimeCaseResult {
     // The receiver's archive is independent local daemon evidence. The
     // candidate-specific proposal still arrives through peer retrieval and
     // remains untrusted until HistoricalTrustStatus::Trusted.
-    static_cast<void>(receiver_archive.put(
-        serialize_p2p_mining_context_payload(fixture.proposal)));
+    //
+    // Some regression cases intentionally omit this observation to model a
+    // fresh independent node that did not sample the provider's exact work.
+    if (receiver_has_local_observation) {
+        static_cast<void>(receiver_archive.put(
+            serialize_p2p_mining_context_payload(fixture.proposal)));
+    }
 
     P2pMiningContextProposal remote_proposal = fixture.proposal;
     if (corrupt_remote_seed) {
@@ -229,30 +244,32 @@ struct RuntimeCaseResult {
     std::mutex provider_state_mutex;
     std::mutex receiver_state_mutex;
 
-    const ShareWorkContext parent_context{
-        fixture.parent.zano_height,
-        fixture.parent.mining_header_hash,
-        fixture.parent.network_difficulty,
-    };
-    CHECK(receiver_chain.submit_share(
-              fixture.parent,
-              parent_context,
-              200,
-              ProgPowZContextMode::Light)
-              .disposition == ShareDisposition::Connected);
-    CHECK(receiver_chain.find(
-              share_id(fixture.parent)) != nullptr);
-    CHECK(receiver_chain.find(
-              share_id(fixture.parent))->validated_ancestry);
+    if (!fresh_root) {
+        const ShareWorkContext parent_context{
+            fixture.parent.zano_height,
+            fixture.parent.mining_header_hash,
+            fixture.parent.network_difficulty,
+        };
+        CHECK(receiver_chain.submit_share(
+                  fixture.parent,
+                  parent_context,
+                  200,
+                  ProgPowZContextMode::Light)
+                  .disposition == ShareDisposition::Connected);
+        CHECK(receiver_chain.find(
+                  share_id(fixture.parent)) != nullptr);
+        CHECK(receiver_chain.find(
+                  share_id(fixture.parent))->validated_ancestry);
+    }
 
     if (replay_candidate) {
         CHECK(receiver_chain.add_share_unchecked(
-                  fixture.candidate).disposition ==
+                  candidate).disposition ==
               ShareDisposition::Connected);
 
         const ConnectedShare* replayed =
             receiver_chain.find(
-                share_id(fixture.candidate));
+                share_id(candidate));
 
         CHECK(replayed != nullptr);
         CHECK(!replayed->validated_ancestry);
@@ -296,6 +313,8 @@ struct RuntimeCaseResult {
     std::atomic<int> trust_status{
         static_cast<int>(
             HistoricalTrustStatus::CandidateMismatch)};
+    std::atomic<int> anchor_status{-1};
+    std::atomic<int> payout_status{-1};
     std::atomic<int> share_status{
         static_cast<int>(
             P2pShareReceiveStatus::Rejected)};
@@ -352,6 +371,19 @@ struct RuntimeCaseResult {
                     trust_status.store(
                         static_cast<int>(
                             *result.historical_trust_status));
+
+                    if (result.historical_anchor_status.has_value()) {
+                        anchor_status.store(
+                            static_cast<int>(
+                                *result.historical_anchor_status));
+                    }
+
+                    if (result.historical_payout_status.has_value()) {
+                        payout_status.store(
+                            static_cast<int>(
+                                *result.historical_payout_status));
+                    }
+
                     share_status.store(
                         static_cast<int>(result.share_status));
                     retried.store(
@@ -383,7 +415,7 @@ struct RuntimeCaseResult {
 
     provider_runtime.broadcast(
         make_p2p_share_announce_envelope(
-            fixture.candidate));
+            candidate));
 
     CHECK(wait_for([&] {
         return completed.load() || failed.load();
@@ -396,6 +428,18 @@ struct RuntimeCaseResult {
     result.trust_status =
         static_cast<HistoricalTrustStatus>(
             trust_status.load());
+    if (anchor_status.load() >= 0) {
+        result.anchor_status =
+            static_cast<HistoricalAnchorStatus>(
+                anchor_status.load());
+    }
+
+    if (payout_status.load() >= 0) {
+        result.payout_status =
+            static_cast<HistoricalPayoutStatus>(
+                payout_status.load());
+    }
+
     result.share_status =
         static_cast<P2pShareReceiveStatus>(
             share_status.load());
@@ -413,7 +457,7 @@ struct RuntimeCaseResult {
         std::lock_guard lock(receiver_state_mutex);
         const ConnectedShare* connected =
             receiver_chain.find(
-                share_id(fixture.candidate));
+                share_id(candidate));
         result.candidate_present = connected != nullptr;
         result.candidate_validated_ancestry =
             connected != nullptr &&
@@ -816,6 +860,54 @@ int main() {
     CHECK(!rejected.candidate_present);
     CHECK(!rejected.candidate_validated_ancestry);
     CHECK(rejected.lookup_calls == 2);
+    CHECK(rejected.anchor_status.has_value());
+    CHECK(*rejected.anchor_status ==
+          HistoricalAnchorStatus::SeedMismatch);
+    CHECK(!rejected.payout_status.has_value());
+
+    // Fresh independent receivers do not necessarily have a locally archived
+    // observation for work produced by another node. This reproduces the
+    // multi-node soak failure: structurally valid peer work remains untrusted
+    // and no share is admitted when the local observation is absent.
+    const RuntimeCaseResult missing_local_observation =
+        run_runtime_case(false, false, false, false);
+
+    CHECK(!missing_local_observation.failed);
+    CHECK(missing_local_observation.trust_status ==
+          HistoricalTrustStatus::AnchorRejected);
+    CHECK(missing_local_observation.anchor_status.has_value());
+    CHECK(*missing_local_observation.anchor_status ==
+          HistoricalAnchorStatus::LocalObservationMissing);
+    CHECK(!missing_local_observation.payout_status.has_value());
+    CHECK(!missing_local_observation.historical_share_retried);
+    CHECK(missing_local_observation.historical_admitted_count == 0);
+    CHECK(missing_local_observation.trusted_work_count == 0);
+    CHECK(missing_local_observation.connected_share_count == 1);
+    CHECK(!missing_local_observation.candidate_present);
+    CHECK(!missing_local_observation.candidate_validated_ancestry);
+    CHECK(missing_local_observation.lookup_calls == 2);
+
+    // A fresh receiver also cannot currently cross the historical payout
+    // boundary for the provider's first zero-parent sidechain share. This is
+    // intentionally captured as a failing bootstrap condition, not silently
+    // treated as trusted history.
+    const RuntimeCaseResult fresh_root =
+        run_runtime_case(false, false, true, true);
+
+    CHECK(!fresh_root.failed);
+    CHECK(fresh_root.trust_status ==
+          HistoricalTrustStatus::PayoutRejected);
+    CHECK(!fresh_root.anchor_status.has_value());
+    CHECK(fresh_root.payout_status.has_value());
+    CHECK(*fresh_root.payout_status ==
+          HistoricalPayoutStatus::BootstrapHistoryRequired);
+    CHECK(!fresh_root.historical_share_retried);
+    CHECK(fresh_root.historical_admitted_count == 0);
+    CHECK(fresh_root.trusted_work_count == 0);
+    CHECK(fresh_root.connected_share_count == 0);
+    CHECK(!fresh_root.candidate_present);
+    CHECK(!fresh_root.candidate_validated_ancestry);
+    CHECK(fresh_root.lookup_calls == 2);
 
     // Without the exact Zano curve/proof backend the runtime must never turn a
     // retrieved peer proposal into trusted work. HistoricalTrustTest covers the

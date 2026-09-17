@@ -1077,6 +1077,23 @@ int main(int argc, char** argv) {
                                     << zano_p2pool::
                                            historical_trust_status_name(
                                                *result.historical_trust_status);
+
+                                if (result.historical_anchor_status.has_value()) {
+                                    std::cerr
+                                        << " anchor="
+                                        << zano_p2pool::
+                                               historical_anchor_status_name(
+                                                   *result.historical_anchor_status);
+                                }
+
+                                if (result.historical_payout_status.has_value()) {
+                                    std::cerr
+                                        << " payout="
+                                        << zano_p2pool::
+                                               historical_payout_status_name(
+                                                   *result.historical_payout_status);
+                                }
+
                                 if (result.historical_share_retried) {
                                     std::cerr
                                         << " share-retry="

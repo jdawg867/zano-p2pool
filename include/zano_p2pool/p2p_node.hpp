@@ -40,6 +40,8 @@ struct P2pNodeMessageResult {
     bool mining_context_registry_inserted{false};
     std::optional<Hash256> untrusted_work_received;
     std::optional<HistoricalTrustStatus> historical_trust_status;
+    std::optional<HistoricalAnchorStatus> historical_anchor_status;
+    std::optional<HistoricalPayoutStatus> historical_payout_status;
     std::optional<Share> historical_share;
     std::vector<Share> historical_admitted_shares;
     bool historical_share_retried{false};

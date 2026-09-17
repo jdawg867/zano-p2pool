@@ -23,4 +23,8 @@ struct HistoricalPayoutResult {
     const ShareChain& chain, const SidechainParameters& params,
     const ShareId& parent_id, const Difficulty128& network_difficulty,
     std::uint64_t reward_atomic);
+
+[[nodiscard]] const char* historical_payout_status_name(
+    HistoricalPayoutStatus status) noexcept;
+
 }

@@ -28,4 +28,24 @@ HistoricalPayoutResult derive_historical_payout_plan(
         HistoricalPayoutStatus::PlanDerived : HistoricalPayoutStatus::PlanUnavailable;
     return result;
 }
+
+const char* historical_payout_status_name(
+    HistoricalPayoutStatus status) noexcept {
+    switch (status) {
+    case HistoricalPayoutStatus::PlanDerived:
+        return "plan-derived";
+    case HistoricalPayoutStatus::ParameterMismatch:
+        return "parameter-mismatch";
+    case HistoricalPayoutStatus::BootstrapHistoryRequired:
+        return "bootstrap-history-required";
+    case HistoricalPayoutStatus::ParentMissing:
+        return "parent-missing";
+    case HistoricalPayoutStatus::UnverifiedAncestry:
+        return "unverified-ancestry";
+    case HistoricalPayoutStatus::PlanUnavailable:
+        return "plan-unavailable";
+    }
+    return "unknown";
+}
+
 }

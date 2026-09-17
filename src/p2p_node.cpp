@@ -204,6 +204,23 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
                     historical_parent_lookup_);
             result.historical_trust_status = trust.status;
 
+            if (trust.status ==
+                HistoricalTrustStatus::AnchorRejected) {
+                result.historical_anchor_status =
+                    trust.initial_anchor.status;
+            } else if (
+                trust.status ==
+                HistoricalTrustStatus::AnchorChangedBeforePromotion) {
+                result.historical_anchor_status =
+                    trust.final_anchor.status;
+            }
+
+            if (trust.status ==
+                HistoricalTrustStatus::PayoutRejected) {
+                result.historical_payout_status =
+                    trust.payout.status;
+            }
+
             const MiningWorkKey candidate_work_key{
                 candidate_share.zano_height,
                 candidate_share.mining_header_hash,
