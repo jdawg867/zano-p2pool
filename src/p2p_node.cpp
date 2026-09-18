@@ -145,26 +145,41 @@ P2pNodeProtocol::initial_sync_request(
             *decision.requested_id);
     }
 
-    if (decision.status !=
-            P2pTipSyncStatus::KnownConnectedTip ||
-        !work_retrieval_ ||
-        !historical_trust_sources_ready_unlocked()) {
-        return std::nullopt;
+    if (decision.status ==
+            P2pTipSyncStatus::KnownConnectedTip &&
+        work_retrieval_ &&
+        historical_trust_sources_ready_unlocked()) {
+        const ConnectedShare* connected =
+            chain_.find(hint.share_id);
+
+        if (connected != nullptr &&
+            !connected->validated_ancestry) {
+            // Structural replay is not synchronization completion. Re-request
+            // the exact known tip so historical recovery can walk backward
+            // through UnverifiedAncestry until it reaches a validated parent
+            // boundary.
+            return make_p2p_share_request_envelope(
+                hint.share_id);
+        }
     }
 
-    const ConnectedShare* connected =
-        chain_.find(hint.share_id);
-
-    if (connected == nullptr ||
-        connected->validated_ancestry) {
-        return std::nullopt;
+    // A transport handshake is only a connection-time snapshot. A long-lived
+    // node may have advanced its sidechain substantially since that handshake
+    // was created. When the peer's snapshot gives us nothing to request,
+    // advertise our current application-level tip so the peer can make its own
+    // synchronization decision from fresh state.
+    if ((peer.capabilities & kP2pCapabilityShareSync) != 0 &&
+        (decision.status == P2pTipSyncStatus::NoRemoteTip ||
+         decision.status == P2pTipSyncStatus::KnownConnectedTip)) {
+        const P2pTipHint local_hint =
+            p2p_tip_hint_from_chain(chain_);
+        if (!is_zero_share_id(local_hint.share_id)) {
+            return make_p2p_tip_announce_envelope(
+                local_hint);
+        }
     }
 
-    // Structural replay is not synchronization completion. Re-request the
-    // exact known tip so historical recovery can walk backward through
-    // UnverifiedAncestry until it reaches a validated parent boundary.
-    return make_p2p_share_request_envelope(
-        hint.share_id);
+    return std::nullopt;
 }
 
 P2pNodeMessageResult P2pNodeProtocol::handle(

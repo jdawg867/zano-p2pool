@@ -516,7 +516,8 @@ struct RecursiveParentSyncResult {
 
 [[nodiscard]] RecursiveParentSyncResult
 run_recursive_parent_sync_case(
-    bool replay_existing = false) {
+    bool replay_existing = false,
+    bool stale_provider_handshake = false) {
     TemporaryDirectory temp("zano-historical-parent-sync");
     RuntimeFixture fixture = make_runtime_fixture();
 
@@ -674,7 +675,7 @@ run_recursive_parent_sync_case(
 
     P2pHandshake provider_handshake =
         runtime_handshake(0x24, chain_id);
-    if (replay_existing) {
+    if (replay_existing && !stale_provider_handshake) {
         provider_handshake.best_share_id =
             replay_tip_id;
         provider_handshake.best_share_height =
@@ -722,6 +723,13 @@ run_recursive_parent_sync_case(
             } catch (...) {
                 failed.store(true);
             }
+        },
+        [&](const P2pHandshake& peer)
+            -> std::optional<P2pEnvelope> {
+            if (!stale_provider_handshake) {
+                return std::nullopt;
+            }
+            return provider_node.initial_sync_request(peer);
         });
 
     P2pRuntime receiver_runtime(
@@ -1136,6 +1144,32 @@ int main() {
           (2 * replay_recursive.descendant_count) - 1);
     CHECK(replay_recursive.lookup_calls ==
           (6 * replay_recursive.descendant_count) - 2);
+
+    // Regression: a long-running provider may have advanced its local
+    // sidechain after its transport handshake was created. Reconnecting peers
+    // must not depend on that stale handshake tip to restart historical
+    // ancestry recovery.
+    const RecursiveParentSyncResult stale_provider_tip =
+        run_recursive_parent_sync_case(true, true);
+
+    CHECK(!stale_provider_tip.failed);
+    CHECK(stale_provider_tip.completed);
+    CHECK(stale_provider_tip.admitted_count == 0);
+    CHECK(stale_provider_tip.descendant_count == 18);
+    CHECK(stale_provider_tip.all_descendants_validated);
+    CHECK(stale_provider_tip.trusted_work_count ==
+          stale_provider_tip.descendant_count);
+    CHECK(stale_provider_tip.connected_share_count ==
+          stale_provider_tip.descendant_count + 1);
+    CHECK(stale_provider_tip.grandparent_present);
+    CHECK(stale_provider_tip.parent_present);
+    CHECK(stale_provider_tip.child_present);
+    CHECK(stale_provider_tip.grandparent_validated);
+    CHECK(stale_provider_tip.parent_validated);
+    CHECK(stale_provider_tip.child_validated);
+    CHECK(stale_provider_tip.work_requests == 1);
+    CHECK(stale_provider_tip.share_requests ==
+          stale_provider_tip.descendant_count);
 
     return 0;
 }
