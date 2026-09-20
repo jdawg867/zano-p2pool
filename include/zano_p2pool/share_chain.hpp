@@ -138,6 +138,14 @@ public:
     // meaning.
     [[nodiscard]] std::vector<ShareId> connected_share_ids() const;
 
+    // Remove one connected share and every connected descendant from the
+    // active in-memory chain, then deterministically select the best remaining
+    // tip. Persistence is deliberately outside this API: callers may retain
+    // durable records as historical evidence. Returns the number of connected
+    // records removed; an unknown root returns zero.
+    [[nodiscard]] std::size_t prune_connected_subtree(
+        const ShareId& root_id);
+
     [[nodiscard]] bool enforces_sidechain_difficulty() const noexcept {
         return difficulty_policy_.has_value();
     }

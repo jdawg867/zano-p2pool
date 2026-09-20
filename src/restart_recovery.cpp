@@ -99,6 +99,13 @@ RestartRecoveryResult recover_replayed_history(
             return left < right;
         });
 
+    // A stable canonical-parent mismatch is decisive for this recovery
+    // snapshot under the current trust rule. Record those roots during the
+    // recovery pass, but defer mutation until iteration finishes so descendants
+    // are still accounted
+    // deterministically against the original replay snapshot.
+    std::vector<ShareId> parent_mismatch_roots;
+
     for (const ShareId& share_id : share_ids) {
         ++result.connected_considered;
 
@@ -144,15 +151,31 @@ RestartRecoveryResult recover_replayed_history(
         case RestartRevalidationStatus::ParentUnvalidated:
             ++result.parent_unvalidated;
             break;
+        case RestartRevalidationStatus::AnchorRejected:
+            if (crossing.initial_anchor.status ==
+                HistoricalAnchorStatus::ParentMismatch) {
+                parent_mismatch_roots.push_back(share_id);
+            }
+            ++result.rejected;
+            break;
+
         case RestartRevalidationStatus::ShareMissing:
         case RestartRevalidationStatus::ParameterMismatch:
         case RestartRevalidationStatus::CandidateMismatch:
-        case RestartRevalidationStatus::AnchorRejected:
         case RestartRevalidationStatus::AnchorChangedBeforeRevalidation:
         case RestartRevalidationStatus::ShareRejected:
             ++result.rejected;
             break;
         }
+    }
+
+    // Never reinterpret alternative Zano history as trusted. Once the full
+    // replay snapshot has been accounted, remove only branches whose work was
+    // independently shown to reference a different current canonical parent.
+    // ShareStore and MiningWorkArchive persistence are deliberately untouched.
+    for (const ShareId& root_id : parent_mismatch_roots) {
+        static_cast<void>(
+            chain.prune_connected_subtree(root_id));
     }
 
     return result;

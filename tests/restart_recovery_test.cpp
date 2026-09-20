@@ -225,8 +225,18 @@ int main() {
     CHECK(failed.parent_unvalidated == 1);
     CHECK(failed.missing_local_work == 0);
     CHECK(lookup_calls == 2);
-    CHECK(!bad_chain.find(root_id)->validated_ancestry);
-    CHECK(!bad_chain.find(child_id)->validated_ancestry);
+
+    // A stable canonical-parent mismatch in this recovery snapshot is not
+    // merely an unvalidated replay record. Keeping that rejected branch
+    // connected leaves its descendants eligible to remain the structural best
+    // tip indefinitely, while a fresh node can never validate the same ancestry.
+    // Restart recovery must
+    // therefore remove the rejected share and its descendant subtree from the
+    // active in-memory chain. Durable ShareStore evidence remains untouched.
+    CHECK(bad_chain.find(root_id) == nullptr);
+    CHECK(bad_chain.find(child_id) == nullptr);
+    CHECK(bad_chain.connected_size() == 0);
+    CHECK(bad_chain.best_tip() == nullptr);
 
     ShareChain bounded_chain(params);
     CHECK(bounded_chain.add_share_unchecked(root).disposition ==

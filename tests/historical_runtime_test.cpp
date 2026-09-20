@@ -199,7 +199,8 @@ struct RuntimeCaseResult {
     bool replay_candidate = false,
     bool receiver_has_local_observation = true,
     bool fresh_root = false,
-    bool receiver_has_historical_pow_context = true) {
+    bool receiver_has_historical_pow_context = true,
+    bool receiver_parent_matches = true) {
     TemporaryDirectory temp("zano-historical-runtime");
     RuntimeFixture fixture = make_runtime_fixture();
 
@@ -297,12 +298,19 @@ struct RuntimeCaseResult {
             return load_local_mining_anchors(
                 receiver_archive);
         },
-        [&fixture, &lookup_calls](std::uint64_t height) {
+        [&fixture, &lookup_calls, receiver_parent_matches](
+            std::uint64_t height) {
             ++lookup_calls;
             CHECK(height == fixture.proposal.zano_height - 1);
+
+            Hash256 canonical_parent = fixture.proposal.prev_hash;
+            if (!receiver_parent_matches) {
+                canonical_parent[0] ^= 0x01U;
+            }
+
             return RpcCanonicalHeader{
                 height,
-                fixture.proposal.prev_hash,
+                canonical_parent,
             };
         },
         [&fixture,
@@ -935,6 +943,33 @@ int main() {
     CHECK(!historical_oracle_unavailable.candidate_validated_ancestry);
     CHECK(historical_oracle_unavailable.lookup_calls == 2);
     CHECK(historical_oracle_unavailable.historical_pow_lookup_calls == 1);
+
+    // Reorg regression from the multinode soak: work anchored to a Zano
+    // parent that is no longer canonical must remain fail-closed.
+    const RuntimeCaseResult historical_parent_reorg_mismatch =
+        run_runtime_case(
+            false,
+            false,
+            true,
+            false,
+            true,
+            false);
+
+    CHECK(!historical_parent_reorg_mismatch.failed);
+    CHECK(historical_parent_reorg_mismatch.trust_status ==
+          HistoricalTrustStatus::AnchorRejected);
+    CHECK(historical_parent_reorg_mismatch.anchor_status.has_value());
+    CHECK(*historical_parent_reorg_mismatch.anchor_status ==
+          HistoricalAnchorStatus::ParentMismatch);
+    CHECK(!historical_parent_reorg_mismatch.payout_status.has_value());
+    CHECK(!historical_parent_reorg_mismatch.historical_share_retried);
+    CHECK(historical_parent_reorg_mismatch.historical_admitted_count == 0);
+    CHECK(historical_parent_reorg_mismatch.trusted_work_count == 0);
+    CHECK(historical_parent_reorg_mismatch.connected_share_count == 1);
+    CHECK(!historical_parent_reorg_mismatch.candidate_present);
+    CHECK(!historical_parent_reorg_mismatch.candidate_validated_ancestry);
+    CHECK(historical_parent_reorg_mismatch.lookup_calls == 2);
+    CHECK(historical_parent_reorg_mismatch.historical_pow_lookup_calls == 0);
 
     // A fresh receiver also cannot currently cross the historical payout
     // boundary for the provider's first zero-parent sidechain share. This is
