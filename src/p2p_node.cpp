@@ -52,6 +52,16 @@ void P2pNodeProtocol::expire_historical_state(std::uint64_t now) {
             ++it;
         }
     }
+
+    for (auto it = retryable_historical_.begin();
+         it != retryable_historical_.end();) {
+        if (now < it->second.started ||
+            now - it->second.started >= kMiningWorkRequestLifetime) {
+            it = retryable_historical_.erase(it);
+        } else {
+            ++it;
+        }
+    }
 }
 
 void P2pNodeProtocol::remember_pending_historical(
@@ -82,8 +92,18 @@ void P2pNodeProtocol::remember_historical_evidence(
     HistoricalEvidence evidence,
     std::uint64_t now) {
     expire_historical_state(now);
-    evidence.received = now;
-    if (!historical_evidence_.contains(key) &&
+
+    const auto existing =
+        historical_evidence_.find(key);
+    if (existing != historical_evidence_.end()) {
+        // Reuse never renews the lifetime of peer-supplied evidence. The
+        // bounded cache expires relative to the first retained receipt.
+        evidence.received = existing->second.received;
+    } else {
+        evidence.received = now;
+    }
+
+    if (existing == historical_evidence_.end() &&
         historical_evidence_.size() >= kMiningWorkMaxReceived) {
         historical_evidence_.erase(historical_evidence_.begin());
     }
@@ -129,6 +149,158 @@ bool P2pNodeProtocol::remember_deferred_historical(
             now,
         });
     return true;
+}
+
+void P2pNodeProtocol::remember_retryable_historical(
+    const Share& share,
+    const P2pHandshake& candidate_peer,
+    std::uint64_t required_capability,
+    std::uint64_t now) {
+    expire_historical_state(now);
+
+    if (required_capability != kP2pCapabilityShareGossip &&
+        required_capability != kP2pCapabilityShareSync) {
+        throw std::logic_error(
+            "unsupported historical retry capability");
+    }
+
+    const ShareId id = share_id(share);
+
+    const auto existing =
+        retryable_historical_.find(id);
+    const std::uint64_t started =
+        existing != retryable_historical_.end()
+            ? existing->second.started
+            : now;
+
+    if (existing == retryable_historical_.end() &&
+        retryable_historical_.size() >= kMiningWorkMaxReceived) {
+        auto oldest = retryable_historical_.begin();
+        for (auto it = retryable_historical_.begin();
+             it != retryable_historical_.end();
+             ++it) {
+            if (it->second.started < oldest->second.started) {
+                oldest = it;
+            }
+        }
+        retryable_historical_.erase(oldest);
+    }
+
+    retryable_historical_.insert_or_assign(
+        id,
+        RetryableHistoricalCandidate{
+            share,
+            candidate_peer,
+            required_capability,
+            started,
+        });
+}
+
+P2pHistoricalRetrySummary
+P2pNodeProtocol::retry_historical_pow_unavailable(
+    P2pRuntime& runtime,
+    std::uint64_t now,
+    ProgPowZContextMode mode) {
+
+    std::vector<RetryableHistoricalCandidate> retry;
+
+    {
+        std::lock_guard lock(state_mutex_);
+        expire_historical_state(now);
+
+        retry.reserve(retryable_historical_.size());
+        for (const auto& [candidate_id, candidate] :
+             retryable_historical_) {
+            static_cast<void>(candidate_id);
+            retry.push_back(candidate);
+        }
+
+        // Leave registrations in place while processing the snapshot.
+        // attempt_historical() consumes the exact ShareId when its full trust
+        // crossing begins and re-registers it only when canonical PoW context
+        // remains temporarily unavailable. This also means an exception cannot
+        // silently discard candidates that have not been attempted yet.
+    }
+
+    P2pHistoricalRetrySummary summary;
+    summary.attempted = retry.size();
+
+    for (const RetryableHistoricalCandidate& candidate : retry) {
+        P2pEnvelope envelope;
+
+        if (candidate.required_capability ==
+            kP2pCapabilityShareGossip) {
+            envelope =
+                make_p2p_share_announce_envelope(candidate.share);
+        } else if (
+            candidate.required_capability ==
+            kP2pCapabilityShareSync) {
+            const ShareId requested_id =
+                share_id(candidate.share);
+            envelope =
+                make_p2p_share_response_envelope(
+                    requested_id,
+                    &candidate.share);
+        } else {
+            throw std::logic_error(
+                "unsupported historical retry capability");
+        }
+
+        P2pNodeMessageResult result;
+        try {
+            result =
+                handle(
+                    runtime,
+                    candidate.candidate_peer,
+                    envelope,
+                    now,
+                    mode);
+        } catch (...) {
+            // attempt_historical() removes the registration immediately before
+            // crossing local trust. Restore the original bounded candidate if
+            // an exceptional local/RPC failure interrupted that crossing.
+            std::lock_guard lock(state_mutex_);
+            if (now >= candidate.started &&
+                now - candidate.started <
+                    kMiningWorkRequestLifetime &&
+                !retryable_historical_.contains(
+                    share_id(candidate.share))) {
+                retryable_historical_.insert_or_assign(
+                    share_id(candidate.share),
+                    candidate);
+            }
+            throw;
+        }
+
+        if (!result.historical_trust_status.has_value() &&
+            result.share_status !=
+                P2pShareReceiveStatus::UnknownWorkContext) {
+            // A concurrent path may already have admitted or rejected this
+            // exact share before the synthetic retry reached historical trust.
+            // It no longer needs an oracle-retry registration.
+            std::lock_guard lock(state_mutex_);
+            retryable_historical_.erase(
+                share_id(candidate.share));
+        }
+
+        if (result.historical_trust_status.has_value() &&
+            *result.historical_trust_status ==
+                HistoricalTrustStatus::Trusted) {
+            ++summary.trusted;
+        }
+
+        if (result.historical_share_connected) {
+            ++summary.connected;
+        }
+    }
+
+    {
+        std::lock_guard lock(state_mutex_);
+        expire_historical_state(now);
+        summary.remaining = retryable_historical_.size();
+    }
+
+    return summary;
 }
 
 std::optional<P2pEnvelope>
@@ -244,6 +416,9 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
                 candidate_share.mining_header_hash,
             };
 
+            const ShareId candidate_id =
+                share_id(candidate_share);
+
             if (trust.status != HistoricalTrustStatus::Trusted) {
                 const bool parent_blocked =
                     allow_parent_defer &&
@@ -254,6 +429,23 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
                          HistoricalPayoutStatus::ParentMissing ||
                      trust.payout.status ==
                          HistoricalPayoutStatus::UnverifiedAncestry);
+                const bool canonical_pow_temporarily_unavailable =
+                    (trust.status ==
+                         HistoricalTrustStatus::AnchorRejected &&
+                     trust.initial_anchor.status ==
+                         HistoricalAnchorStatus::
+                             CanonicalPowContextUnavailable) ||
+                    (trust.status ==
+                         HistoricalTrustStatus::
+                             AnchorChangedBeforePromotion &&
+                     trust.final_anchor.status ==
+                         HistoricalAnchorStatus::
+                             CanonicalPowContextUnavailable);
+
+                if (parent_blocked) {
+                    retryable_historical_.erase(candidate_id);
+                }
+
                 if (parent_blocked &&
                     remember_deferred_historical(
                         candidate_share,
@@ -274,13 +466,35 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
                     followup = make_p2p_share_request_envelope(
                         candidate_share.parent_id);
                     followup_peer = candidate_peer.node_id;
+                } else if (canonical_pow_temporarily_unavailable) {
+                    // The peer work was structurally checked, but the local
+                    // canonical daemon cannot yet reconstruct the historical
+                    // PoW authority. Preserve only the bounded untrusted
+                    // evidence so a later local retry or exact candidate can
+                    // rerun the full historical trust crossing without downloading
+                    // work again. No trusted-work or share admission occurs
+                    // here.
+                    remember_historical_evidence(
+                        candidate_work_key,
+                        evidence,
+                        now);
+                    remember_retryable_historical(
+                        candidate_share,
+                        candidate_peer,
+                        required_capability,
+                        now);
                 } else {
                     // Never let malformed/stale evidence poison reuse of this
                     // height/header key. A later peer may provide fresh bytes.
+                    retryable_historical_.erase(candidate_id);
                     historical_evidence_.erase(candidate_work_key);
                 }
                 return std::nullopt;
             }
+
+            // Successful trust consumes any outstanding local-oracle retry
+            // registration for this exact share.
+            retryable_historical_.erase(candidate_id);
 
             // Trusted evidence may be reused by another share with the same
             // Zano work key, but every candidate still reruns the complete
@@ -292,9 +506,6 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
 
             result.historical_share = candidate_share;
             result.historical_share_retried = true;
-
-            const ShareId candidate_id =
-                share_id(candidate_share);
 
             if (const ConnectedShare* replayed =
                     chain_.find(candidate_id);
@@ -318,25 +529,21 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
                         now,
                         mode);
 
-                if (result.status ==
-                    P2pNodeMessageStatus::
-                        MiningWorkResponseProcessed) {
-                    switch (revalidated.status) {
-                    case RevalidateShareStatus::Validated:
-                        result.share_status =
-                            P2pShareReceiveStatus::Connected;
-                        break;
-                    case RevalidateShareStatus::AlreadyValidated:
-                        result.share_status =
-                            P2pShareReceiveStatus::Duplicate;
-                        break;
-                    case RevalidateShareStatus::ParentUnvalidated:
-                    case RevalidateShareStatus::NotConnected:
-                    case RevalidateShareStatus::Rejected:
-                        result.share_status =
-                            P2pShareReceiveStatus::Rejected;
-                        break;
-                    }
+                switch (revalidated.status) {
+                case RevalidateShareStatus::Validated:
+                    result.share_status =
+                        P2pShareReceiveStatus::Connected;
+                    break;
+                case RevalidateShareStatus::AlreadyValidated:
+                    result.share_status =
+                        P2pShareReceiveStatus::Duplicate;
+                    break;
+                case RevalidateShareStatus::ParentUnvalidated:
+                case RevalidateShareStatus::NotConnected:
+                case RevalidateShareStatus::Rejected:
+                    result.share_status =
+                        P2pShareReceiveStatus::Rejected;
+                    break;
                 }
 
                 switch (revalidated.status) {
@@ -374,10 +581,11 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
                     required_capability,
                     now,
                     mode);
-            if (result.status ==
-                P2pNodeMessageStatus::MiningWorkResponseProcessed) {
-                result.share_status = retried.status;
-            }
+            // Report the final historical admission result regardless of
+            // whether the retry was triggered directly by completed work
+            // retrieval or by a later ShareAnnounce/ShareResponse reusing
+            // retained evidence.
+            result.share_status = retried.status;
 
             if (retried.chain_result.best_tip_changed) {
                 expected_payout_.reset();

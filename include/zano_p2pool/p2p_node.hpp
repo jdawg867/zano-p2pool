@@ -56,6 +56,13 @@ struct P2pNodeMessageResult {
     bool relayed_tip{false};
 };
 
+struct P2pHistoricalRetrySummary {
+    std::size_t attempted{};
+    std::size_t trusted{};
+    std::size_t connected{};
+    std::size_t remaining{};
+};
+
 [[nodiscard]] std::uint32_t p2p_node_message_penalty(
     const P2pNodeMessageResult& result) noexcept;
 
@@ -70,6 +77,16 @@ public:
         P2pRuntime& runtime,
         const P2pHandshake& peer,
         const P2pEnvelope& envelope,
+        std::uint64_t now,
+        ProgPowZContextMode mode = ProgPowZContextMode::Light);
+
+    // Retry exact historical candidates that previously failed only because
+    // the local canonical daemon could not yet reconstruct historical PoW
+    // authority. Each retry re-enters the normal gossip/sync handling path and
+    // therefore reruns the complete historical trust crossing.
+    [[nodiscard]] P2pHistoricalRetrySummary
+    retry_historical_pow_unavailable(
+        P2pRuntime& runtime,
         std::uint64_t now,
         ProgPowZContextMode mode = ProgPowZContextMode::Light);
 
@@ -164,6 +181,13 @@ private:
         std::uint64_t started{};
     };
 
+    struct RetryableHistoricalCandidate {
+        Share share;
+        P2pHandshake candidate_peer;
+        std::uint64_t required_capability{};
+        std::uint64_t started{};
+    };
+
     using PendingHistoricalKey = std::pair<NodeId, MiningWorkKey>;
 
     [[nodiscard]] bool historical_trust_sources_ready_unlocked() const noexcept;
@@ -181,6 +205,11 @@ private:
         const Share& share,
         const P2pHandshake& candidate_peer,
         const HistoricalEvidence& evidence,
+        std::uint64_t required_capability,
+        std::uint64_t now);
+    void remember_retryable_historical(
+        const Share& share,
+        const P2pHandshake& candidate_peer,
         std::uint64_t required_capability,
         std::uint64_t now);
 
@@ -228,6 +257,8 @@ private:
         historical_evidence_;
     std::map<ShareId, DeferredHistoricalCandidate>
         deferred_historical_;
+    std::map<ShareId, RetryableHistoricalCandidate>
+        retryable_historical_;
 };
 
 [[nodiscard]] const char* p2p_node_message_status_name(

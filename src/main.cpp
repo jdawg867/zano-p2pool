@@ -1543,8 +1543,67 @@ int main(int argc, char** argv) {
                         live.mining_work,
                         next.block,
                         next.mining_work);
+
+                zano_p2pool::P2pHistoricalRetrySummary
+                    historical_retry;
+                bool historical_retry_attempted = false;
+                bool historical_retry_requires_rebuild = false;
+
+                const auto retry_historical_pow =
+                    [&] {
+                        historical_retry_attempted = true;
+                        if (!p2p_runtime) {
+                            return;
+                        }
+
+                        try {
+                            historical_retry =
+                                p2p_protocol.
+                                    retry_historical_pow_unavailable(
+                                        *p2p_runtime,
+                                        unix_time_seconds(),
+                                        zano_p2pool::
+                                            ProgPowZContextMode::Light);
+
+                            historical_retry_requires_rebuild =
+                                historical_retry.connected != 0;
+
+                            if (historical_retry.attempted != 0 ||
+                                historical_retry.remaining != 0) {
+                                std::cerr
+                                    << "Historical PoW retry: attempted="
+                                    << historical_retry.attempted
+                                    << " trusted="
+                                    << historical_retry.trusted
+                                    << " connected="
+                                    << historical_retry.connected
+                                    << " remaining="
+                                    << historical_retry.remaining
+                                    << '\n';
+                            }
+                        } catch (const std::exception& e) {
+                            // Historical recovery is fail-closed and must not
+                            // prevent installation of an otherwise valid live
+                            // template. A retry may have connected earlier
+                            // candidates before a later one failed, so force
+                            // the payout rebuild before publishing miner work.
+                            historical_retry_requires_rebuild = true;
+                            std::cerr
+                                << "Historical PoW retry deferred: "
+                                << e.what() << '\n';
+                        }
+                    };
+
+                // If the daemon template itself is unchanged, this successful
+                // RPC refresh is still an opportunity for historical PoW
+                // authority to have become available. Only preserve the old
+                // early-continue behavior when recovery changed no sidechain
+                // trust state.
                 if (!forced_refresh && !daemon_changed) {
-                    continue;
+                    retry_historical_pow();
+                    if (!historical_retry_requires_rebuild) {
+                        continue;
+                    }
                 }
 
                 bool advanced_parent_replacement = false;
@@ -1693,9 +1752,18 @@ int main(int argc, char** argv) {
                         next);
                 }
 
-                // Rebuild only after any displaced ancestry has been removed.
-                // This prevents a replacement template from inheriting a payout
-                // plan derived from the branch that was just invalidated.
+                // Changed/forced template paths deliberately wait until any
+                // canonical reorg reconciliation above has removed displaced
+                // ancestry before retrying historical candidates.
+                if (!historical_retry_attempted) {
+                    retry_historical_pow();
+                }
+
+                // Rebuild only after any displaced ancestry has been removed
+                // and after autonomous historical recovery has had a chance to
+                // validate newly available ancestry. This prevents both stale
+                // and newly recovered shares from being omitted from the
+                // canonical payout plan installed below.
                 const bool canonical_pplns = apply_canonical_pplns_template(
                     next,
                     node_chain,

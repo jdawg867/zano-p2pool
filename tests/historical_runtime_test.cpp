@@ -192,6 +192,8 @@ struct RuntimeCaseResult {
     bool candidate_validated_ancestry{false};
     int lookup_calls{};
     int historical_pow_lookup_calls{};
+    int work_requests{};
+    P2pHistoricalRetrySummary autonomous_retry{};
 };
 
 [[nodiscard]] RuntimeCaseResult run_runtime_case(
@@ -200,7 +202,8 @@ struct RuntimeCaseResult {
     bool receiver_has_local_observation = true,
     bool fresh_root = false,
     bool receiver_has_historical_pow_context = true,
-    bool receiver_parent_matches = true) {
+    bool receiver_parent_matches = true,
+    bool retry_after_pow_unavailable = false) {
     TemporaryDirectory temp("zano-historical-runtime");
     RuntimeFixture fixture = make_runtime_fixture();
 
@@ -292,6 +295,9 @@ struct RuntimeCaseResult {
 
     std::atomic<int> lookup_calls{0};
     std::atomic<int> historical_pow_lookup_calls{0};
+    std::atomic<bool> historical_pow_context_available{
+        receiver_has_historical_pow_context};
+
     receiver_node.set_historical_trust_sources(
         fixture.params,
         [&receiver_archive] {
@@ -315,13 +321,13 @@ struct RuntimeCaseResult {
         },
         [&fixture,
          &historical_pow_lookup_calls,
-         receiver_has_historical_pow_context](
+         &historical_pow_context_available](
             std::uint64_t height)
             -> std::optional<RpcHistoricalPowContext> {
             ++historical_pow_lookup_calls;
             CHECK(height == fixture.proposal.zano_height);
 
-            if (!receiver_has_historical_pow_context) {
+            if (!historical_pow_context_available.load()) {
                 return std::nullopt;
             }
 
@@ -341,6 +347,9 @@ struct RuntimeCaseResult {
 
     std::atomic<bool> completed{false};
     std::atomic<bool> failed{false};
+    std::atomic<bool> first_pow_unavailable{false};
+    std::atomic<int> work_requests{0};
+    P2pHistoricalRetrySummary autonomous_retry;
     std::atomic<int> trust_status{
         static_cast<int>(
             HistoricalTrustStatus::CandidateMismatch)};
@@ -363,6 +372,11 @@ struct RuntimeCaseResult {
         [&](const P2pHandshake& peer,
             const P2pEnvelope& envelope) {
             try {
+                if (envelope.type ==
+                    P2pMessageType::MiningWorkRequest) {
+                    ++work_requests;
+                }
+
                 if (provider_runtime_ptr != nullptr) {
                     static_cast<void>(
                         provider_node.handle(
@@ -395,25 +409,22 @@ struct RuntimeCaseResult {
                         envelope,
                         200,
                         ProgPowZContextMode::Light);
-                if (result.status ==
-                        P2pNodeMessageStatus::
-                            MiningWorkResponseProcessed &&
-                    result.historical_trust_status.has_value()) {
+                if (result.historical_trust_status.has_value()) {
                     trust_status.store(
                         static_cast<int>(
                             *result.historical_trust_status));
 
-                    if (result.historical_anchor_status.has_value()) {
-                        anchor_status.store(
-                            static_cast<int>(
-                                *result.historical_anchor_status));
-                    }
+                    anchor_status.store(
+                        result.historical_anchor_status.has_value()
+                            ? static_cast<int>(
+                                  *result.historical_anchor_status)
+                            : -1);
 
-                    if (result.historical_payout_status.has_value()) {
-                        payout_status.store(
-                            static_cast<int>(
-                                *result.historical_payout_status));
-                    }
+                    payout_status.store(
+                        result.historical_payout_status.has_value()
+                            ? static_cast<int>(
+                                  *result.historical_payout_status)
+                            : -1);
 
                     share_status.store(
                         static_cast<int>(result.share_status));
@@ -421,6 +432,21 @@ struct RuntimeCaseResult {
                         result.historical_share_retried);
                     admitted_count.store(
                         result.historical_admitted_shares.size());
+
+                    const bool transient_unavailable =
+                        *result.historical_trust_status ==
+                            HistoricalTrustStatus::AnchorRejected &&
+                        result.historical_anchor_status.has_value() &&
+                        *result.historical_anchor_status ==
+                            HistoricalAnchorStatus::
+                                CanonicalPowContextUnavailable;
+
+                    if (retry_after_pow_unavailable &&
+                        transient_unavailable &&
+                        !first_pow_unavailable.exchange(true)) {
+                        return;
+                    }
+
                     completed.store(true);
                 }
             } catch (...) {
@@ -447,6 +473,41 @@ struct RuntimeCaseResult {
     provider_runtime.broadcast(
         make_p2p_share_announce_envelope(
             candidate));
+
+    if (retry_after_pow_unavailable) {
+        CHECK(wait_for([&] {
+            return first_pow_unavailable.load() ||
+                   failed.load();
+        }));
+
+        if (!failed.load()) {
+            // A local retry while the daemon is still missing historical PoW
+            // authority must remain fail-closed and stay registered.
+            const P2pHistoricalRetrySummary still_unavailable =
+                receiver_node.retry_historical_pow_unavailable(
+                    receiver_runtime,
+                    201,
+                    ProgPowZContextMode::Light);
+
+            CHECK(still_unavailable.attempted == 1);
+            CHECK(still_unavailable.trusted == 0);
+            CHECK(still_unavailable.connected == 0);
+            CHECK(still_unavailable.remaining == 1);
+
+            // The local daemon can now reconstruct the historical PoW
+            // context. Retry locally again without waiting for the peer to
+            // reannounce the exact share.
+            historical_pow_context_available.store(true);
+
+            autonomous_retry =
+                receiver_node.retry_historical_pow_unavailable(
+                    receiver_runtime,
+                    202,
+                    ProgPowZContextMode::Light);
+
+            completed.store(true);
+        }
+    }
 
     CHECK(wait_for([&] {
         return completed.load() || failed.load();
@@ -485,6 +546,8 @@ struct RuntimeCaseResult {
     result.lookup_calls = lookup_calls.load();
     result.historical_pow_lookup_calls =
         historical_pow_lookup_calls.load();
+    result.work_requests = work_requests.load();
+    result.autonomous_retry = autonomous_retry;
 
     {
         std::lock_guard lock(receiver_state_mutex);
@@ -943,6 +1006,51 @@ int main() {
     CHECK(!historical_oracle_unavailable.candidate_validated_ancestry);
     CHECK(historical_oracle_unavailable.lookup_calls == 2);
     CHECK(historical_oracle_unavailable.historical_pow_lookup_calls == 1);
+
+    // Liveness regression from the multinode soak. A structurally valid work
+    // item remains untrusted while the local daemon cannot reconstruct its
+    // historical PoW context, but that temporary condition must not destroy
+    // the already retrieved evidence. Once the local oracle becomes available,
+    // autonomous local recovery reruns the entire trust crossing without a
+    // second mining-work download.
+    const RuntimeCaseResult historical_oracle_recovers =
+        run_runtime_case(
+            false,  // remote seed is intact
+            false,  // candidate was not structurally replayed
+            false,  // receiver has no exact local work observation
+            false,  // normal parent-bound historical share
+            false,  // historical PoW initially unavailable
+            true,   // canonical parent still matches
+            true);  // retry after local oracle becomes available
+
+    CHECK(!historical_oracle_recovers.failed);
+
+    // The first network-driven attempt remains fail-closed.
+    CHECK(historical_oracle_recovers.trust_status ==
+          HistoricalTrustStatus::AnchorRejected);
+    CHECK(historical_oracle_recovers.anchor_status.has_value());
+    CHECK(*historical_oracle_recovers.anchor_status ==
+          HistoricalAnchorStatus::CanonicalPowContextUnavailable);
+
+    // The autonomous local retry consumes the retained candidate and crosses
+    // trust only after the canonical daemon oracle becomes available.
+    CHECK(historical_oracle_recovers.autonomous_retry.attempted == 1);
+    CHECK(historical_oracle_recovers.autonomous_retry.trusted == 1);
+    CHECK(historical_oracle_recovers.autonomous_retry.connected == 1);
+    CHECK(historical_oracle_recovers.autonomous_retry.remaining == 0);
+
+    CHECK(historical_oracle_recovers.trusted_work_count == 1);
+    CHECK(historical_oracle_recovers.connected_share_count == 2);
+    CHECK(historical_oracle_recovers.candidate_present);
+    CHECK(historical_oracle_recovers.candidate_validated_ancestry);
+
+    // First attempt performs one unavailable oracle lookup. The successful
+    // retry performs both the initial and final anchor audits.
+    CHECK(historical_oracle_recovers.historical_pow_lookup_calls >= 4);
+
+    // Most important liveness assertion: autonomous recovery reused retained
+    // structurally checked evidence instead of downloading the work again.
+    CHECK(historical_oracle_recovers.work_requests == 1);
 
     // Reorg regression from the multinode soak: work anchored to a Zano
     // parent that is no longer canonical must remain fail-closed.
