@@ -92,6 +92,11 @@ int main() {
     snapshot.blocks_alternative_total = 15;
     snapshot.block_submission_failures_total = 16;
     snapshot.template_refresh_failures_total = 17;
+    snapshot.historical_pow_retry_attempts_total = 18;
+    snapshot.historical_pow_retry_trusted_total = 19;
+    snapshot.historical_pow_retry_connected_total = 20;
+    snapshot.historical_pow_retry_failures_total = 21;
+    snapshot.historical_pow_retry_remaining = 22;
     snapshot.persistence_ok = false;
 
     const std::string rendered = render_prometheus_metrics(snapshot);
@@ -125,6 +130,21 @@ int main() {
     CHECK(rendered.find("zano_p2pool_block_submission_failures_total 16\n") !=
           std::string::npos);
     CHECK(rendered.find("zano_p2pool_template_refresh_failures_total 17\n") !=
+          std::string::npos);
+    CHECK(rendered.find(
+              "zano_p2pool_historical_pow_retry_attempts_total 18\n") !=
+          std::string::npos);
+    CHECK(rendered.find(
+              "zano_p2pool_historical_pow_retry_trusted_total 19\n") !=
+          std::string::npos);
+    CHECK(rendered.find(
+              "zano_p2pool_historical_pow_retry_connected_total 20\n") !=
+          std::string::npos);
+    CHECK(rendered.find(
+              "zano_p2pool_historical_pow_retry_failures_total 21\n") !=
+          std::string::npos);
+    CHECK(rendered.find(
+              "zano_p2pool_historical_pow_retry_remaining 22\n") !=
           std::string::npos);
     CHECK(rendered.find("zano_p2pool_persistence_ok 0\n") !=
           std::string::npos);

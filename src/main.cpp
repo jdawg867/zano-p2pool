@@ -857,6 +857,16 @@ int main(int argc, char** argv) {
         std::atomic<std::uint64_t> block_submission_failures_total{0};
         std::atomic<std::uint64_t> template_refresh_failures_total{
             initial_template_failures};
+        std::atomic<std::uint64_t>
+            historical_pow_retry_attempts_total{0};
+        std::atomic<std::uint64_t>
+            historical_pow_retry_trusted_total{0};
+        std::atomic<std::uint64_t>
+            historical_pow_retry_connected_total{0};
+        std::atomic<std::uint64_t>
+            historical_pow_retry_failures_total{0};
+        std::atomic<std::uint64_t>
+            historical_pow_retry_remaining{0};
 
         std::unique_ptr<zano_p2pool::ShareStore> share_store;
         if (!options.no_share_store) {
@@ -1565,6 +1575,19 @@ int main(int argc, char** argv) {
                                         zano_p2pool::
                                             ProgPowZContextMode::Light);
 
+                            historical_pow_retry_attempts_total.fetch_add(
+                                historical_retry.attempted,
+                                std::memory_order_relaxed);
+                            historical_pow_retry_trusted_total.fetch_add(
+                                historical_retry.trusted,
+                                std::memory_order_relaxed);
+                            historical_pow_retry_connected_total.fetch_add(
+                                historical_retry.connected,
+                                std::memory_order_relaxed);
+                            historical_pow_retry_remaining.store(
+                                historical_retry.remaining,
+                                std::memory_order_relaxed);
+
                             historical_retry_requires_rebuild =
                                 historical_retry.connected != 0;
 
@@ -1582,6 +1605,10 @@ int main(int argc, char** argv) {
                                     << '\n';
                             }
                         } catch (const std::exception& e) {
+                            historical_pow_retry_failures_total.fetch_add(
+                                1,
+                                std::memory_order_relaxed);
+
                             // Historical recovery is fail-closed and must not
                             // prevent installation of an otherwise valid live
                             // template. A retry may have connected earlier
