@@ -139,6 +139,251 @@ int main() {
     P2pNodeProtocol leaf_protocol(
         leaf_chain, leaf_work, leaf_mutex);
 
+    {
+        Share prefix = make_parent();
+        prefix.zano_height = 100;
+        prefix.mining_header_hash[0] ^= 0x11U;
+
+        Share stale = make_child(prefix);
+        stale.zano_height = 101;
+        stale.mining_header_hash[0] ^= 0x22U;
+
+        Share descendant = make_child(stale);
+        descendant.zano_height = 102;
+        descendant.mining_header_hash[0] ^= 0x33U;
+
+        const ShareId prefix_id = share_id(prefix);
+        const ShareId stale_id = share_id(stale);
+        const ShareId descendant_id = share_id(descendant);
+
+        ShareChain audit_chain;
+        CHECK(audit_chain.add_share_unchecked(prefix).disposition ==
+              ShareDisposition::Connected);
+        CHECK(audit_chain.add_share_unchecked(stale).disposition ==
+              ShareDisposition::Connected);
+        CHECK(audit_chain.add_share_unchecked(descendant).disposition ==
+              ShareDisposition::Connected);
+
+        P2pTrustedWorkRegistry audit_work;
+
+        Hash256 prefix_zano_parent{};
+        prefix_zano_parent.front() = 0x40;
+
+        Hash256 displaced_zano_parent{};
+        displaced_zano_parent.front() = 0x41;
+
+        Hash256 canonical_zano_parent{};
+        canonical_zano_parent.front() = 0x42;
+
+        Hash256 descendant_zano_parent{};
+        descendant_zano_parent.front() = 0x43;
+
+        audit_work.remember(
+            context_for(prefix),
+            ShareId{},
+            prefix_zano_parent);
+        audit_work.remember(
+            context_for(stale),
+            prefix_id,
+            displaced_zano_parent);
+        audit_work.remember(
+            context_for(descendant),
+            stale_id,
+            descendant_zano_parent);
+
+        ShareWorkContext stale_offchain = context_for(stale);
+        stale_offchain.mining_header_hash[0] ^= 0x51U;
+        ShareId stale_offchain_parent{};
+        stale_offchain_parent.back() = 0x51;
+        audit_work.remember(
+            stale_offchain,
+            stale_offchain_parent,
+            displaced_zano_parent);
+
+        ShareWorkContext canonical_same_height = context_for(stale);
+        canonical_same_height.mining_header_hash[0] ^= 0x61U;
+        ShareId canonical_same_height_parent{};
+        canonical_same_height_parent.back() = 0x61;
+        audit_work.remember(
+            canonical_same_height,
+            canonical_same_height_parent,
+            canonical_zano_parent);
+
+        std::mutex audit_mutex;
+        P2pNodeProtocol audit_protocol(
+            audit_chain,
+            audit_work,
+            audit_mutex);
+
+        const std::vector<std::uint64_t> audit_heights =
+            audit_protocol.trusted_work_provenance_heights();
+        CHECK(audit_heights.size() == 3);
+        CHECK(audit_heights[0] == 100);
+        CHECK(audit_heights[1] == 101);
+        CHECK(audit_heights[2] == 102);
+
+        const P2pCanonicalReconciliationResult audit_result =
+            audit_protocol.reconcile_canonical_parent(
+                101,
+                canonical_zano_parent);
+
+        CHECK(audit_result.pruned_connected_shares == 2);
+        CHECK(audit_result.revoked_trusted_work == 2);
+
+        CHECK(audit_chain.find(prefix_id) != nullptr);
+        CHECK(audit_chain.find(stale_id) == nullptr);
+        CHECK(audit_chain.find(descendant_id) == nullptr);
+        CHECK(audit_chain.connected_size() == 1);
+        CHECK(audit_chain.best_tip() != nullptr);
+        CHECK(audit_chain.best_tip()->id == prefix_id);
+
+        CHECK(audit_work.find(
+                  stale.zano_height,
+                  stale.mining_header_hash,
+                  prefix_id) == nullptr);
+        CHECK(audit_work.find(
+                  stale_offchain.zano_height,
+                  stale_offchain.mining_header_hash,
+                  stale_offchain_parent) == nullptr);
+
+        CHECK(audit_work.find(
+                  canonical_same_height.zano_height,
+                  canonical_same_height.mining_header_hash,
+                  canonical_same_height_parent) != nullptr);
+
+        // Later-height work may remain authorized, but its sidechain-parent
+        // binding prevents it from reconnecting after that parent was pruned.
+        CHECK(audit_work.find(
+                  descendant.zano_height,
+                  descendant.mining_header_hash,
+                  stale_id) != nullptr);
+    }
+
+    {
+        Share rollback_prefix = make_parent();
+        rollback_prefix.zano_height = 200;
+        rollback_prefix.mining_header_hash[0] ^= 0x71U;
+
+        Share rollback_future = make_child(rollback_prefix);
+        rollback_future.zano_height = 203;
+        rollback_future.mining_header_hash[0] ^= 0x72U;
+
+        Share rollback_descendant = make_child(rollback_future);
+        rollback_descendant.zano_height = 204;
+        rollback_descendant.mining_header_hash[0] ^= 0x73U;
+
+        const ShareId rollback_prefix_id =
+            share_id(rollback_prefix);
+        const ShareId rollback_future_id =
+            share_id(rollback_future);
+        const ShareId rollback_descendant_id =
+            share_id(rollback_descendant);
+
+        ShareChain rollback_chain;
+        CHECK(rollback_chain.add_share_unchecked(
+                  rollback_prefix).disposition ==
+              ShareDisposition::Connected);
+        CHECK(rollback_chain.add_share_unchecked(
+                  rollback_future).disposition ==
+              ShareDisposition::Connected);
+        CHECK(rollback_chain.add_share_unchecked(
+                  rollback_descendant).disposition ==
+              ShareDisposition::Connected);
+
+        P2pTrustedWorkRegistry rollback_work;
+
+        Hash256 rollback_parent{};
+        rollback_parent.front() = 0x81;
+
+        Hash256 future_parent{};
+        future_parent.front() = 0x82;
+
+        Hash256 descendant_parent{};
+        descendant_parent.front() = 0x83;
+
+        rollback_work.remember(
+            context_for(rollback_prefix),
+            ShareId{},
+            rollback_parent);
+        rollback_work.remember(
+            context_for(rollback_future),
+            rollback_prefix_id,
+            future_parent);
+        rollback_work.remember(
+            context_for(rollback_descendant),
+            rollback_future_id,
+            descendant_parent);
+
+        ShareWorkContext future_offchain =
+            context_for(rollback_future);
+        future_offchain.mining_header_hash[0] ^= 0x55U;
+
+        ShareId future_offchain_parent{};
+        future_offchain_parent.back() = 0x55;
+
+        rollback_work.remember(
+            future_offchain,
+            future_offchain_parent,
+            future_parent);
+
+        std::mutex rollback_mutex;
+        P2pNodeProtocol rollback_protocol(
+            rollback_chain,
+            rollback_work,
+            rollback_mutex);
+
+        Share replay_without_work =
+            make_child(rollback_prefix);
+        replay_without_work.zano_height = 205;
+        replay_without_work.mining_header_hash[0] ^= 0x74U;
+
+        const ShareId replay_without_work_id =
+            share_id(replay_without_work);
+
+        CHECK(rollback_chain.add_share_unchecked(
+                  replay_without_work).disposition ==
+              ShareDisposition::Connected);
+
+        ShareWorkContext compatibility_future =
+            context_for(rollback_future);
+        compatibility_future.zano_height = 206;
+        compatibility_future.mining_header_hash[0] ^= 0x56U;
+        rollback_work.remember(compatibility_future);
+
+        const P2pCanonicalReconciliationResult rollback_result =
+            rollback_protocol.reconcile_unavailable_work_above(
+                rollback_prefix.zano_height);
+
+        CHECK(rollback_result.pruned_connected_shares == 3);
+        CHECK(rollback_result.revoked_trusted_work == 4);
+
+        CHECK(rollback_chain.find(rollback_prefix_id) != nullptr);
+        CHECK(rollback_chain.find(rollback_future_id) == nullptr);
+        CHECK(rollback_chain.find(rollback_descendant_id) == nullptr);
+        CHECK(rollback_chain.find(replay_without_work_id) == nullptr);
+        CHECK(rollback_chain.connected_size() == 1);
+        CHECK(rollback_chain.best_tip() != nullptr);
+        CHECK(rollback_chain.best_tip()->id == rollback_prefix_id);
+
+        CHECK(rollback_work.find(
+                  rollback_future.zano_height,
+                  rollback_future.mining_header_hash,
+                  rollback_prefix_id) == nullptr);
+        CHECK(rollback_work.find(
+                  future_offchain.zano_height,
+                  future_offchain.mining_header_hash,
+                  future_offchain_parent) == nullptr);
+
+        CHECK(rollback_work.find(
+                  rollback_prefix.zano_height,
+                  rollback_prefix.mining_header_hash,
+                  ShareId{}) != nullptr);
+
+        CHECK(rollback_work.find(
+                  compatibility_future.zano_height,
+                  compatibility_future.mining_header_hash) == nullptr);
+    }
+
     std::atomic<std::size_t> provider_messages{0};
     std::atomic<std::size_t> requester_messages{0};
     std::atomic<std::size_t> leaf_messages{0};

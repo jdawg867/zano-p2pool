@@ -33,6 +33,7 @@
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
+#include <functional>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -1027,8 +1028,8 @@ int main(int argc, char** argv) {
                     return rpc.get_historical_pow_context(height);
                 });
         }
-        p2p_protocol.remember_trusted_work(trusted_context_from_live(live));
         set_local_p2p_context(p2p_protocol, live);
+        p2p_protocol.remember_trusted_work(trusted_context_from_live(live));
 
         std::unique_ptr<zano_p2pool::P2pRuntime> p2p_runtime;
         if (options.p2p) {
@@ -1546,6 +1547,155 @@ int main(int argc, char** argv) {
                     continue;
                 }
 
+                bool advanced_parent_replacement = false;
+
+                // A reorg can occur and advance beyond the replaced height
+                // between template polls. Comparing only the newly observed
+                // template height would miss that transition, so verify the
+                // parent that authorized the previously installed local work.
+                //
+                // This first stable observation is only reorg detection. No
+                // trust state is mutated until the full post-stop audit below
+                // has completed successfully.
+                if (next.block.height > live.block.height &&
+                    live.block.height != 0) {
+                    const zano_p2pool::Hash256 current_old_parent =
+                        zano_p2pool::stable_canonical_parent_for_work_height(
+                            live.block.height,
+                            [&rpc](std::uint64_t height) {
+                                return rpc.get_canonical_header(height);
+                            });
+
+                    advanced_parent_replacement =
+                        current_old_parent !=
+                        parse_hash256(live.block.prev_hash);
+                }
+
+                const zano_p2pool::CanonicalReorgKind
+                    canonical_reorg_kind =
+                        zano_p2pool::classify_canonical_reorg(
+                            live.block,
+                            next.block,
+                            advanced_parent_replacement);
+
+                const bool canonical_reorg =
+                    canonical_reorg_kind !=
+                    zano_p2pool::CanonicalReorgKind::None;
+
+                std::optional<zano_p2pool::CanonicalReorgAuditPlan>
+                    canonical_reorg_audit;
+
+                if (canonical_reorg) {
+                    canonical_reorg_audit =
+                        zano_p2pool::prepare_canonical_reorg_audit(
+                            canonical_reorg_kind,
+                            next.block.height,
+                            [&] {
+                                if (!options.stratum) {
+                                    return;
+                                }
+
+                                if (server && server->running()) {
+                                    server->stop();
+                                }
+                                if (block_submitter &&
+                                    block_submitter->running()) {
+                                    block_submitter->stop();
+                                }
+                                job_sequence = 0;
+                            },
+                            [&] {
+                                return p2p_protocol
+                                    .trusted_work_provenance_heights();
+                            },
+                            [&rpc](std::uint64_t height) {
+                                return zano_p2pool::
+                                    stable_canonical_parent_for_work_height(
+                                        height,
+                                        [&rpc](
+                                            std::uint64_t parent_height) {
+                                            return rpc.get_canonical_header(
+                                                parent_height);
+                                        });
+                            });
+                }
+
+                if (canonical_reorg_audit.has_value()) {
+                    std::size_t pruned = 0;
+                    std::size_t revoked = 0;
+
+                    // Work whose mining height is still available is retained
+                    // only when its recorded parent provenance agrees with
+                    // current canonical Zano history.
+                    for (const auto& [height, canonical_parent] :
+                         canonical_reorg_audit->canonical_parents) {
+                        const auto result =
+                            p2p_protocol.reconcile_canonical_parent(
+                                height,
+                                canonical_parent);
+
+                        pruned +=
+                            result.pruned_connected_shares;
+                        revoked +=
+                            result.revoked_trusted_work;
+                    }
+
+                    // Any connected share or trusted-work authorization above
+                    // the daemon's current template height is unavailable after
+                    // this canonical transition. Apply the boundary in one pass
+                    // so even replayed shares or compatibility work without
+                    // canonical-parent provenance cannot survive above it.
+                    const auto unavailable_result =
+                        p2p_protocol.reconcile_unavailable_work_above(
+                            canonical_reorg_audit->maximum_work_height);
+
+                    pruned +=
+                        unavailable_result.pruned_connected_shares;
+                    revoked +=
+                        unavailable_result.revoked_trusted_work;
+
+                    const char* reorg_type = "unknown";
+                    switch (canonical_reorg_audit->kind) {
+                    case zano_p2pool::CanonicalReorgKind::
+                        SameHeightReplacement:
+                        reorg_type = "same-height";
+                        break;
+                    case zano_p2pool::CanonicalReorgKind::
+                        AdvancedReplacement:
+                        reorg_type = "advanced";
+                        break;
+                    case zano_p2pool::CanonicalReorgKind::Rollback:
+                        reorg_type = "rollback";
+                        break;
+                    case zano_p2pool::CanonicalReorgKind::None:
+                        reorg_type = "none";
+                        break;
+                    }
+
+                    std::cerr
+                        << "Canonical Zano reorg reconciled: "
+                        << "type=" << reorg_type
+                        << " canonical-heights="
+                        << canonical_reorg_audit->canonical_parents.size()
+                        << " maximum-work-height="
+                        << canonical_reorg_audit->maximum_work_height
+                        << " pruned-connected=" << pruned
+                        << " revoked-work=" << revoked
+                        << '\n';
+
+                    // No payout expectation derived from the displaced branch
+                    // may remain authoritative. Install only the raw daemon
+                    // context here; canonical PPLNS is rebuilt below against
+                    // the surviving reconciled sidechain.
+                    p2p_protocol.clear_expected_payout();
+                    set_local_p2p_context(
+                        p2p_protocol,
+                        next);
+                }
+
+                // Rebuild only after any displaced ancestry has been removed.
+                // This prevents a replacement template from inheriting a payout
+                // plan derived from the branch that was just invalidated.
                 const bool canonical_pplns = apply_canonical_pplns_template(
                     next,
                     node_chain,
@@ -1568,9 +1718,11 @@ int main(int argc, char** argv) {
                         next.block.blocktemplate_blob);
                 }
 
+                // Install the final post-reconciliation template before granting
+                // its parent-bound work authorization.
+                set_local_p2p_context(p2p_protocol, next);
                 p2p_protocol.remember_trusted_work(
                     trusted_context_from_live(next));
-                set_local_p2p_context(p2p_protocol, next);
 
                 if (options.stratum &&
                     server &&

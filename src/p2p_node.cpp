@@ -1,5 +1,6 @@
 #include "zano_p2pool/p2p_node.hpp"
 
+#include <algorithm>
 #include <optional>
 #include <stdexcept>
 #include <vector>
@@ -824,15 +825,263 @@ void P2pNodeProtocol::set_historical_trust_sources(
 void P2pNodeProtocol::remember_trusted_work(
     const ShareWorkContext& context) {
     std::lock_guard lock(state_mutex_);
+
+    if (!local_mining_anchor_.has_value() ||
+        !local_mining_context_.has_value()) {
+        throw std::runtime_error(
+            "trusted local work has no installed Zano mining context");
+    }
+
+    const P2pMiningAnchor& anchor = *local_mining_anchor_;
+    const P2pMiningContextProposal& proposal = *local_mining_context_;
+
+    if (anchor.zano_height != context.zano_height ||
+        proposal.zano_height != context.zano_height ||
+        anchor.network_difficulty != context.network_difficulty ||
+        proposal.network_difficulty != context.network_difficulty ||
+        anchor.prev_hash != proposal.prev_hash ||
+        validate_p2p_mining_context_structure(proposal) !=
+            context.mining_header_hash) {
+        throw std::runtime_error(
+            "trusted local work does not match installed Zano mining context");
+    }
+
     const ConnectedShare* parent = chain_.best_tip();
     trusted_work_.remember(
-        context, parent == nullptr ? ShareId{} : parent->id);
+        context,
+        parent == nullptr ? ShareId{} : parent->id,
+        anchor.prev_hash);
+}
+
+P2pCanonicalReconciliationResult
+P2pNodeProtocol::reconcile_canonical_parent_unlocked(
+    std::uint64_t zano_height,
+    const Hash256& canonical_parent_hash) {
+    P2pCanonicalReconciliationResult result;
+
+    // Prune oldest affected roots first. Once an ancestor is removed, later
+    // IDs from the snapshot may already have disappeared as descendants.
+    std::vector<ShareId> connected_ids =
+        chain_.connected_share_ids();
+
+    std::sort(
+        connected_ids.begin(),
+        connected_ids.end(),
+        [this](const ShareId& left, const ShareId& right) {
+            const ConnectedShare* left_share = chain_.find(left);
+            const ConnectedShare* right_share = chain_.find(right);
+
+            if (left_share == nullptr || right_share == nullptr) {
+                return left < right;
+            }
+            if (left_share->share.share_height !=
+                right_share->share.share_height) {
+                return left_share->share.share_height <
+                       right_share->share.share_height;
+            }
+            return left < right;
+        });
+
+    for (const ShareId& id : connected_ids) {
+        const ConnectedShare* connected = chain_.find(id);
+        if (connected == nullptr ||
+            connected->share.zano_height != zano_height) {
+            continue;
+        }
+
+        const Hash256* recorded_parent =
+            trusted_work_.find_zano_parent_hash(
+                connected->share.zano_height,
+                connected->share.mining_header_hash,
+                connected->share.parent_id);
+
+        // Compatibility/synthetic work carries no canonical-parent provenance
+        // and is never guessed stale. Production trust crossings do carry it.
+        if (recorded_parent == nullptr ||
+            *recorded_parent == canonical_parent_hash) {
+            continue;
+        }
+
+        result.pruned_connected_shares +=
+            chain_.prune_connected_subtree(id);
+    }
+
+    // Revoke stale authorization even when it is currently off-chain, so an
+    // old share cannot later regain admission merely because its work survived
+    // in the registry.
+    result.revoked_trusted_work =
+        trusted_work_.erase_zano_parent_mismatch(
+            zano_height,
+            canonical_parent_hash);
+
+    if (result.pruned_connected_shares != 0) {
+        expected_payout_.reset();
+        expected_payout_plan_.reset();
+        expected_payout_parent_id_.reset();
+    }
+
+    return result;
+}
+
+P2pCanonicalReconciliationResult
+P2pNodeProtocol::reconcile_unavailable_work_height_unlocked(
+    std::uint64_t zano_height) {
+    P2pCanonicalReconciliationResult result;
+
+    std::vector<ShareId> connected_ids =
+        chain_.connected_share_ids();
+
+    std::sort(
+        connected_ids.begin(),
+        connected_ids.end(),
+        [this](const ShareId& left, const ShareId& right) {
+            const ConnectedShare* left_share = chain_.find(left);
+            const ConnectedShare* right_share = chain_.find(right);
+
+            if (left_share == nullptr || right_share == nullptr) {
+                return left < right;
+            }
+            if (left_share->share.share_height !=
+                right_share->share.share_height) {
+                return left_share->share.share_height <
+                       right_share->share.share_height;
+            }
+            return left < right;
+        });
+
+    for (const ShareId& id : connected_ids) {
+        const ConnectedShare* connected = chain_.find(id);
+        if (connected == nullptr ||
+            connected->share.zano_height != zano_height) {
+            continue;
+        }
+
+        result.pruned_connected_shares +=
+            chain_.prune_connected_subtree(id);
+    }
+
+    result.revoked_trusted_work =
+        trusted_work_.erase_zano_height(zano_height);
+
+    if (result.pruned_connected_shares != 0 ||
+        result.revoked_trusted_work != 0) {
+        expected_payout_.reset();
+        expected_payout_plan_.reset();
+        expected_payout_parent_id_.reset();
+    }
+
+    return result;
+}
+
+P2pCanonicalReconciliationResult
+P2pNodeProtocol::reconcile_unavailable_work_above_unlocked(
+    std::uint64_t maximum_zano_height) {
+    P2pCanonicalReconciliationResult result;
+
+    std::vector<ShareId> connected_ids =
+        chain_.connected_share_ids();
+
+    std::sort(
+        connected_ids.begin(),
+        connected_ids.end(),
+        [this](const ShareId& left, const ShareId& right) {
+            const ConnectedShare* left_share = chain_.find(left);
+            const ConnectedShare* right_share = chain_.find(right);
+
+            if (left_share == nullptr || right_share == nullptr) {
+                return left < right;
+            }
+            if (left_share->share.share_height !=
+                right_share->share.share_height) {
+                return left_share->share.share_height <
+                       right_share->share.share_height;
+            }
+            return left < right;
+        });
+
+    for (const ShareId& id : connected_ids) {
+        const ConnectedShare* connected = chain_.find(id);
+        if (connected == nullptr ||
+            connected->share.zano_height <= maximum_zano_height) {
+            continue;
+        }
+
+        result.pruned_connected_shares +=
+            chain_.prune_connected_subtree(id);
+    }
+
+    result.revoked_trusted_work =
+        trusted_work_.erase_zano_heights_above(
+            maximum_zano_height);
+
+    if (result.pruned_connected_shares != 0 ||
+        result.revoked_trusted_work != 0) {
+        expected_payout_.reset();
+        expected_payout_plan_.reset();
+        expected_payout_parent_id_.reset();
+    }
+
+    return result;
+}
+
+std::vector<std::uint64_t>
+P2pNodeProtocol::trusted_work_provenance_heights() const {
+    std::lock_guard lock(state_mutex_);
+    return trusted_work_.provenance_zano_heights();
+}
+
+P2pCanonicalReconciliationResult
+P2pNodeProtocol::reconcile_canonical_parent(
+    std::uint64_t zano_height,
+    const Hash256& canonical_parent_hash) {
+    std::lock_guard lock(state_mutex_);
+    return reconcile_canonical_parent_unlocked(
+        zano_height,
+        canonical_parent_hash);
+}
+
+P2pCanonicalReconciliationResult
+P2pNodeProtocol::reconcile_unavailable_work_height(
+    std::uint64_t zano_height) {
+    std::lock_guard lock(state_mutex_);
+    return reconcile_unavailable_work_height_unlocked(
+        zano_height);
+}
+
+P2pCanonicalReconciliationResult
+P2pNodeProtocol::reconcile_unavailable_work_above(
+    std::uint64_t maximum_zano_height) {
+    std::lock_guard lock(state_mutex_);
+    return reconcile_unavailable_work_above_unlocked(
+        maximum_zano_height);
+}
+
+void P2pNodeProtocol::reconcile_local_parent_replacement_unlocked(
+    const P2pMiningAnchor& next_anchor) {
+    if (!local_mining_anchor_.has_value() ||
+        local_mining_anchor_->zano_height != next_anchor.zano_height ||
+        local_mining_anchor_->prev_hash == next_anchor.prev_hash) {
+        return;
+    }
+
+    static_cast<void>(
+        reconcile_canonical_parent_unlocked(
+            next_anchor.zano_height,
+            next_anchor.prev_hash));
+
+    // A same-height canonical-parent replacement also invalidates any payout
+    // expectation installed for the previous daemon template, even when no
+    // connected share happened to require pruning.
+    expected_payout_.reset();
+    expected_payout_plan_.reset();
+    expected_payout_parent_id_.reset();
 }
 
 void P2pNodeProtocol::set_local_mining_context(
     const P2pMiningAnchor& anchor,
     const P2pMiningContextProposal& proposal) {
     std::lock_guard lock(state_mutex_);
+    reconcile_local_parent_replacement_unlocked(anchor);
     local_mining_anchor_ = anchor;
     local_mining_context_ = proposal;
 }
@@ -842,6 +1091,7 @@ void P2pNodeProtocol::set_local_mining_context(
     const P2pMiningContextProposal& proposal,
     const P2pPayoutAddress& payout) {
     std::lock_guard lock(state_mutex_);
+    reconcile_local_parent_replacement_unlocked(anchor);
     local_mining_anchor_ = anchor;
     local_mining_context_ = proposal;
     expected_payout_ = payout;
@@ -855,6 +1105,7 @@ void P2pNodeProtocol::set_local_mining_context(
     const P2pMiningContextProposal& proposal,
     const PplnsCoinbasePlan& plan) {
     std::lock_guard lock(state_mutex_);
+    reconcile_local_parent_replacement_unlocked(anchor);
     local_mining_anchor_ = anchor;
     local_mining_context_ = proposal;
     expected_payout_plan_ = plan;

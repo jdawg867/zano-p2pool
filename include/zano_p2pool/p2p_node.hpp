@@ -30,6 +30,11 @@ enum class P2pNodeMessageStatus : std::uint8_t {
     MiningWorkResponseProcessed,
 };
 
+struct P2pCanonicalReconciliationResult {
+    std::size_t pruned_connected_shares{0};
+    std::size_t revoked_trusted_work{0};
+};
+
 struct P2pNodeMessageResult {
     P2pNodeMessageStatus status{P2pNodeMessageStatus::UnexpectedHandshake};
     P2pShareReceiveStatus share_status{P2pShareReceiveStatus::Rejected};
@@ -106,6 +111,32 @@ public:
     void clear_expected_payout() noexcept;
 
     [[nodiscard]] std::size_t trusted_work_count() const noexcept;
+
+    // Snapshot of Zano heights for trusted work carrying independently
+    // established canonical-parent provenance.
+    [[nodiscard]] std::vector<std::uint64_t>
+    trusted_work_provenance_heights() const;
+
+    // Reconcile one historical mining height against a stable canonical Zano
+    // parent. Only provenance-bearing work that conflicts with canonical
+    // history is revoked. Connected shares using that stale work are removed
+    // with their descendants, preserving any valid older prefix.
+    [[nodiscard]] P2pCanonicalReconciliationResult
+    reconcile_canonical_parent(
+        std::uint64_t zano_height,
+        const Hash256& canonical_parent_hash);
+
+    // Revoke a trusted-work height that is ahead of the daemon's current
+    // canonical template after a rollback. No canonical parent exists against
+    // which this work can remain authorized.
+    [[nodiscard]] P2pCanonicalReconciliationResult
+    reconcile_unavailable_work_height(
+        std::uint64_t zano_height);
+
+    [[nodiscard]] P2pCanonicalReconciliationResult
+    reconcile_unavailable_work_above(
+        std::uint64_t maximum_zano_height);
+
     [[nodiscard]] std::size_t connected_share_count() const noexcept;
     [[nodiscard]] P2pTipHint local_tip() const noexcept;
     [[nodiscard]] bool mining_context_trust_ready() const noexcept;
@@ -152,6 +183,26 @@ private:
         const HistoricalEvidence& evidence,
         std::uint64_t required_capability,
         std::uint64_t now);
+
+    // Called with state_mutex_ held. A same-height canonical-parent
+    // replacement invalidates every work authorization anchored to the
+    // displaced Zano parent and any active sidechain subtree using that
+    // mining height.
+    [[nodiscard]] P2pCanonicalReconciliationResult
+    reconcile_canonical_parent_unlocked(
+        std::uint64_t zano_height,
+        const Hash256& canonical_parent_hash);
+
+    [[nodiscard]] P2pCanonicalReconciliationResult
+    reconcile_unavailable_work_height_unlocked(
+        std::uint64_t zano_height);
+
+    [[nodiscard]] P2pCanonicalReconciliationResult
+    reconcile_unavailable_work_above_unlocked(
+        std::uint64_t maximum_zano_height);
+
+    void reconcile_local_parent_replacement_unlocked(
+        const P2pMiningAnchor& next_anchor);
 
     P2pWorkRetrieval* work_retrieval_{nullptr};
     ShareChain& chain_;

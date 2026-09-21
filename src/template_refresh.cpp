@@ -2,6 +2,66 @@
 
 namespace zano_p2pool {
 
+CanonicalReorgKind classify_canonical_reorg(
+    const BlockTemplate& current_block,
+    const BlockTemplate& next_block,
+    bool advanced_parent_replacement) noexcept {
+    if (next_block.height < current_block.height) {
+        return CanonicalReorgKind::Rollback;
+    }
+
+    if (next_block.height == current_block.height &&
+        next_block.prev_hash != current_block.prev_hash) {
+        return CanonicalReorgKind::SameHeightReplacement;
+    }
+
+    if (next_block.height > current_block.height &&
+        advanced_parent_replacement) {
+        return CanonicalReorgKind::AdvancedReplacement;
+    }
+
+    return CanonicalReorgKind::None;
+}
+
+CanonicalReorgAuditPlan prepare_canonical_reorg_audit(
+    CanonicalReorgKind kind,
+    std::uint64_t maximum_work_height,
+    const std::function<void()>& stop_publication,
+    const std::function<std::vector<std::uint64_t>()>&
+        provenance_heights,
+    const std::function<Hash256(std::uint64_t)>&
+        canonical_parent_for_work_height) {
+    CanonicalReorgAuditPlan plan;
+    plan.kind = kind;
+    plan.maximum_work_height = maximum_work_height;
+
+    if (kind == CanonicalReorgKind::None) {
+        return plan;
+    }
+
+    // This ordering is the fail-closed boundary: after reorg evidence exists,
+    // miner-facing publication is stopped before any later audit lookup can
+    // fail or observe a moving chain.
+    stop_publication();
+
+    const std::vector<std::uint64_t> heights =
+        provenance_heights();
+
+    plan.canonical_parents.reserve(heights.size());
+
+    for (const std::uint64_t height : heights) {
+        if (height == 0 || height > maximum_work_height) {
+            continue;
+        }
+
+        plan.canonical_parents.emplace_back(
+            height,
+            canonical_parent_for_work_height(height));
+    }
+
+    return plan;
+}
+
 bool should_refresh_stratum_template(
     const BlockTemplate& current_block,
     const MiningHeaderWork& current_work,

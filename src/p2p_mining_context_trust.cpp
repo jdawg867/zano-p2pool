@@ -56,7 +56,10 @@ P2pMiningContextTrustResult promote_p2p_mining_context_impl(
         result.trusted_context.mining_header_hash,
         expected_parent_id) != nullptr;
 
-    trusted_work.remember(result.trusted_context, expected_parent_id);
+    trusted_work.remember(
+        result.trusted_context,
+        expected_parent_id,
+        local_anchor.prev_hash);
     result.registry_inserted = !already_trusted;
     result.status = P2pMiningContextTrustStatus::Trusted;
     return result;

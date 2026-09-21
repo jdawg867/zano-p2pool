@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -41,6 +42,10 @@ struct RpcCanonicalHeader {
     std::uint64_t height{};
     Hash256 hash{};
 };
+
+[[nodiscard]] Hash256 stable_canonical_parent_for_work_height(
+    std::uint64_t zano_height,
+    const std::function<RpcCanonicalHeader(std::uint64_t)>& lookup);
 
 // Independently reconstructed historical PoW-template authority from the
 // operator's local canonical Zano chain.

@@ -284,6 +284,33 @@ RpcCanonicalHeader RpcClient::get_canonical_header(std::uint64_t height) const {
     return result;
 }
 
+Hash256 stable_canonical_parent_for_work_height(
+    std::uint64_t zano_height,
+    const std::function<RpcCanonicalHeader(std::uint64_t)>& lookup) {
+    if (zano_height == 0) {
+        throw std::invalid_argument(
+            "canonical-parent audit requires nonzero Zano work height");
+    }
+
+    const std::uint64_t parent_height = zano_height - 1;
+
+    const RpcCanonicalHeader first = lookup(parent_height);
+    const RpcCanonicalHeader second = lookup(parent_height);
+
+    if (first.height != parent_height ||
+        second.height != parent_height) {
+        throw std::runtime_error(
+            "canonical-parent audit returned the wrong Zano height");
+    }
+
+    if (first.hash != second.hash) {
+        throw std::runtime_error(
+            "canonical Zano parent changed during stable audit");
+    }
+
+    return first.hash;
+}
+
 std::optional<RpcHistoricalPowContext>
 RpcClient::get_historical_pow_context(
     std::uint64_t height,

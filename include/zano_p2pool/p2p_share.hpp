@@ -9,6 +9,7 @@
 #include <optional>
 #include <tuple>
 #include <utility>
+#include <vector>
 
 namespace zano_p2pool {
 
@@ -33,6 +34,15 @@ public:
         const ShareWorkContext& context,
         const ShareId& parent_id);
 
+    // Production trust crossings record the canonical Zano parent that
+    // independently authorized this exact work context. The compatibility
+    // overloads above remain useful for synthetic tests but carry no canonical
+    // parent provenance.
+    void remember(
+        const ShareWorkContext& context,
+        const ShareId& parent_id,
+        const Hash256& zano_parent_hash);
+
     // Compatibility/bootstrap helper: looks up only the zero parent.
     [[nodiscard]] const ShareWorkContext* find(
         std::uint64_t zano_height,
@@ -42,11 +52,49 @@ public:
         const Hash256& mining_header_hash,
         const ShareId& parent_id) const noexcept;
 
+    // Revoke every trusted work context for one Zano mining height.
+    // This is used when that mining height is no longer available after a
+    // canonical rollback; parent replacement uses selective provenance checks.
+    [[nodiscard]] std::size_t erase_zano_height(
+        std::uint64_t zano_height);
+
+    // Revoke every authorization whose Zano mining height is above the
+    // daemon's current canonical work-height ceiling.
+    [[nodiscard]] std::size_t erase_zano_heights_above(
+        std::uint64_t maximum_zano_height);
+
+    // Revoke only work at one Zano height whose recorded canonical-parent
+    // provenance conflicts with the currently selected parent. Entries without
+    // provenance are left untouched rather than guessed stale.
+    [[nodiscard]] std::size_t erase_zano_parent_mismatch(
+        std::uint64_t zano_height,
+        const Hash256& canonical_parent_hash);
+
+    // Sorted, deduplicated Zano heights for production-trusted work carrying
+    // canonical-parent provenance. Compatibility entries without provenance
+    // are deliberately excluded from canonical-history auditing.
+    [[nodiscard]] std::vector<std::uint64_t>
+    provenance_zano_heights() const;
+
+    // Returns the independently established canonical Zano parent recorded
+    // when this exact trusted-work key crossed into the registry. Compatibility
+    // entries created without provenance return nullptr.
+    [[nodiscard]] const Hash256* find_zano_parent_hash(
+        std::uint64_t zano_height,
+        const Hash256& mining_header_hash,
+        const ShareId& parent_id) const noexcept;
+
     [[nodiscard]] std::size_t size() const noexcept;
 
 private:
     using Key = std::tuple<std::uint64_t, Hash256, ShareId>;
-    std::map<Key, ShareWorkContext> contexts_;
+
+    struct Entry {
+        ShareWorkContext context;
+        std::optional<Hash256> zano_parent_hash;
+    };
+
+    std::map<Key, Entry> contexts_;
 };
 
 enum class P2pShareReceiveStatus {

@@ -115,9 +115,170 @@ int main() {
               share.mining_header_hash,
               different_parent) == nullptr);
 
+    // Compatibility insertion carries no independently established Zano
+    // parent. A later production trust crossing may safely upgrade the exact
+    // same work key with provenance, but conflicting provenance is rejected.
+    CHECK(registry.find_zano_parent_hash(
+              share.zano_height,
+              share.mining_header_hash,
+              ShareId{}) == nullptr);
+
+    Hash256 canonical_parent{};
+    canonical_parent.front() = 0x71;
+    registry.remember(
+        context_for(share),
+        ShareId{},
+        canonical_parent);
+
+    const Hash256* recorded_parent =
+        registry.find_zano_parent_hash(
+            share.zano_height,
+            share.mining_header_hash,
+            ShareId{});
+    CHECK(recorded_parent != nullptr);
+    CHECK(*recorded_parent == canonical_parent);
+    CHECK(registry.size() == 1);
+
+    Hash256 conflicting_parent = canonical_parent;
+    conflicting_parent.front() ^= 0x01U;
+    CHECK(throws_runtime([&] {
+        registry.remember(
+            context_for(share),
+            ShareId{},
+            conflicting_parent);
+    }));
+
     ShareWorkContext conflict = context_for(share);
     conflict.network_difficulty = difficulty128_from_decimal("5");
     CHECK(throws_runtime([&] { registry.remember(conflict); }));
+
+    // An unavailable mining height after rollback must revoke every trusted
+    // authorization at that height without disturbing work from another
+    // height.
+    P2pTrustedWorkRegistry revocation_registry;
+
+    const ShareWorkContext height_zero = context_for(share);
+    revocation_registry.remember(height_zero);
+
+    ShareId bound_parent{};
+    bound_parent.back() = 0x22;
+    revocation_registry.remember(height_zero, bound_parent);
+
+    ShareWorkContext height_one = height_zero;
+    height_one.zano_height = height_zero.zano_height + 1;
+    height_one.mining_header_hash[0] ^= 0x01U;
+    revocation_registry.remember(height_one);
+
+    CHECK(revocation_registry.size() == 3);
+    CHECK(revocation_registry.erase_zano_height(
+              height_zero.zano_height) == 2);
+    CHECK(revocation_registry.size() == 1);
+    CHECK(revocation_registry.find(
+              height_zero.zano_height,
+              height_zero.mining_header_hash) == nullptr);
+    CHECK(revocation_registry.find(
+              height_zero.zano_height,
+              height_zero.mining_header_hash,
+              bound_parent) == nullptr);
+    CHECK(revocation_registry.find(
+              height_one.zano_height,
+              height_one.mining_header_hash) != nullptr);
+    CHECK(revocation_registry.erase_zano_height(
+              height_zero.zano_height) == 0);
+    CHECK(revocation_registry.size() == 1);
+
+    // Advanced-height reorg auditing must revoke only entries whose recorded
+    // Zano parent disagrees with current canonical history. Work from the same
+    // height that matches canonical history, compatibility entries with no
+    // provenance, and entries from other heights must survive.
+    P2pTrustedWorkRegistry selective_registry;
+
+    ShareWorkContext selective_context = context_for(share);
+
+    ShareId stale_sidechain_parent{};
+    stale_sidechain_parent.back() = 0x31;
+
+    ShareId canonical_sidechain_parent{};
+    canonical_sidechain_parent.back() = 0x32;
+
+    ShareId compatibility_sidechain_parent{};
+    compatibility_sidechain_parent.back() = 0x33;
+
+    Hash256 stale_zano_parent{};
+    stale_zano_parent.front() = 0x41;
+
+    Hash256 current_zano_parent{};
+    current_zano_parent.front() = 0x42;
+
+    selective_registry.remember(
+        selective_context,
+        stale_sidechain_parent,
+        stale_zano_parent);
+
+    selective_registry.remember(
+        selective_context,
+        canonical_sidechain_parent,
+        current_zano_parent);
+
+    selective_registry.remember(
+        selective_context,
+        compatibility_sidechain_parent);
+
+    ShareWorkContext later_context = selective_context;
+    later_context.zano_height += 1;
+    later_context.mining_header_hash[0] ^= 0x01U;
+
+    ShareId later_sidechain_parent{};
+    later_sidechain_parent.back() = 0x34;
+
+    selective_registry.remember(
+        later_context,
+        later_sidechain_parent,
+        stale_zano_parent);
+
+    CHECK(selective_registry.size() == 4);
+    CHECK(selective_registry.erase_zano_parent_mismatch(
+              selective_context.zano_height,
+              current_zano_parent) == 1);
+    CHECK(selective_registry.size() == 3);
+
+    CHECK(selective_registry.find(
+              selective_context.zano_height,
+              selective_context.mining_header_hash,
+              stale_sidechain_parent) == nullptr);
+
+    CHECK(selective_registry.find(
+              selective_context.zano_height,
+              selective_context.mining_header_hash,
+              canonical_sidechain_parent) != nullptr);
+
+    CHECK(selective_registry.find(
+              selective_context.zano_height,
+              selective_context.mining_header_hash,
+              compatibility_sidechain_parent) != nullptr);
+
+    CHECK(selective_registry.find(
+              later_context.zano_height,
+              later_context.mining_header_hash,
+              later_sidechain_parent) != nullptr);
+
+    CHECK(selective_registry.erase_zano_parent_mismatch(
+              selective_context.zano_height,
+              current_zano_parent) == 0);
+
+    const std::vector<std::uint64_t> provenance_heights =
+        selective_registry.provenance_zano_heights();
+
+    CHECK(provenance_heights.size() == 2);
+    CHECK(provenance_heights[0] == selective_context.zano_height);
+    CHECK(provenance_heights[1] == later_context.zano_height);
+
+    P2pTrustedWorkRegistry compatibility_only_registry;
+    compatibility_only_registry.remember(selective_context);
+    CHECK(
+        compatibility_only_registry
+            .provenance_zano_heights()
+            .empty());
 
     // A peer that did not advertise share-gossip capability cannot inject a
     // share even when the work context is otherwise known locally.
