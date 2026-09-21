@@ -45,8 +45,9 @@ void P2pNodeProtocol::expire_historical_state(std::uint64_t now) {
 
     for (auto it = deferred_historical_.begin();
          it != deferred_historical_.end();) {
-        if (now < it->second.started ||
-            now - it->second.started >= kMiningWorkRequestLifetime) {
+        if (now < it->second.last_progress ||
+            now - it->second.last_progress >=
+                kMiningWorkRequestLifetime) {
             it = deferred_historical_.erase(it);
         } else {
             ++it;
@@ -139,6 +140,57 @@ bool P2pNodeProtocol::remember_deferred_historical(
         return false;
     }
 
+    // A newly audited parent is positive progress for only the recovery walk
+    // whose deferred child points directly at it. Carry the original recovery
+    // root backward and refresh every still-live member of that exact walk.
+    //
+    // This deliberately occurs after expire_historical_state(): a session that
+    // has already been inactive for the full lifetime is not resurrected by a
+    // later message.
+    ShareId recovery_root = id;
+    std::vector<ShareId> joined_roots;
+
+    for (const auto& [deferred_id, deferred] :
+         deferred_historical_) {
+        static_cast<void>(deferred_id);
+
+        if (deferred.candidate_peer.node_id ==
+                candidate_peer.node_id &&
+            deferred.share.parent_id == id) {
+            joined_roots.push_back(
+                deferred.recovery_root);
+        }
+    }
+
+    if (!joined_roots.empty()) {
+        recovery_root = joined_roots.front();
+
+        for (auto& [deferred_id, deferred] :
+             deferred_historical_) {
+            static_cast<void>(deferred_id);
+
+            if (deferred.candidate_peer.node_id !=
+                candidate_peer.node_id) {
+                continue;
+            }
+
+            for (const ShareId& joined_root :
+                 joined_roots) {
+                if (deferred.recovery_root !=
+                    joined_root) {
+                    continue;
+                }
+
+                // If two deferred branches converge on the same exact parent,
+                // merge them into one recovery session from this point back.
+                deferred.recovery_root =
+                    recovery_root;
+                deferred.last_progress = now;
+                break;
+            }
+        }
+    }
+
     deferred_historical_.insert_or_assign(
         id,
         DeferredHistoricalCandidate{
@@ -146,6 +198,7 @@ bool P2pNodeProtocol::remember_deferred_historical(
             candidate_peer,
             evidence,
             required_capability,
+            recovery_root,
             now,
         });
     return true;

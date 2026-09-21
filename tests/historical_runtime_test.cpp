@@ -588,7 +588,8 @@ struct RecursiveParentSyncResult {
 [[nodiscard]] RecursiveParentSyncResult
 run_recursive_parent_sync_case(
     bool replay_existing = false,
-    bool stale_provider_handshake = false) {
+    bool stale_provider_handshake = false,
+    bool advance_recovery_clock = false) {
     TemporaryDirectory temp("zano-historical-parent-sync");
     RuntimeFixture fixture = make_runtime_fixture();
 
@@ -643,8 +644,9 @@ run_recursive_parent_sync_case(
     // production failure occurred after sixteen deferred ancestors, so make
     // the authenticated-handshake replay case cross that exact old boundary.
     if (replay_existing) {
-        constexpr std::size_t kDeepReplayDescendants = 18;
-        while (descendants.size() < kDeepReplayDescendants) {
+        const std::size_t target_descendants =
+            advance_recovery_clock ? 70 : 18;
+        while (descendants.size() < target_descendants) {
             Share next = fixture.candidate;
             next.parent_id = share_id(descendants.back());
             next.share_height =
@@ -762,6 +764,7 @@ run_recursive_parent_sync_case(
     std::atomic<std::size_t> admitted_count{0};
     std::atomic<int> work_requests{0};
     std::atomic<int> share_requests{0};
+    std::atomic<std::uint64_t> receiver_now{200};
 
     P2pRuntime* provider_runtime_ptr = nullptr;
     P2pRuntime* receiver_runtime_ptr = nullptr;
@@ -814,12 +817,17 @@ run_recursive_parent_sync_case(
                 if (receiver_runtime_ptr == nullptr) {
                     return;
                 }
+                const std::uint64_t message_now =
+                    advance_recovery_clock
+                        ? receiver_now.fetch_add(1)
+                        : 200;
+
                 const P2pNodeMessageResult result =
                     receiver_node.handle(
                         *receiver_runtime_ptr,
                         peer,
                         envelope,
-                        200,
+                        message_now,
                         ProgPowZContextMode::Light);
 
                 if (!replay_existing &&
@@ -885,9 +893,11 @@ run_recursive_parent_sync_case(
             make_p2p_share_announce_envelope(child));
     }
 
-    CHECK(wait_for([&] {
-        return completed.load() || failed.load();
-    }));
+    CHECK(wait_for(
+        [&] {
+            return completed.load() || failed.load();
+        },
+        advance_recovery_clock ? 15s : 5s));
 
     receiver_runtime.stop();
     provider_runtime.stop();
@@ -1287,6 +1297,35 @@ int main() {
           (2 * replay_recursive.descendant_count) - 1);
     CHECK(replay_recursive.lookup_calls ==
           (6 * replay_recursive.descendant_count) - 2);
+
+    // Regression from the multinode soak: ancestry recovery is serial. A
+    // healthy peer can therefore spend longer than the mining-work request
+    // lifetime walking backward to the first trusted parent. Deferred
+    // descendants must not expire merely because the complete walk is older
+    // than 60 seconds while valid recovery messages continue arriving.
+    const RecursiveParentSyncResult timed_replay_recursive =
+        run_recursive_parent_sync_case(
+            true,   // unchecked durable replay already exists
+            false,  // provider handshake advertises the current tip
+            true);  // advance logical time during ancestry recovery
+
+    CHECK(!timed_replay_recursive.failed);
+    CHECK(timed_replay_recursive.completed);
+    CHECK(timed_replay_recursive.admitted_count == 0);
+    CHECK(timed_replay_recursive.descendant_count == 70);
+    CHECK(timed_replay_recursive.all_descendants_validated);
+    CHECK(timed_replay_recursive.trusted_work_count ==
+          timed_replay_recursive.descendant_count);
+    CHECK(timed_replay_recursive.connected_share_count ==
+          timed_replay_recursive.descendant_count + 1);
+    // Historical mining-work evidence deliberately does not renew its own
+    // 60-second lifetime. This 70-message ancestry walk therefore downloads
+    // the shared work once initially and once more after that independent
+    // untrusted-evidence cache expires. The deferred ancestry recovery session
+    // must nevertheless remain live because exact-parent progress continues.
+    CHECK(timed_replay_recursive.work_requests == 2);
+    CHECK(timed_replay_recursive.share_requests ==
+          timed_replay_recursive.descendant_count);
 
     // Regression: a long-running provider may have advanced its local
     // sidechain after its transport handshake was created. Reconnecting peers

@@ -178,7 +178,16 @@ private:
         P2pHandshake candidate_peer;
         HistoricalEvidence evidence;
         std::uint64_t required_capability{};
-        std::uint64_t started{};
+
+        // Identifies one backward ancestry-recovery walk. Descendants in the
+        // same walk share this root so valid parent progress refreshes only
+        // that recovery session rather than unrelated peer state.
+        ShareId recovery_root{};
+
+        // Inactivity timestamp. Active ancestry recovery may legitimately
+        // exceed the mining-work request lifetime in total, but a stalled
+        // recovery session still expires after that lifetime without progress.
+        std::uint64_t last_progress{};
     };
 
     struct RetryableHistoricalCandidate {
