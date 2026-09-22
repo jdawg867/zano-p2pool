@@ -53,6 +53,15 @@ struct P2pNodeMessageResult {
         historical_proof_status;
     std::optional<P2pPayoutPolicyStatus>
         historical_payout_policy_status;
+
+    // Identifies the exact final historical candidate whose trust diagnostics
+    // are reported below. Recursive ancestry recovery may process several
+    // candidates inside one outer MiningWorkResponse.
+    std::optional<ShareId> historical_attempt_share_id;
+    std::optional<ShareId> historical_attempt_parent_id;
+    std::optional<std::uint64_t> historical_attempt_zano_height;
+    std::optional<Hash256> historical_attempt_mining_header_hash;
+
     std::optional<Share> historical_share;
     std::vector<Share> historical_admitted_shares;
     bool historical_share_retried{false};

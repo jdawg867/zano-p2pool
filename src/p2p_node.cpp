@@ -432,6 +432,27 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
                 return std::nullopt;
             }
 
+            const ShareId candidate_id =
+                share_id(candidate_share);
+
+            // Keep per-attempt diagnostics aligned with the exact candidate.
+            // Aggregate admission fields intentionally remain cumulative for
+            // the complete outer message handling pass.
+            result.historical_attempt_share_id =
+                candidate_id;
+            result.historical_attempt_parent_id =
+                candidate_share.parent_id;
+            result.historical_attempt_zano_height =
+                candidate_share.zano_height;
+            result.historical_attempt_mining_header_hash =
+                candidate_share.mining_header_hash;
+
+            result.historical_anchor_status.reset();
+            result.historical_payout_status.reset();
+            result.historical_promotion_status.reset();
+            result.historical_proof_status.reset();
+            result.historical_payout_policy_status.reset();
+
             const std::vector<P2pMiningAnchor> observations =
                 load_historical_observations_();
             const HistoricalTrustResult trust =
@@ -478,9 +499,6 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
                 candidate_share.zano_height,
                 candidate_share.mining_header_hash,
             };
-
-            const ShareId candidate_id =
-                share_id(candidate_share);
 
             if (trust.status != HistoricalTrustStatus::Trusted) {
                 const bool parent_blocked =

@@ -1092,6 +1092,33 @@ int main(int argc, char** argv) {
                                            historical_trust_status_name(
                                                *result.historical_trust_status);
 
+                                if (result.historical_attempt_share_id.has_value()) {
+                                    std::cerr
+                                        << " attempt-share="
+                                        << zano_p2pool::hash_to_hex(
+                                               *result.historical_attempt_share_id);
+                                }
+
+                                if (result.historical_attempt_parent_id.has_value()) {
+                                    std::cerr
+                                        << " attempt-parent="
+                                        << zano_p2pool::hash_to_hex(
+                                               *result.historical_attempt_parent_id);
+                                }
+
+                                if (result.historical_attempt_zano_height.has_value()) {
+                                    std::cerr
+                                        << " attempt-zano-height="
+                                        << *result.historical_attempt_zano_height;
+                                }
+
+                                if (result.historical_attempt_mining_header_hash.has_value()) {
+                                    std::cerr
+                                        << " attempt-header="
+                                        << zano_p2pool::hash_to_hex(
+                                               *result.historical_attempt_mining_header_hash);
+                                }
+
                                 if (result.historical_anchor_status.has_value()) {
                                     std::cerr
                                         << " anchor="
