@@ -1390,7 +1390,11 @@ int main() {
     CHECK(replay_recursive.grandparent_validated);
     CHECK(replay_recursive.parent_validated);
     CHECK(replay_recursive.child_validated);
-    CHECK(replay_recursive.work_requests == 1);
+    // Every replayed ShareResponse may reuse the exact immutable proposal
+    // already present in this receiver's own archive. No peer mining-work
+    // download is required; each share still reruns the complete historical
+    // trust crossing against its explicit parent.
+    CHECK(replay_recursive.work_requests == 0);
     CHECK(replay_recursive.share_requests ==
           replay_recursive.descendant_count);
     CHECK(replay_recursive.observation_loads ==
@@ -1418,12 +1422,12 @@ int main() {
           timed_replay_recursive.descendant_count);
     CHECK(timed_replay_recursive.connected_share_count ==
           timed_replay_recursive.descendant_count + 1);
-    // Historical mining-work evidence deliberately does not renew its own
-    // 60-second lifetime. This 70-message ancestry walk therefore downloads
-    // the shared work once initially and once more after that independent
-    // untrusted-evidence cache expires. The deferred ancestry recovery session
-    // must nevertheless remain live because exact-parent progress continues.
-    CHECK(timed_replay_recursive.work_requests == 2);
+    // The transient peer-evidence cache still has its independent 60-second
+    // lifetime, but this replay receiver also owns the exact immutable proposal
+    // in its durable local archive. After transient evidence expires, recovery
+    // can reread that local evidence rather than downloading identical bytes
+    // from the peer. The full historical trust crossing is still repeated.
+    CHECK(timed_replay_recursive.work_requests == 0);
     CHECK(timed_replay_recursive.share_requests ==
           timed_replay_recursive.descendant_count);
 
@@ -1449,7 +1453,10 @@ int main() {
     CHECK(stale_provider_tip.grandparent_validated);
     CHECK(stale_provider_tip.parent_validated);
     CHECK(stale_provider_tip.child_validated);
-    CHECK(stale_provider_tip.work_requests == 1);
+    // The fresh-tip redirect repairs synchronization, while the receiver's
+    // own exact archived proposal supplies mining-work evidence for the replay
+    // walk. No peer mining-work download is necessary.
+    CHECK(stale_provider_tip.work_requests == 0);
     CHECK(stale_provider_tip.share_requests ==
           stale_provider_tip.descendant_count);
 

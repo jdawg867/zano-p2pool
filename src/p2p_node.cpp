@@ -731,6 +731,89 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
             }
         };
 
+        // A structurally replayed share may already have the exact immutable
+        // mining-work proposal in this node's own archive. Prefer that local
+        // evidence before asking the peer for identical bytes. Archive presence
+        // is not trust: attempt_historical() reruns candidate binding,
+        // canonical anchoring, payout ancestry and miner-tx proofs before any
+        // trusted-work authorization or share revalidation can occur.
+        const auto attempt_local_historical =
+            [&](const Share& candidate_share,
+                const P2pHandshake& candidate_peer,
+                std::uint64_t required_capability) {
+                if (!work_retrieval_ ||
+                    !historical_trust_sources_ready_unlocked()) {
+                    return false;
+                }
+
+                const MiningWorkKey work_key{
+                    candidate_share.zano_height,
+                    candidate_share.mining_header_hash,
+                };
+
+                const auto local_bytes =
+                    work_retrieval_->read_local(work_key);
+
+                if (!local_bytes.has_value()) {
+                    return false;
+                }
+
+                HistoricalEvidence evidence{
+                    deserialize_p2p_mining_context_payload(
+                        *local_bytes),
+                    candidate_peer,
+                    now,
+                };
+
+                const auto connected =
+                    attempt_historical(
+                        candidate_share,
+                        candidate_peer,
+                        evidence,
+                        required_capability,
+                        true);
+
+                if (connected.has_value()) {
+                    resume_deferred_descendants(*connected);
+                }
+
+                // Local archive presence alone must never suppress retrieval of
+                // fresh peer evidence. Keep the local result only when it
+                // actually crossed trust, is blocked solely on sidechain
+                // ancestry (which starts the parent-first recovery walk), or
+                // is waiting on temporarily unavailable canonical PoW context.
+                const bool trusted =
+                    result.historical_trust_status.has_value() &&
+                    *result.historical_trust_status ==
+                        HistoricalTrustStatus::Trusted;
+
+                const bool parent_blocked =
+                    result.historical_trust_status.has_value() &&
+                    *result.historical_trust_status ==
+                        HistoricalTrustStatus::PayoutRejected &&
+                    result.historical_payout_status.has_value() &&
+                    (*result.historical_payout_status ==
+                         HistoricalPayoutStatus::ParentMissing ||
+                     *result.historical_payout_status ==
+                         HistoricalPayoutStatus::UnverifiedAncestry);
+
+                const bool canonical_pow_temporarily_unavailable =
+                    result.historical_trust_status.has_value() &&
+                    ((*result.historical_trust_status ==
+                          HistoricalTrustStatus::AnchorRejected ||
+                      *result.historical_trust_status ==
+                          HistoricalTrustStatus::
+                              AnchorChangedBeforePromotion) &&
+                     result.historical_anchor_status.has_value() &&
+                     *result.historical_anchor_status ==
+                         HistoricalAnchorStatus::
+                             CanonicalPowContextUnavailable);
+
+                return trusted ||
+                       parent_blocked ||
+                       canonical_pow_temporarily_unavailable;
+            };
+
         switch (envelope.type) {
         case P2pMessageType::ShareAnnounce: {
             std::lock_guard lock(state_mutex_);
@@ -852,7 +935,10 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
                             if (connected.has_value()) {
                                 resume_deferred_descendants(*connected);
                             }
-                        } else {
+                        } else if (!attempt_local_historical(
+                                       *response.share,
+                                       peer,
+                                       kP2pCapabilityShareSync)) {
                             auto work_request =
                                 work_retrieval_->begin(
                                     peer,
