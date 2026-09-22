@@ -198,14 +198,19 @@ std::uint64_t StratumTcpServer::publish_template(
     const Hash256& header_hash,
     const Hash256& seed_hash,
     std::uint64_t height,
-    const Difficulty128& network_difficulty) {
+    const Difficulty128& network_difficulty,
+    std::optional<StratumShareParentBinding> parent_binding) {
     std::vector<std::pair<int, std::string>> notifications;
     std::uint64_t version = 0;
 
     {
         std::unique_lock state_lock(state_mutex_);
         version = sessions_.publish_template(
-            header_hash, seed_hash, height, network_difficulty);
+            header_hash,
+            seed_hash,
+            height,
+            network_difficulty,
+            parent_binding);
 
         try {
             std::lock_guard clients_lock(clients_mutex_);
@@ -262,16 +267,38 @@ StratumIssuedWork StratumTcpServer::issue_work(std::uint64_t session_id) {
 
     std::unique_lock<std::mutex> chain_lock(*shared_chain_mutex_);
 
-    StratumShareParentBinding parent_binding;
-    if (const ConnectedShare* tip = share_chain_->best_tip();
-        tip != nullptr) {
-        if (tip->share.share_height ==
-            std::numeric_limits<std::uint64_t>::max()) {
+    if (!work_template->parent_binding.has_value()) {
+        throw std::runtime_error(
+            "full-node Stratum template has no sidechain parent binding");
+    }
+
+    const StratumShareParentBinding parent_binding =
+        *work_template->parent_binding;
+
+    if (parent_binding.parent_id == ShareId{}) {
+        if (parent_binding.share_height != 0) {
             throw std::runtime_error(
-                "sidechain share height exhausted while issuing Stratum work");
+                "root Stratum template binding has invalid share height");
         }
-        parent_binding.parent_id = tip->id;
-        parent_binding.share_height = tip->share.share_height + 1;
+    } else {
+        const ConnectedShare* parent =
+            share_chain_->find(parent_binding.parent_id);
+        if (parent == nullptr) {
+            throw std::runtime_error(
+                "published Stratum template parent is no longer connected");
+        }
+        if (parent->share.share_height ==
+                std::numeric_limits<std::uint64_t>::max() ||
+            parent_binding.share_height !=
+                parent->share.share_height + 1) {
+            throw std::runtime_error(
+                "published Stratum template parent height is inconsistent");
+        }
+        if (share_chain_->enforces_sidechain_difficulty() &&
+            !parent->validated_ancestry) {
+            throw std::runtime_error(
+                "published Stratum template parent lost validated ancestry");
+        }
     }
 
     std::optional<Difficulty128> consensus_difficulty;

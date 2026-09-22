@@ -105,16 +105,33 @@ std::uint64_t StratumSessionRegistry::publish_template(
     const Hash256& header_hash,
     const Hash256& seed_hash,
     std::uint64_t height,
-    const Difficulty128& network_difficulty) {
+    const Difficulty128& network_difficulty,
+    std::optional<StratumShareParentBinding> parent_binding) {
     if (difficulty128_is_zero(network_difficulty)) {
         throw std::runtime_error("Stratum template network difficulty must be nonzero");
+    }
+
+    if (parent_binding.has_value()) {
+        const bool root =
+            parent_binding->parent_id == ShareId{};
+        if (root && parent_binding->share_height != 0) {
+            throw std::runtime_error(
+                "root Stratum template binding must use share height zero");
+        }
+        if (!root && parent_binding->share_height == 0) {
+            throw std::runtime_error(
+                "non-root Stratum template binding must use nonzero share height");
+        }
     }
 
     if (current_template_.has_value() &&
         current_template_->header_hash == header_hash &&
         current_template_->seed_hash == seed_hash &&
         current_template_->height == height &&
-        difficulty_equal(current_template_->network_difficulty, network_difficulty)) {
+        difficulty_equal(
+            current_template_->network_difficulty,
+            network_difficulty) &&
+        current_template_->parent_binding == parent_binding) {
         return current_template_->version;
     }
 
@@ -128,6 +145,7 @@ std::uint64_t StratumSessionRegistry::publish_template(
     work_template.seed_hash = seed_hash;
     work_template.height = height;
     work_template.network_difficulty = network_difficulty;
+    work_template.parent_binding = parent_binding;
     current_template_ = work_template;
     return work_template.version;
 }
@@ -142,6 +160,18 @@ StratumIssuedWork StratumSessionRegistry::issue_work(
     }
     if (!current_template_.has_value()) {
         throw std::runtime_error("no Stratum template is available");
+    }
+
+    // A parent carried by the published template is authoritative for every
+    // job derived from that template. Callers cannot silently replace it with
+    // a newer sidechain tip.
+    if (current_template_->parent_binding.has_value()) {
+        if (parent_binding.has_value() &&
+            parent_binding != current_template_->parent_binding) {
+            throw std::runtime_error(
+                "Stratum work parent does not match published template");
+        }
+        parent_binding = current_template_->parent_binding;
     }
 
     if (parent_binding.has_value()) {
@@ -180,7 +210,8 @@ StratumIssuedWork StratumSessionRegistry::issue_work(
     // was already handed to the miner under the same template/header.
     if (session.current_work.has_value() &&
         session.current_work->job_version == current_template_->version &&
-        session.current_work->share_difficulty == share_difficulty) {
+        session.current_work->share_difficulty == share_difficulty &&
+        session.current_work->parent_binding == parent_binding) {
         return *session.current_work;
     }
 

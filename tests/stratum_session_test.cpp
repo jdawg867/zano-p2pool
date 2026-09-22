@@ -188,6 +188,115 @@ int main() {
     CHECK(s4 != nullptr);
     CHECK(s4->configured_share_difficulty == config.minimum_share_difficulty);
 
+    // A canonical payout template and its sidechain parent are one immutable
+    // mining snapshot. The same Zano work rebuilt against a different
+    // sidechain parent must therefore become a new Stratum generation.
+    {
+        StratumSessionRegistry parent_registry(config);
+
+        const std::uint64_t parent_session =
+            parent_registry.create_session();
+
+        StratumLogin parent_login;
+        parent_login.username = "parent-binding-test";
+
+        parent_registry.login(
+            parent_session,
+            parent_login);
+
+        ShareId parent_a{};
+        parent_a[31] = 0x41;
+
+        ShareId parent_b{};
+        parent_b[31] = 0x42;
+
+        const StratumShareParentBinding binding_a{
+            parent_a,
+            41,
+        };
+
+        const StratumShareParentBinding binding_b{
+            parent_b,
+            42,
+        };
+
+        CHECK(
+            parent_registry.publish_template(
+                header1,
+                seed1,
+                165015,
+                network1,
+                binding_a) == 1);
+
+        CHECK(
+            parent_registry.publish_template(
+                header1,
+                seed1,
+                165015,
+                network1,
+                binding_a) == 1);
+
+        CHECK(
+            parent_registry.current_template() !=
+            nullptr);
+
+        CHECK(
+            parent_registry.current_template()
+                ->parent_binding ==
+            std::optional<
+                StratumShareParentBinding>{
+                    binding_a});
+
+        const StratumIssuedWork work_a =
+            parent_registry.issue_work(
+                parent_session);
+
+        CHECK(
+            work_a.parent_binding ==
+            std::optional<
+                StratumShareParentBinding>{
+                    binding_a});
+
+        // The daemon-facing work is identical, but payout history now belongs
+        // to another sidechain parent. This must not reuse generation 1.
+        CHECK(
+            parent_registry.publish_template(
+                header1,
+                seed1,
+                165015,
+                network1,
+                binding_b) == 2);
+
+        CHECK(
+            parent_registry.current_template()
+                ->parent_binding ==
+            std::optional<
+                StratumShareParentBinding>{
+                    binding_b});
+
+        const StratumIssuedWork work_b =
+            parent_registry.issue_work(
+                parent_session);
+
+        CHECK(work_b.job_version == 2);
+
+        CHECK(
+            work_b.parent_binding ==
+            std::optional<
+                StratumShareParentBinding>{
+                    binding_b});
+
+        // Once a template has frozen its payout parent, issuance cannot
+        // substitute another parent for the same miner transaction.
+        expect_runtime_error([&] {
+            static_cast<void>(
+                parent_registry.issue_work(
+                    parent_session,
+                    std::nullopt,
+                    binding_a));
+        });
+    }
+
     // Session/template misuse fails closed.
     expect_runtime_error([&] {
         (void)registry.issue_work(9999);

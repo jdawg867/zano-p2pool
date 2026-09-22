@@ -12,6 +12,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -70,7 +71,9 @@ public:
         const Hash256& header_hash,
         const Hash256& seed_hash,
         std::uint64_t height,
-        const Difficulty128& network_difficulty);
+        const Difficulty128& network_difficulty,
+        std::optional<StratumShareParentBinding> parent_binding =
+            std::nullopt);
 
     [[nodiscard]] std::size_t connected_share_count() const noexcept;
 

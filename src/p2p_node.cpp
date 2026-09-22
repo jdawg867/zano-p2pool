@@ -1112,7 +1112,8 @@ void P2pNodeProtocol::set_historical_trust_sources(
 }
 
 void P2pNodeProtocol::remember_trusted_work(
-    const ShareWorkContext& context) {
+    const ShareWorkContext& context,
+    std::optional<ShareId> parent_id) {
     std::lock_guard lock(state_mutex_);
 
     if (!local_mining_anchor_.has_value() ||
@@ -1121,8 +1122,10 @@ void P2pNodeProtocol::remember_trusted_work(
             "trusted local work has no installed Zano mining context");
     }
 
-    const P2pMiningAnchor& anchor = *local_mining_anchor_;
-    const P2pMiningContextProposal& proposal = *local_mining_context_;
+    const P2pMiningAnchor& anchor =
+        *local_mining_anchor_;
+    const P2pMiningContextProposal& proposal =
+        *local_mining_context_;
 
     if (anchor.zano_height != context.zano_height ||
         proposal.zano_height != context.zano_height ||
@@ -1135,10 +1138,46 @@ void P2pNodeProtocol::remember_trusted_work(
             "trusted local work does not match installed Zano mining context");
     }
 
-    const ConnectedShare* parent = chain_.best_tip();
+    ShareId resolved_parent{};
+
+    if (parent_id.has_value()) {
+        resolved_parent = *parent_id;
+
+        if (!is_zero_share_id(resolved_parent)) {
+            const ConnectedShare* parent =
+                chain_.find(resolved_parent);
+
+            if (parent == nullptr) {
+                throw std::runtime_error(
+                    "trusted local work parent is not connected");
+            }
+
+            if (chain_.enforces_sidechain_difficulty() &&
+                !parent->validated_ancestry) {
+                throw std::runtime_error(
+                    "trusted local work parent lacks validated ancestry");
+            }
+        }
+
+        // When a payout plan is installed, work provenance must be bound to
+        // that exact same sidechain snapshot.
+        if (expected_payout_parent_id_.has_value() &&
+            *expected_payout_parent_id_ != resolved_parent) {
+            throw std::runtime_error(
+                "trusted local work parent does not match payout parent");
+        }
+    } else {
+        const ConnectedShare* parent =
+            chain_.best_tip();
+
+        if (parent != nullptr) {
+            resolved_parent = parent->id;
+        }
+    }
+
     trusted_work_.remember(
         context,
-        parent == nullptr ? ShareId{} : parent->id,
+        resolved_parent,
         anchor.prev_hash);
 }
 
@@ -1392,15 +1431,46 @@ void P2pNodeProtocol::set_local_mining_context(
 void P2pNodeProtocol::set_local_mining_context(
     const P2pMiningAnchor& anchor,
     const P2pMiningContextProposal& proposal,
-    const PplnsCoinbasePlan& plan) {
+    const PplnsCoinbasePlan& plan,
+    std::optional<ShareId> parent_id) {
     std::lock_guard lock(state_mutex_);
+
     reconcile_local_parent_replacement_unlocked(anchor);
+
+    ShareId resolved_parent{};
+
+    if (parent_id.has_value()) {
+        resolved_parent = *parent_id;
+
+        if (!is_zero_share_id(resolved_parent)) {
+            const ConnectedShare* parent =
+                chain_.find(resolved_parent);
+
+            if (parent == nullptr) {
+                throw std::runtime_error(
+                    "local payout-plan parent is not connected");
+            }
+
+            if (chain_.enforces_sidechain_difficulty() &&
+                !parent->validated_ancestry) {
+                throw std::runtime_error(
+                    "local payout-plan parent lacks validated ancestry");
+            }
+        }
+    } else {
+        const ConnectedShare* parent =
+            chain_.best_tip();
+
+        if (parent != nullptr) {
+            resolved_parent = parent->id;
+        }
+    }
+
     local_mining_anchor_ = anchor;
     local_mining_context_ = proposal;
     expected_payout_plan_ = plan;
     expected_payout_.reset();
-    const ConnectedShare* parent = chain_.best_tip();
-    expected_payout_parent_id_ = parent == nullptr ? ShareId{} : parent->id;
+    expected_payout_parent_id_ = resolved_parent;
 }
 
 void P2pNodeProtocol::set_expected_payout(

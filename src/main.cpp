@@ -121,6 +121,10 @@ struct LiveTemplate {
     zano_p2pool::Hash256 seed_hash{};
     zano_p2pool::Difficulty128 network_difficulty{};
     std::optional<zano_p2pool::PplnsCoinbasePlan> payout_plan;
+
+    // Exact sidechain parent snapshot used while constructing payout_plan and
+    // the miner transaction embedded in block.
+    std::optional<zano_p2pool::StratumShareParentBinding> parent_binding;
 };
 
 const char* network_name(Network network) {
@@ -663,6 +667,11 @@ bool apply_canonical_pplns_template(
     std::lock_guard lock(state_mutex);
     if (chain.connected_size() == 0) {
         live.payout_plan.reset();
+        live.parent_binding =
+            zano_p2pool::StratumShareParentBinding{
+                zano_p2pool::ShareId{},
+                0,
+            };
         return false;
     }
 
@@ -672,8 +681,24 @@ bool apply_canonical_pplns_template(
     const zano_p2pool::ConnectedShare* tip = chain.best_tip();
     if (tip == nullptr || !tip->validated_ancestry) {
         live.payout_plan.reset();
+        live.parent_binding.reset();
         return false;
     }
+
+    if (tip->share.share_height ==
+        std::numeric_limits<std::uint64_t>::max()) {
+        throw std::runtime_error(
+            "sidechain share height exhausted while constructing PPLNS template");
+    }
+
+    // This is the exact sidechain snapshot used below to construct the
+    // PPLNS miner transaction. Carry it with the template instead of
+    // resampling best_tip() later when Stratum work is issued.
+    live.parent_binding =
+        zano_p2pool::StratumShareParentBinding{
+            tip->id,
+            tip->share.share_height + 1,
+        };
 
     zano_p2pool::PplnsTemplateResult rebuilt =
         zano_p2pool::build_canonical_pplns_template(
@@ -758,7 +783,16 @@ void set_local_p2p_context(
         zano_p2pool::p2p_mining_context_proposal_from_template(live.block);
 
     if (live.payout_plan.has_value()) {
-        protocol.set_local_mining_context(anchor, proposal, *live.payout_plan);
+        if (!live.parent_binding.has_value()) {
+            throw std::runtime_error(
+                "canonical PPLNS context has no captured sidechain parent");
+        }
+
+        protocol.set_local_mining_context(
+            anchor,
+            proposal,
+            *live.payout_plan,
+            live.parent_binding->parent_id);
         return;
     }
 
@@ -1039,7 +1073,12 @@ int main(int argc, char** argv) {
                 });
         }
         set_local_p2p_context(p2p_protocol, live);
-        p2p_protocol.remember_trusted_work(trusted_context_from_live(live));
+        p2p_protocol.remember_trusted_work(
+            trusted_context_from_live(live),
+            live.parent_binding.has_value()
+                ? std::optional<zano_p2pool::ShareId>{
+                      live.parent_binding->parent_id}
+                : std::nullopt);
 
         std::unique_ptr<zano_p2pool::P2pRuntime> p2p_runtime;
         if (options.p2p) {
@@ -1463,7 +1502,8 @@ int main(int argc, char** argv) {
                     live.mining_work.header_hash,
                     live.seed_hash,
                     live.block.height,
-                    live.network_difficulty);
+                    live.network_difficulty,
+                    live.parent_binding);
                 server->start();
 
                 std::cout << "\nStratum listening: "
@@ -1868,7 +1908,11 @@ int main(int argc, char** argv) {
                 // its parent-bound work authorization.
                 set_local_p2p_context(p2p_protocol, next);
                 p2p_protocol.remember_trusted_work(
-                    trusted_context_from_live(next));
+                    trusted_context_from_live(next),
+                    next.parent_binding.has_value()
+                        ? std::optional<zano_p2pool::ShareId>{
+                              next.parent_binding->parent_id}
+                        : std::nullopt);
 
                 if (options.stratum &&
                     server &&
@@ -1909,7 +1953,8 @@ int main(int argc, char** argv) {
                             next.mining_work.header_hash,
                             next.seed_hash,
                             next.block.height,
-                            next.network_difficulty);
+                            next.network_difficulty,
+                            next.parent_binding);
 
                     if (!block_submitter->running()) {
                         block_submitter->start();

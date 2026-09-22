@@ -122,7 +122,9 @@ public:
         std::function<RpcCanonicalHeader(std::uint64_t)> lookup,
         std::function<std::optional<RpcHistoricalPowContext>(
             std::uint64_t)> historical_pow_lookup);
-    void remember_trusted_work(const ShareWorkContext& context);
+    void remember_trusted_work(
+        const ShareWorkContext& context,
+        std::optional<ShareId> parent_id = std::nullopt);
     void set_local_mining_context(
         const P2pMiningAnchor& anchor,
         const P2pMiningContextProposal& proposal);
@@ -133,7 +135,8 @@ public:
     void set_local_mining_context(
         const P2pMiningAnchor& anchor,
         const P2pMiningContextProposal& proposal,
-        const PplnsCoinbasePlan& plan);
+        const PplnsCoinbasePlan& plan,
+        std::optional<ShareId> parent_id = std::nullopt);
 
     // Exactly one payout expectation is active at a time. Bootstrap/legacy
     // daemon templates use the single public payout identity; canonical PPLNS

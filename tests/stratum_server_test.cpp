@@ -14,6 +14,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -165,7 +166,11 @@ int main() {
               header,
               seed,
               0,
-              difficulty128_from_decimal("4")) == 1);
+              difficulty128_from_decimal("4"),
+              StratumShareParentBinding{
+                  ShareId{},
+                  0,
+              }) == 1);
     server.start();
     CHECK(server.running());
     CHECK(server.bound_port() != 0);
@@ -246,11 +251,30 @@ int main() {
         "00112233445566778899aabbccddeeffffeeddccbbaa99887766554433221100");
     Hash256 refreshed_seed = seed;
     refreshed_seed[30] = 2;
+    StratumShareParentBinding refreshed_parent;
+    {
+        std::lock_guard lock(shared_chain_mutex);
+
+        if (const ConnectedShare* tip =
+                shared_chain.best_tip();
+            tip != nullptr) {
+            CHECK(
+                tip->share.share_height !=
+                std::numeric_limits<std::uint64_t>::max());
+
+            refreshed_parent.parent_id =
+                tip->id;
+            refreshed_parent.share_height =
+                tip->share.share_height + 1;
+        }
+    }
+
     CHECK(server.publish_template(
               refreshed_header,
               refreshed_seed,
               1,
-              difficulty128_from_decimal("4")) == 2);
+              difficulty128_from_decimal("4"),
+              refreshed_parent) == 2);
 
     // A logged-in miner must receive refreshed work without polling getWork.
     const std::string pushed_work = read_line(client);
