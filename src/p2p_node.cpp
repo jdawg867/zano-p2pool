@@ -418,6 +418,7 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
         P2pNodeMessageResult result;
         std::optional<P2pEnvelope> followup;
         NodeId followup_peer = peer.node_id;
+        std::optional<P2pEnvelope> fresh_tip_followup;
         std::optional<P2pEnvelope> relay_share;
         std::optional<P2pEnvelope> relay_tip;
 
@@ -795,6 +796,26 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
         case P2pMessageType::ShareRequest: {
             std::lock_guard lock(state_mutex_);
             followup = answer_p2p_share_request(peer, envelope, chain_);
+
+            // A transport handshake is only a connection-time snapshot. If
+            // that advertised share was later pruned by canonical
+            // reconciliation, a reconnecting peer can legitimately request an
+            // ID we no longer have. Preserve the explicit NotFound response,
+            // then advertise the current application-level tip directly to
+            // that same peer so synchronization can resume from fresh state.
+            const P2pShareResponse response =
+                parse_p2p_share_response_envelope(*followup);
+
+            if (response.code == P2pShareResponseCode::NotFound) {
+                const P2pTipHint current_tip =
+                    p2p_tip_hint_from_chain(chain_);
+
+                if (!is_zero_share_id(current_tip.share_id)) {
+                    fresh_tip_followup =
+                        make_p2p_tip_announce_envelope(current_tip);
+                }
+            }
+
             result.status = P2pNodeMessageStatus::ShareRequestAnswered;
             break;
         }
@@ -1031,6 +1052,12 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
             result.sent_followup =
                 runtime.send_to(followup_peer, *followup);
         }
+
+        if (fresh_tip_followup.has_value()) {
+            static_cast<void>(
+                runtime.send_to(peer.node_id, *fresh_tip_followup));
+        }
+
         if (relay_share.has_value()) {
             runtime.broadcast_except(peer.node_id, *relay_share);
             result.relayed_share = true;

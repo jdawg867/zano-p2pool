@@ -424,6 +424,114 @@ int main() {
                   compatibility_future.mining_header_hash) == nullptr);
     }
 
+    // Regression: a long-lived provider can prune the share captured in its
+    // connection-time handshake. A reconnecting peer first requests that stale
+    // ID. The provider must preserve the explicit NotFound response and then
+    // directly advertise its current application-level tip, otherwise initial
+    // synchronization dead-ends on the stale handshake snapshot.
+    {
+        P2pHandshake stale_provider_handshake =
+            make_handshake(0x31);
+
+        ShareId stale_tip_id = child_id;
+        stale_tip_id[0] ^= 0xffU;
+
+        CHECK(stale_tip_id != child_id);
+        CHECK(provider_chain.find(stale_tip_id) == nullptr);
+
+        stale_provider_handshake.best_share_id =
+            stale_tip_id;
+        stale_provider_handshake.best_share_height =
+            child.share_height + 100;
+
+        std::atomic<bool> saw_not_found{false};
+        std::atomic<bool> saw_fresh_tip{false};
+
+        P2pRuntime* stale_provider_runtime_ptr = nullptr;
+
+        P2pRuntime stale_provider_runtime(
+            P2pRuntimeConfig{
+                P2pEndpoint{"127.0.0.1", 0},
+                stale_provider_handshake,
+            },
+            [&](const P2pHandshake& peer,
+                const P2pEnvelope& envelope) {
+                if (stale_provider_runtime_ptr != nullptr) {
+                    static_cast<void>(
+                        provider_protocol.handle(
+                            *stale_provider_runtime_ptr,
+                            peer,
+                            envelope,
+                            child.timestamp,
+                            ProgPowZContextMode::Light));
+                }
+            });
+
+        P2pRuntime stale_requester_runtime(
+            P2pRuntimeConfig{
+                P2pEndpoint{"127.0.0.1", 0},
+                make_handshake(0x32),
+            },
+            [&](const P2pHandshake&,
+                const P2pEnvelope& envelope) {
+                if (envelope.type ==
+                    P2pMessageType::ShareResponse) {
+                    const P2pShareResponse response =
+                        parse_p2p_share_response_envelope(
+                            envelope);
+
+                    if (response.code ==
+                            P2pShareResponseCode::NotFound &&
+                        response.requested_id ==
+                            stale_tip_id) {
+                        saw_not_found.store(true);
+                    }
+                    return;
+                }
+
+                if (envelope.type ==
+                    P2pMessageType::TipAnnounce) {
+                    const P2pTipHint hint =
+                        parse_p2p_tip_announce_envelope(
+                            envelope);
+
+                    if (hint.share_id == child_id &&
+                        hint.share_height ==
+                            child.share_height) {
+                        saw_fresh_tip.store(true);
+                    }
+                }
+            },
+            [&](const P2pHandshake& peer)
+                -> std::optional<P2pEnvelope> {
+                return requester_protocol
+                    .initial_sync_request(peer);
+            });
+
+        stale_provider_runtime_ptr =
+            &stale_provider_runtime;
+
+        stale_provider_runtime.start();
+        stale_requester_runtime.start();
+
+        stale_requester_runtime.connect_peer(
+            P2pEndpoint{
+                "127.0.0.1",
+                stale_provider_runtime.listen_port(),
+            });
+
+        CHECK(wait_for([&] {
+            return saw_not_found.load() &&
+                   saw_fresh_tip.load();
+        }));
+
+        stale_requester_runtime.stop();
+        stale_provider_runtime.stop();
+
+        CHECK(saw_not_found.load());
+        CHECK(saw_fresh_tip.load());
+    }
+
     std::atomic<std::size_t> provider_messages{0};
     std::atomic<std::size_t> requester_messages{0};
     std::atomic<std::size_t> leaf_messages{0};
