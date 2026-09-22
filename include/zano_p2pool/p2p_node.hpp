@@ -81,6 +81,14 @@ struct P2pHistoricalRetrySummary {
 [[nodiscard]] std::uint32_t p2p_node_message_penalty(
     const P2pNodeMessageResult& result) noexcept;
 
+// Convert one completed outer P2P message into the exact unique shares whose
+// admission became durable during that handling pass. A historical retry can
+// update share_status for the same share carried by the original envelope, so
+// deduplicate by canonical ShareId rather than by admission path.
+[[nodiscard]] std::vector<Share> p2p_node_unique_admitted_shares(
+    const P2pNodeMessageResult& result,
+    const P2pEnvelope& envelope);
+
 class P2pNodeProtocol {
 public:
     P2pNodeProtocol(

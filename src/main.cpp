@@ -1213,41 +1213,19 @@ int main(int argc, char** argv) {
                             }
                         }
 
-                        const bool direct_share_admitted =
-                            (result.status ==
-                                 zano_p2pool::P2pNodeMessageStatus::ShareProcessed ||
-                             result.status ==
-                                 zano_p2pool::P2pNodeMessageStatus::ShareResponseProcessed) &&
-                            (result.share_status ==
-                                 zano_p2pool::P2pShareReceiveStatus::Connected ||
-                             result.share_status ==
-                                 zano_p2pool::P2pShareReceiveStatus::Orphan);
+                        const std::vector<zano_p2pool::Share>
+                            admitted_shares =
+                                zano_p2pool::p2p_node_unique_admitted_shares(
+                                    result,
+                                    envelope);
 
-                        std::size_t admitted_count =
-                            result.historical_admitted_shares.size();
-                        if (direct_share_admitted) {
-                            ++admitted_count;
-                            if (result.status ==
-                                zano_p2pool::P2pNodeMessageStatus::ShareProcessed) {
-                                persist_share(
-                                    zano_p2pool::parse_p2p_share_announce_envelope(
-                                        envelope));
-                            } else {
-                                const zano_p2pool::P2pShareResponse response =
-                                    zano_p2pool::parse_p2p_share_response_envelope(
-                                        envelope);
-                                if (response.share.has_value()) {
-                                    persist_share(*response.share);
-                                }
-                            }
-                        }
-                        for (const auto& admitted :
-                             result.historical_admitted_shares) {
+                        for (const auto& admitted : admitted_shares) {
                             persist_share(admitted);
                         }
-                        if (admitted_count != 0) {
+
+                        if (!admitted_shares.empty()) {
                             p2p_admitted_shares_total.fetch_add(
-                                admitted_count,
+                                admitted_shares.size(),
                                 std::memory_order_relaxed);
                         }
 

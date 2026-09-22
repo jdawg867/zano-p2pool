@@ -92,6 +92,46 @@ int main() {
     const ShareId child_id = share_id(child);
     const ShareWorkContext trusted = context_for(parent);
 
+    // Regression: an outer ShareAnnounce can begin as unknown-work and then
+    // cross historical trust inside the same P2P handler. In that case the
+    // final share_status is Connected while historical_admitted_shares also
+    // contains the exact same share. Durable admission must contain it once.
+    {
+        P2pNodeMessageResult result;
+        result.status = P2pNodeMessageStatus::ShareProcessed;
+        result.share_status = P2pShareReceiveStatus::Connected;
+        result.historical_admitted_shares.push_back(parent);
+
+        const auto admitted =
+            p2p_node_unique_admitted_shares(
+                result,
+                make_p2p_share_announce_envelope(parent));
+
+        CHECK(admitted.size() == 1);
+        CHECK(share_id(admitted[0]) == parent_id);
+    }
+
+    // Do not solve the duplicate bug by suppressing the historical list.
+    // One directly admitted share may unlock a distinct deferred descendant
+    // during the same outer handler pass; both unique shares must persist.
+    {
+        P2pNodeMessageResult result;
+        result.status = P2pNodeMessageStatus::ShareProcessed;
+        result.share_status = P2pShareReceiveStatus::Connected;
+        result.historical_admitted_shares.push_back(parent);
+        result.historical_admitted_shares.push_back(child);
+        result.historical_admitted_shares.push_back(child);
+
+        const auto admitted =
+            p2p_node_unique_admitted_shares(
+                result,
+                make_p2p_share_announce_envelope(parent));
+
+        CHECK(admitted.size() == 2);
+        CHECK(share_id(admitted[0]) == parent_id);
+        CHECK(share_id(admitted[1]) == child_id);
+    }
+
     ShareChain provider_chain;
     ShareChain requester_chain;
     ShareChain leaf_chain;

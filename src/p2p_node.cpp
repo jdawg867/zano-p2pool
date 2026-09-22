@@ -1045,6 +1045,63 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
     }
 }
 
+std::vector<Share> p2p_node_unique_admitted_shares(
+    const P2pNodeMessageResult& result,
+    const P2pEnvelope& envelope) {
+    std::vector<Share> admitted;
+
+    const auto append_unique =
+        [&admitted](const Share& share) {
+            const ShareId id = share_id(share);
+
+            const bool already_present =
+                std::any_of(
+                    admitted.begin(),
+                    admitted.end(),
+                    [&id](const Share& existing) {
+                        return share_id(existing) == id;
+                    });
+
+            if (!already_present) {
+                admitted.push_back(share);
+            }
+        };
+
+    const bool direct_share_admitted =
+        (result.status ==
+             P2pNodeMessageStatus::ShareProcessed ||
+         result.status ==
+             P2pNodeMessageStatus::ShareResponseProcessed) &&
+        (result.share_status ==
+             P2pShareReceiveStatus::Connected ||
+         result.share_status ==
+             P2pShareReceiveStatus::Orphan);
+
+    if (direct_share_admitted) {
+        if (result.status ==
+            P2pNodeMessageStatus::ShareProcessed) {
+            append_unique(
+                parse_p2p_share_announce_envelope(
+                    envelope));
+        } else {
+            const P2pShareResponse response =
+                parse_p2p_share_response_envelope(
+                    envelope);
+
+            if (response.share.has_value()) {
+                append_unique(*response.share);
+            }
+        }
+    }
+
+    for (const Share& historical :
+         result.historical_admitted_shares) {
+        append_unique(historical);
+    }
+
+    return admitted;
+}
+
 std::uint32_t p2p_node_message_penalty(
     const P2pNodeMessageResult& result) noexcept {
     switch (result.status) {
