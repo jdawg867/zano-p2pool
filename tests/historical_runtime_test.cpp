@@ -181,6 +181,9 @@ struct RuntimeCaseResult {
         HistoricalTrustStatus::CandidateMismatch};
     std::optional<HistoricalAnchorStatus> anchor_status;
     std::optional<HistoricalPayoutStatus> payout_status;
+    std::optional<P2pMiningContextTrustStatus> promotion_status;
+    std::optional<P2pMinerTxProofStatus> proof_status;
+    std::optional<P2pPayoutPolicyStatus> payout_policy_status;
     P2pShareReceiveStatus share_status{
         P2pShareReceiveStatus::Rejected};
     bool historical_share_retried{false};
@@ -203,14 +206,31 @@ struct RuntimeCaseResult {
     bool fresh_root = false,
     bool receiver_has_historical_pow_context = true,
     bool receiver_parent_matches = true,
-    bool retry_after_pow_unavailable = false) {
+    bool retry_after_pow_unavailable = false,
+    bool receiver_parent_payout_mismatch = false) {
     TemporaryDirectory temp("zano-historical-runtime");
     RuntimeFixture fixture = make_runtime_fixture();
 
     Share candidate = fixture.candidate;
+    Share receiver_parent = fixture.parent;
+
     if (fresh_root) {
         candidate.parent_id = ShareId{};
         candidate.share_height = 0;
+    } else if (receiver_parent_payout_mismatch) {
+        const ZanoCurveKey alternate_payout_key =
+            key_from_hex(kNativeCoinAssetId1Div8Hex);
+
+        receiver_parent.payout =
+            PayoutPublicKeys{
+                alternate_payout_key,
+                alternate_payout_key,
+            };
+        receiver_parent.miner_id =
+            miner_id_from_payout(*receiver_parent.payout);
+
+        candidate.parent_id =
+            share_id(receiver_parent);
     }
 
     const SidechainId chain_id = sidechain_id(fixture.params);
@@ -252,20 +272,20 @@ struct RuntimeCaseResult {
 
     if (!fresh_root) {
         const ShareWorkContext parent_context{
-            fixture.parent.zano_height,
-            fixture.parent.mining_header_hash,
-            fixture.parent.network_difficulty,
+            receiver_parent.zano_height,
+            receiver_parent.mining_header_hash,
+            receiver_parent.network_difficulty,
         };
         CHECK(receiver_chain.submit_share(
-                  fixture.parent,
+                  receiver_parent,
                   parent_context,
                   200,
                   ProgPowZContextMode::Light)
                   .disposition == ShareDisposition::Connected);
         CHECK(receiver_chain.find(
-                  share_id(fixture.parent)) != nullptr);
+                  share_id(receiver_parent)) != nullptr);
         CHECK(receiver_chain.find(
-                  share_id(fixture.parent))->validated_ancestry);
+                  share_id(receiver_parent))->validated_ancestry);
     }
 
     if (replay_candidate) {
@@ -355,6 +375,9 @@ struct RuntimeCaseResult {
             HistoricalTrustStatus::CandidateMismatch)};
     std::atomic<int> anchor_status{-1};
     std::atomic<int> payout_status{-1};
+    std::atomic<int> promotion_status{-1};
+    std::atomic<int> proof_status{-1};
+    std::atomic<int> payout_policy_status{-1};
     std::atomic<int> share_status{
         static_cast<int>(
             P2pShareReceiveStatus::Rejected)};
@@ -424,6 +447,24 @@ struct RuntimeCaseResult {
                         result.historical_payout_status.has_value()
                             ? static_cast<int>(
                                   *result.historical_payout_status)
+                            : -1);
+
+                    promotion_status.store(
+                        result.historical_promotion_status.has_value()
+                            ? static_cast<int>(
+                                  *result.historical_promotion_status)
+                            : -1);
+
+                    proof_status.store(
+                        result.historical_proof_status.has_value()
+                            ? static_cast<int>(
+                                  *result.historical_proof_status)
+                            : -1);
+
+                    payout_policy_status.store(
+                        result.historical_payout_policy_status.has_value()
+                            ? static_cast<int>(
+                                  *result.historical_payout_policy_status)
                             : -1);
 
                     share_status.store(
@@ -530,6 +571,24 @@ struct RuntimeCaseResult {
         result.payout_status =
             static_cast<HistoricalPayoutStatus>(
                 payout_status.load());
+    }
+
+    if (promotion_status.load() >= 0) {
+        result.promotion_status =
+            static_cast<P2pMiningContextTrustStatus>(
+                promotion_status.load());
+    }
+
+    if (proof_status.load() >= 0) {
+        result.proof_status =
+            static_cast<P2pMinerTxProofStatus>(
+                proof_status.load());
+    }
+
+    if (payout_policy_status.load() >= 0) {
+        result.payout_policy_status =
+            static_cast<P2pPayoutPolicyStatus>(
+                payout_policy_status.load());
     }
 
     result.share_status =
@@ -1174,6 +1233,47 @@ int main() {
     if (!zano_curve_backend_available()) {
         return 0;
     }
+
+    // Observability regression from the multinode soak: when historical
+    // candidate binding, canonical anchoring and payout-plan reconstruction
+    // all succeed but the final miner-tx promotion rejects the provider's
+    // payout against this receiver's validated parent history, preserve the
+    // exact final-gate diagnostics in P2pNodeMessageResult.
+    const RuntimeCaseResult promotion_rejected =
+        run_runtime_case(
+            false,  // remote seed is intact
+            false,  // candidate was not structurally replayed
+            true,   // receiver has exact local mining-work observation
+            false,  // normal parent-bound historical share
+            true,   // historical PoW context is available
+            true,   // canonical Zano parent still matches
+            false,  // no autonomous PoW retry
+            true);  // validated parent has a different payout identity
+
+    CHECK(!promotion_rejected.failed);
+    CHECK(promotion_rejected.trust_status ==
+          HistoricalTrustStatus::PromotionRejected);
+    CHECK(!promotion_rejected.anchor_status.has_value());
+    CHECK(!promotion_rejected.payout_status.has_value());
+
+    CHECK(promotion_rejected.promotion_status.has_value());
+    CHECK(*promotion_rejected.promotion_status ==
+          P2pMiningContextTrustStatus::ProofsRejected);
+
+    CHECK(promotion_rejected.proof_status.has_value());
+    CHECK(*promotion_rejected.proof_status ==
+          P2pMinerTxProofStatus::PayoutPolicyFailed);
+
+    CHECK(promotion_rejected.payout_policy_status.has_value());
+    CHECK(*promotion_rejected.payout_policy_status ==
+          P2pPayoutPolicyStatus::DestinationMismatch);
+
+    CHECK(!promotion_rejected.historical_share_retried);
+    CHECK(promotion_rejected.historical_admitted_count == 0);
+    CHECK(promotion_rejected.trusted_work_count == 0);
+    CHECK(promotion_rejected.connected_share_count == 1);
+    CHECK(!promotion_rejected.candidate_present);
+    CHECK(!promotion_rejected.candidate_validated_ancestry);
 
     // With no matching local archive record, a fresh independent receiver can
     // now reconstruct the missing authority entirely from its own canonical

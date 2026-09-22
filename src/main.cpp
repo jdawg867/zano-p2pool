@@ -1108,6 +1108,30 @@ int main(int argc, char** argv) {
                                                    *result.historical_payout_status);
                                 }
 
+                                if (result.historical_promotion_status.has_value()) {
+                                    std::cerr
+                                        << " promotion="
+                                        << zano_p2pool::
+                                               p2p_mining_context_trust_status_name(
+                                                   *result.historical_promotion_status);
+                                }
+
+                                if (result.historical_proof_status.has_value()) {
+                                    std::cerr
+                                        << " proof="
+                                        << zano_p2pool::
+                                               p2p_miner_tx_proof_status_name(
+                                                   *result.historical_proof_status);
+                                }
+
+                                if (result.historical_payout_policy_status.has_value()) {
+                                    std::cerr
+                                        << " payout-policy="
+                                        << zano_p2pool::
+                                               p2p_payout_policy_status_name(
+                                                   *result.historical_payout_policy_status);
+                                }
+
                                 if (result.historical_share_retried) {
                                     std::cerr
                                         << " share-retry="

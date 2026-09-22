@@ -47,6 +47,12 @@ struct P2pNodeMessageResult {
     std::optional<HistoricalTrustStatus> historical_trust_status;
     std::optional<HistoricalAnchorStatus> historical_anchor_status;
     std::optional<HistoricalPayoutStatus> historical_payout_status;
+    std::optional<P2pMiningContextTrustStatus>
+        historical_promotion_status;
+    std::optional<P2pMinerTxProofStatus>
+        historical_proof_status;
+    std::optional<P2pPayoutPolicyStatus>
+        historical_payout_policy_status;
     std::optional<Share> historical_share;
     std::vector<Share> historical_admitted_shares;
     bool historical_share_retried{false};

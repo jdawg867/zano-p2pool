@@ -448,6 +448,16 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
             result.historical_trust_status = trust.status;
 
             if (trust.status ==
+                HistoricalTrustStatus::PromotionRejected) {
+                result.historical_promotion_status =
+                    trust.promotion.status;
+                result.historical_proof_status =
+                    trust.promotion.proof_status;
+                result.historical_payout_policy_status =
+                    trust.promotion.payout_status;
+            }
+
+            if (trust.status ==
                 HistoricalTrustStatus::AnchorRejected) {
                 result.historical_anchor_status =
                     trust.initial_anchor.status;
