@@ -638,6 +638,8 @@ struct RecursiveParentSyncResult {
     bool grandparent_validated{false};
     bool parent_validated{false};
     bool child_validated{false};
+    bool unadvertised_fork_present{false};
+    bool unadvertised_fork_validated{false};
     int lookup_calls{};
     int observation_loads{};
     int work_requests{};
@@ -648,7 +650,8 @@ struct RecursiveParentSyncResult {
 run_recursive_parent_sync_case(
     bool replay_existing = false,
     bool stale_provider_handshake = false,
-    bool advance_recovery_clock = false) {
+    bool advance_recovery_clock = false,
+    bool add_unadvertised_fork = false) {
     TemporaryDirectory temp("zano-historical-parent-sync");
     RuntimeFixture fixture = make_runtime_fixture();
 
@@ -721,12 +724,37 @@ run_recursive_parent_sync_case(
     const ShareId replay_tip_id =
         share_id(descendants.back());
 
+    // Model the production restart condition where structural history contains
+    // another replay frontier that is not the peer's advertised best tip.
+    // It shares the already validated base but must independently cross the
+    // historical trust boundary before Stratum may regard all connected replay
+    // history as validated.
+    std::optional<Share> unadvertised_fork;
+    ShareId unadvertised_fork_id{};
+
+    if (replay_existing && add_unadvertised_fork) {
+        Share fork = fixture.candidate;
+        fork.parent_id = base_id;
+        fork.share_height = 1;
+        fork.timestamp = 250;
+        fork.nonce = 250;
+
+        unadvertised_fork_id = share_id(fork);
+        unadvertised_fork = fork;
+    }
+
     ShareChain provider_chain(fixture.params);
     CHECK(provider_chain.add_share_unchecked(base).disposition ==
           ShareDisposition::Connected);
     for (const Share& descendant : descendants) {
         CHECK(provider_chain.add_share_unchecked(
                   descendant).disposition ==
+              ShareDisposition::Connected);
+    }
+
+    if (unadvertised_fork.has_value()) {
+        CHECK(provider_chain.add_share_unchecked(
+                  *unadvertised_fork).disposition ==
               ShareDisposition::Connected);
     }
 
@@ -761,6 +789,18 @@ run_recursive_parent_sync_case(
                     share_id(descendant));
             CHECK(replayed != nullptr);
             CHECK(!replayed->validated_ancestry);
+        }
+
+        if (unadvertised_fork.has_value()) {
+            CHECK(receiver_chain.add_share_unchecked(
+                      *unadvertised_fork).disposition ==
+                  ShareDisposition::Connected);
+
+            const ConnectedShare* replayed_fork =
+                receiver_chain.find(unadvertised_fork_id);
+
+            CHECK(replayed_fork != nullptr);
+            CHECK(!replayed_fork->validated_ancestry);
         }
     }
 
@@ -958,6 +998,25 @@ run_recursive_parent_sync_case(
         },
         advance_recovery_clock ? 15s : 5s));
 
+    if (unadvertised_fork.has_value() &&
+        completed.load() &&
+        !failed.load()) {
+        // Give the autonomous post-tip replay scheduler an opportunity to
+        // select and recover the second structural frontier.
+        static_cast<void>(
+            wait_for(
+                [&] {
+                    std::lock_guard lock(receiver_state_mutex);
+                    const ConnectedShare* fork =
+                        receiver_chain.find(
+                            unadvertised_fork_id);
+
+                    return fork != nullptr &&
+                           fork->validated_ancestry;
+                },
+                1s));
+    }
+
     receiver_runtime.stop();
     provider_runtime.stop();
 
@@ -1015,6 +1074,18 @@ run_recursive_parent_sync_case(
         result.child_validated =
             connected_child != nullptr &&
             connected_child->validated_ancestry;
+
+        if (unadvertised_fork.has_value()) {
+            const ConnectedShare* connected_fork =
+                receiver_chain.find(
+                    unadvertised_fork_id);
+
+            result.unadvertised_fork_present =
+                connected_fork != nullptr;
+            result.unadvertised_fork_validated =
+                connected_fork != nullptr &&
+                connected_fork->validated_ancestry;
+        }
     }
 
     return result;
@@ -1401,6 +1472,27 @@ int main() {
           (2 * replay_recursive.descendant_count) - 1);
     CHECK(replay_recursive.lookup_calls ==
           (6 * replay_recursive.descendant_count) - 2);
+
+    // Multinode-soak regression: restart replay may contain more than one
+    // unvalidated frontier. Recovering only the peer-advertised best-tip walk
+    // is insufficient because another structurally connected replay branch
+    // remains fail-closed and keeps canonical payout/Stratum gated.
+    const RecursiveParentSyncResult multi_frontier =
+        run_recursive_parent_sync_case(
+            true,   // unchecked durable replay already exists
+            false,  // current provider handshake tip
+            false,  // normal recovery clock
+            true);  // add a second unadvertised replay frontier
+
+    CHECK(!multi_frontier.failed);
+    CHECK(multi_frontier.completed);
+    CHECK(multi_frontier.unadvertised_fork_present);
+
+    CHECK(multi_frontier.unadvertised_fork_validated);
+
+    // The second replay frontier already has exact immutable local work, so
+    // recovering it must not require downloading identical work from the peer.
+    CHECK(multi_frontier.work_requests == 0);
 
     // Regression from the multinode soak: ancestry recovery is serial. A
     // healthy peer can therefore spend longer than the mining-work request

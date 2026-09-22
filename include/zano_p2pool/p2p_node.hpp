@@ -224,6 +224,7 @@ private:
     };
 
     using PendingHistoricalKey = std::pair<NodeId, MiningWorkKey>;
+    using ReplayFrontierKey = std::pair<NodeId, ShareId>;
 
     [[nodiscard]] bool historical_trust_sources_ready_unlocked() const noexcept;
     void expire_historical_state(std::uint64_t now);
@@ -294,6 +295,12 @@ private:
         deferred_historical_;
     std::map<ShareId, RetryableHistoricalCandidate>
         retryable_historical_;
+
+    // Prevent one unavailable or terminally rejected replay frontier from
+    // creating a tight recovery loop. The key is peer-specific so another
+    // authenticated peer may still supply independent evidence immediately.
+    std::map<ReplayFrontierKey, std::uint64_t>
+        replay_frontier_attempts_;
 };
 
 [[nodiscard]] const char* p2p_node_message_status_name(

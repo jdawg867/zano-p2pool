@@ -63,6 +63,16 @@ void P2pNodeProtocol::expire_historical_state(std::uint64_t now) {
             ++it;
         }
     }
+
+    for (auto it = replay_frontier_attempts_.begin();
+         it != replay_frontier_attempts_.end();) {
+        if (now < it->second ||
+            now - it->second >= kMiningWorkRequestLifetime) {
+            it = replay_frontier_attempts_.erase(it);
+        } else {
+            ++it;
+        }
+    }
 }
 
 void P2pNodeProtocol::remember_pending_historical(
@@ -1127,6 +1137,194 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
         case P2pMessageType::Handshake:
             result.status = P2pNodeMessageStatus::UnexpectedHandshake;
             break;
+        }
+
+        // Persistence replay can contain several independent unvalidated
+        // frontiers. Connection-time tip recovery starts only one ancestry
+        // walk, so once protocol handling has no required reply outstanding,
+        // opportunistically advance other replay frontiers using this same
+        // authenticated peer.
+        //
+        // Only a share whose exact parent already has validated ancestry is
+        // eligible. That keeps recovery parent-first and prevents this
+        // scheduler from creating an alternative ancestry authority.
+        //
+        // The scheduler does not invent another trust path: exact immutable
+        // local work is tried through attempt_local_historical(), and when no
+        // acceptable local evidence exists the existing MiningWorkRequest /
+        // pending_historical_ path is used.
+        if (!followup.has_value() &&
+            work_retrieval_ &&
+            (peer.capabilities & kP2pCapabilityShareSync) != 0) {
+            const P2pNodeMessageResult outer_result = result;
+            bool replay_frontier_connected = false;
+
+            {
+                std::lock_guard lock(state_mutex_);
+                expire_historical_state(now);
+
+                if (historical_trust_sources_ready_unlocked()) {
+                    std::vector<ShareId> replay_ids =
+                        chain_.connected_share_ids();
+
+                    std::sort(
+                        replay_ids.begin(),
+                        replay_ids.end(),
+                        [this](const ShareId& left,
+                               const ShareId& right) {
+                            const ConnectedShare* lhs =
+                                chain_.find(left);
+                            const ConnectedShare* rhs =
+                                chain_.find(right);
+
+                            if (lhs == nullptr ||
+                                rhs == nullptr) {
+                                throw std::logic_error(
+                                    "connected replay share disappeared "
+                                    "during frontier scheduling");
+                            }
+
+                            if (lhs->share.share_height !=
+                                rhs->share.share_height) {
+                                return lhs->share.share_height <
+                                       rhs->share.share_height;
+                            }
+
+                            return left < right;
+                        });
+
+                    // Keep one inbound protocol pass bounded. Local replay
+                    // validation may expose several immediately adjacent
+                    // frontiers, while the first frontier requiring network
+                    // evidence stops the batch and remains serialized through
+                    // the existing request machinery.
+                    std::size_t frontier_budget =
+                        kMiningWorkMaxPending;
+
+                    result.historical_share_connected = false;
+
+                    for (const ShareId& candidate_id :
+                         replay_ids) {
+                        if (frontier_budget == 0 ||
+                            followup.has_value()) {
+                            break;
+                        }
+
+                        const ConnectedShare* connected =
+                            chain_.find(candidate_id);
+
+                        if (connected == nullptr ||
+                            connected->validated_ancestry) {
+                            continue;
+                        }
+
+                        bool parent_ready = false;
+
+                        if (is_zero_share_id(
+                                connected->share.parent_id)) {
+                            parent_ready = true;
+                        } else {
+                            const ConnectedShare* parent =
+                                chain_.find(
+                                    connected->share.parent_id);
+
+                            parent_ready =
+                                parent != nullptr &&
+                                parent->validated_ancestry;
+                        }
+
+                        if (!parent_ready) {
+                            continue;
+                        }
+
+                        const ReplayFrontierKey attempt_key{
+                            peer.node_id,
+                            candidate_id,
+                        };
+
+                        if (replay_frontier_attempts_.contains(
+                                attempt_key)) {
+                            continue;
+                        }
+
+                        const Share candidate =
+                            connected->share;
+
+                        --frontier_budget;
+
+                        const bool handled_locally =
+                            attempt_local_historical(
+                                candidate,
+                                peer,
+                                kP2pCapabilityShareSync);
+
+                        if (handled_locally) {
+                            replay_frontier_attempts_.
+                                insert_or_assign(
+                                    attempt_key,
+                                    now);
+
+                            replay_frontier_connected =
+                                replay_frontier_connected ||
+                                result.
+                                    historical_share_connected;
+
+                            // Parent-first local recovery may expose the next
+                            // child immediately. Continue the bounded scan
+                            // unless the trust crossing itself scheduled a
+                            // required protocol reply.
+                            continue;
+                        }
+
+                        const MiningWorkKey work_key{
+                            candidate.zano_height,
+                            candidate.mining_header_hash,
+                        };
+
+                        auto work_request =
+                            work_retrieval_->begin(
+                                peer,
+                                work_key,
+                                now);
+
+                        if (work_request.has_value()) {
+                            replay_frontier_attempts_.
+                                insert_or_assign(
+                                    attempt_key,
+                                    now);
+
+                            followup =
+                                std::move(work_request);
+                            followup_peer =
+                                peer.node_id;
+
+                            remember_pending_historical(
+                                peer,
+                                candidate,
+                                kP2pCapabilityShareSync,
+                                now);
+                        }
+
+                        // Network evidence remains serialized. If begin()
+                        // could not start a request, leave the frontier
+                        // unmarked so a later protocol event may retry.
+                        break;
+                    }
+
+                    replay_frontier_connected =
+                        replay_frontier_connected ||
+                        result.historical_share_connected;
+                }
+            }
+
+            // Frontier scheduling is ancillary to the outer protocol message.
+            // Do not overwrite its share/trust diagnostics or persistence
+            // semantics. Preserve only the fact that replay trust advanced so
+            // the runtime requests a canonical payout/template refresh.
+            result = outer_result;
+            result.historical_share_connected =
+                result.historical_share_connected ||
+                replay_frontier_connected;
         }
 
         const std::uint32_t penalty = p2p_node_message_penalty(result);
