@@ -78,6 +78,12 @@ struct P2pHistoricalRetrySummary {
     std::size_t remaining{};
 };
 
+struct P2pReplayRecoverySummary {
+    std::size_t attempted{};
+    std::size_t connected{};
+    std::size_t remaining{};
+};
+
 [[nodiscard]] std::uint32_t p2p_node_message_penalty(
     const P2pNodeMessageResult& result) noexcept;
 
@@ -109,6 +115,16 @@ public:
     // therefore reruns the complete historical trust crossing.
     [[nodiscard]] P2pHistoricalRetrySummary
     retry_historical_pow_unavailable(
+        P2pRuntime& runtime,
+        std::uint64_t now,
+        ProgPowZContextMode mode = ProgPowZContextMode::Light);
+
+    // Periodic runtime entry point for durable replay recovery. It selects
+    // one eligible frontier using a currently live authenticated ShareSync
+    // peer, then re-enters the normal ShareResponse historical-trust path.
+    // No transport trust or historical authority is synthesized here.
+    [[nodiscard]] P2pReplayRecoverySummary
+    advance_replay_recovery(
         P2pRuntime& runtime,
         std::uint64_t now,
         ProgPowZContextMode mode = ProgPowZContextMode::Light);

@@ -1628,6 +1628,11 @@ int main(int argc, char** argv) {
                 bool historical_retry_attempted = false;
                 bool historical_retry_requires_rebuild = false;
 
+                zano_p2pool::P2pReplayRecoverySummary
+                    replay_recovery;
+                bool replay_recovery_attempted = false;
+                bool replay_recovery_requires_rebuild = false;
+
                 const auto retry_historical_pow =
                     [&] {
                         historical_retry_attempted = true;
@@ -1690,6 +1695,50 @@ int main(int argc, char** argv) {
                         }
                     };
 
+                const auto advance_replay_recovery =
+                    [&] {
+                        replay_recovery_attempted = true;
+
+                        if (!p2p_runtime) {
+                            return;
+                        }
+
+                        try {
+                            replay_recovery =
+                                p2p_protocol.
+                                    advance_replay_recovery(
+                                        *p2p_runtime,
+                                        unix_time_seconds(),
+                                        zano_p2pool::
+                                            ProgPowZContextMode::Light);
+
+                            replay_recovery_requires_rebuild =
+                                replay_recovery.connected != 0;
+
+                            if (replay_recovery.attempted != 0 ||
+                                replay_recovery.connected != 0) {
+                                std::cerr
+                                    << "Replay recovery tick: attempted="
+                                    << replay_recovery.attempted
+                                    << " connected="
+                                    << replay_recovery.connected
+                                    << " remaining="
+                                    << replay_recovery.remaining
+                                    << '\n';
+                            }
+                        } catch (const std::exception& e) {
+                            // As with historical PoW retry, handle() may have
+                            // connected earlier replay descendants before a
+                            // later local/RPC failure. Force the payout rebuild
+                            // before publishing miner work.
+                            replay_recovery_requires_rebuild = true;
+
+                            std::cerr
+                                << "Replay recovery tick deferred: "
+                                << e.what() << '\n';
+                        }
+                    };
+
                 // If the daemon template itself is unchanged, this successful
                 // RPC refresh is still an opportunity for historical PoW
                 // authority to have become available. Only preserve the old
@@ -1697,7 +1746,10 @@ int main(int argc, char** argv) {
                 // trust state.
                 if (!forced_refresh && !daemon_changed) {
                     retry_historical_pow();
-                    if (!historical_retry_requires_rebuild) {
+                    advance_replay_recovery();
+
+                    if (!historical_retry_requires_rebuild &&
+                        !replay_recovery_requires_rebuild) {
                         continue;
                     }
                 }
@@ -1853,6 +1905,10 @@ int main(int argc, char** argv) {
                 // ancestry before retrying historical candidates.
                 if (!historical_retry_attempted) {
                     retry_historical_pow();
+                }
+
+                if (!replay_recovery_attempted) {
+                    advance_replay_recovery();
                 }
 
                 // Rebuild only after any displaced ancestry has been removed

@@ -366,6 +366,186 @@ P2pNodeProtocol::retry_historical_pow_unavailable(
     return summary;
 }
 
+P2pReplayRecoverySummary
+P2pNodeProtocol::advance_replay_recovery(
+    P2pRuntime& runtime,
+    std::uint64_t now,
+    ProgPowZContextMode mode) {
+
+    P2pReplayRecoverySummary summary;
+
+    // retry_historical_pow_unavailable() already establishes the precedent
+    // that autonomous local recovery may re-enter handle() with a synthetic
+    // ShareResponse while preserving the real authenticated peer identity.
+    // Do the same for structurally replayed frontiers, but select that identity
+    // only from connections the transport currently reports as live.
+    const std::vector<P2pHandshake> peers =
+        runtime.peer_handshakes();
+
+    for (const P2pHandshake& peer : peers) {
+        if ((peer.capabilities &
+             kP2pCapabilityShareSync) == 0) {
+            continue;
+        }
+
+        std::optional<Share> candidate;
+        std::optional<ReplayFrontierKey> attempt_key;
+
+        {
+            std::lock_guard lock(state_mutex_);
+            expire_historical_state(now);
+
+            if (!work_retrieval_ ||
+                !historical_trust_sources_ready_unlocked()) {
+                break;
+            }
+
+            std::vector<ShareId> replay_ids =
+                chain_.connected_share_ids();
+
+            std::sort(
+                replay_ids.begin(),
+                replay_ids.end(),
+                [this](const ShareId& left,
+                       const ShareId& right) {
+                    const ConnectedShare* lhs =
+                        chain_.find(left);
+                    const ConnectedShare* rhs =
+                        chain_.find(right);
+
+                    if (lhs == nullptr ||
+                        rhs == nullptr) {
+                        throw std::logic_error(
+                            "connected replay share disappeared "
+                            "during periodic recovery scheduling");
+                    }
+
+                    if (lhs->share.share_height !=
+                        rhs->share.share_height) {
+                        return lhs->share.share_height <
+                               rhs->share.share_height;
+                    }
+
+                    return left < right;
+                });
+
+            for (const ShareId& candidate_id :
+                 replay_ids) {
+                const ConnectedShare* connected =
+                    chain_.find(candidate_id);
+
+                if (connected == nullptr ||
+                    connected->validated_ancestry) {
+                    continue;
+                }
+
+                bool parent_ready = false;
+
+                if (is_zero_share_id(
+                        connected->share.parent_id)) {
+                    parent_ready = true;
+                } else {
+                    const ConnectedShare* parent =
+                        chain_.find(
+                            connected->share.parent_id);
+
+                    parent_ready =
+                        parent != nullptr &&
+                        parent->validated_ancestry;
+                }
+
+                if (!parent_ready) {
+                    continue;
+                }
+
+                const ReplayFrontierKey key{
+                    peer.node_id,
+                    candidate_id,
+                };
+
+                if (replay_frontier_attempts_.contains(
+                        key)) {
+                    continue;
+                }
+
+                candidate = connected->share;
+                attempt_key = key;
+
+                // Reserve this exact peer/frontier before re-entering handle().
+                // handle() may itself expose more replay work, and this keeps
+                // the selected frontier from being immediately selected again
+                // by the ancillary scheduler at the end of that same pass.
+                replay_frontier_attempts_.
+                    insert_or_assign(
+                        key,
+                        now);
+
+                break;
+            }
+        }
+
+        if (!candidate.has_value() ||
+            !attempt_key.has_value()) {
+            continue;
+        }
+
+        ++summary.attempted;
+
+        try {
+            const ShareId candidate_id =
+                share_id(*candidate);
+
+            const P2pEnvelope replay =
+                make_p2p_share_response_envelope(
+                    candidate_id,
+                    &*candidate);
+
+            const P2pNodeMessageResult result =
+                handle(
+                    runtime,
+                    peer,
+                    replay,
+                    now,
+                    mode);
+
+            if (result.historical_share_connected) {
+                ++summary.connected;
+            }
+        } catch (...) {
+            // Exceptional local/RPC failure did not complete the periodic
+            // attempt. Remove the reservation so a later refresh may retry
+            // immediately rather than waiting for the normal attempt timeout.
+            std::lock_guard lock(state_mutex_);
+            replay_frontier_attempts_.erase(
+                *attempt_key);
+            throw;
+        }
+
+        // Keep one explicit periodic trigger bounded. handle() may itself
+        // advance additional immediately eligible local frontiers using the
+        // existing kMiningWorkMaxPending budget.
+        break;
+    }
+
+    {
+        std::lock_guard lock(state_mutex_);
+        expire_historical_state(now);
+
+        for (const ShareId& id :
+             chain_.connected_share_ids()) {
+            const ConnectedShare* connected =
+                chain_.find(id);
+
+            if (connected != nullptr &&
+                !connected->validated_ancestry) {
+                ++summary.remaining;
+            }
+        }
+    }
+
+    return summary;
+}
+
 std::optional<P2pEnvelope>
 P2pNodeProtocol::initial_sync_request(
     const P2pHandshake& peer) {

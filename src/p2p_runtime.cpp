@@ -341,6 +341,25 @@ std::size_t P2pRuntime::peer_count() const noexcept {
         }));
 }
 
+std::vector<P2pHandshake>
+P2pRuntime::peer_handshakes() const {
+    std::vector<P2pHandshake> result;
+
+    std::lock_guard lock(peers_mutex_);
+    result.reserve(peers_.size());
+
+    for (const auto& peer : peers_) {
+        if (!peer->alive.load()) {
+            continue;
+        }
+
+        result.push_back(
+            peer->connection.peer_handshake());
+    }
+
+    return result;
+}
+
 void P2pRuntime::accept_loop() noexcept {
     while (running_.load()) {
         try {

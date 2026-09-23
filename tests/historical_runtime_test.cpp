@@ -640,6 +640,9 @@ struct RecursiveParentSyncResult {
     bool child_validated{false};
     bool unadvertised_fork_present{false};
     bool unadvertised_fork_validated{false};
+    bool idle_frontier_present{false};
+    bool idle_frontier_validated{false};
+    P2pReplayRecoverySummary idle_recovery{};
     int lookup_calls{};
     int observation_loads{};
     int work_requests{};
@@ -651,7 +654,8 @@ run_recursive_parent_sync_case(
     bool replay_existing = false,
     bool stale_provider_handshake = false,
     bool advance_recovery_clock = false,
-    bool add_unadvertised_fork = false) {
+    bool add_unadvertised_fork = false,
+    bool inject_idle_frontier = false) {
     TemporaryDirectory temp("zano-historical-parent-sync");
     RuntimeFixture fixture = make_runtime_fixture();
 
@@ -1017,6 +1021,49 @@ run_recursive_parent_sync_case(
                 1s));
     }
 
+    std::optional<ShareId> idle_frontier_id;
+    P2pReplayRecoverySummary idle_recovery;
+
+    if (replay_existing &&
+        inject_idle_frontier &&
+        completed.load() &&
+        !failed.load()) {
+
+        // Inject a structurally replayed branch only after normal peer-driven
+        // recovery has gone quiet. Its exact payout parent is the already
+        // validated fixture base and the receiver already owns the immutable
+        // mining-work proposal, so one periodic replay tick should be enough
+        // to cross trust without requiring a new inbound P2P message.
+        Share idle = fixture.candidate;
+        idle.parent_id = base_id;
+        idle.share_height = 1;
+        idle.timestamp = 251;
+        idle.nonce = 251;
+
+        idle_frontier_id = share_id(idle);
+
+        {
+            std::lock_guard lock(receiver_state_mutex);
+
+            CHECK(receiver_chain.add_share_unchecked(
+                      idle).disposition ==
+                  ShareDisposition::Connected);
+
+            const ConnectedShare* replayed_idle =
+                receiver_chain.find(
+                    *idle_frontier_id);
+
+            CHECK(replayed_idle != nullptr);
+            CHECK(!replayed_idle->validated_ancestry);
+        }
+
+        idle_recovery =
+            receiver_node.advance_replay_recovery(
+                receiver_runtime,
+                260,
+                ProgPowZContextMode::Light);
+    }
+
     receiver_runtime.stop();
     provider_runtime.stop();
 
@@ -1086,7 +1133,21 @@ run_recursive_parent_sync_case(
                 connected_fork != nullptr &&
                 connected_fork->validated_ancestry;
         }
+
+        if (idle_frontier_id.has_value()) {
+            const ConnectedShare* connected_idle =
+                receiver_chain.find(
+                    *idle_frontier_id);
+
+            result.idle_frontier_present =
+                connected_idle != nullptr;
+            result.idle_frontier_validated =
+                connected_idle != nullptr &&
+                connected_idle->validated_ancestry;
+        }
     }
+
+    result.idle_recovery = idle_recovery;
 
     return result;
 }
@@ -1493,6 +1554,28 @@ int main() {
     // The second replay frontier already has exact immutable local work, so
     // recovering it must not require downloading identical work from the peer.
     CHECK(multi_frontier.work_requests == 0);
+
+    // Runtime-liveness regression from the 42a20c5 soak. After peer-driven
+    // recovery goes quiet, a newly eligible durable replay frontier must still
+    // be advanced by the node's periodic runtime tick; waiting for another
+    // inbound P2P message can otherwise leave Stratum gated indefinitely.
+    const RecursiveParentSyncResult idle_tick =
+        run_recursive_parent_sync_case(
+            true,   // unchecked durable replay already exists
+            false,  // current provider handshake tip
+            false,  // normal recovery clock
+            false,  // no earlier unadvertised fork
+            true);  // inject replay frontier after peer traffic goes quiet
+
+    CHECK(!idle_tick.failed);
+    CHECK(idle_tick.completed);
+    CHECK(idle_tick.idle_frontier_present);
+
+    // One periodic tick must advance the quiet eligible replay frontier.
+    CHECK(idle_tick.idle_recovery.attempted == 1);
+    CHECK(idle_tick.idle_recovery.connected == 1);
+    CHECK(idle_tick.idle_recovery.remaining == 0);
+    CHECK(idle_tick.idle_frontier_validated);
 
     // Regression from the multinode soak: ancestry recovery is serial. A
     // healthy peer can therefore spend longer than the mining-work request
