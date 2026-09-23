@@ -1215,6 +1215,28 @@ int main(int argc, char** argv) {
                             }
                         }
 
+                        if (result.historical_pruned_connected_shares != 0) {
+                            std::cerr
+                                << "P2P historical replay prune: pruned-connected="
+                                << result.historical_pruned_connected_shares;
+
+                            if (result.historical_attempt_share_id.has_value()) {
+                                std::cerr
+                                    << " attempt-share="
+                                    << zano_p2pool::hash_to_hex(
+                                           *result.historical_attempt_share_id);
+                            }
+
+                            if (result.historical_attempt_parent_id.has_value()) {
+                                std::cerr
+                                    << " attempt-parent="
+                                    << zano_p2pool::hash_to_hex(
+                                           *result.historical_attempt_parent_id);
+                            }
+
+                            std::cerr << '\n';
+                        }
+
                         const std::vector<zano_p2pool::Share>
                             admitted_shares =
                                 zano_p2pool::p2p_node_unique_admitted_shares(
