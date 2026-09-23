@@ -297,6 +297,121 @@ int main() {
         });
     }
 
+    // Regression for the production PPLNS parent-snapshot race:
+    //
+    // A block template can be constructed while sidechain parent A is the
+    // payout-authoritative tip. If parent B connects before a miner job is
+    // issued, the already-built template must remain bound to A. Resampling B
+    // would pair A's encoded payout amounts with B as the resulting share
+    // parent, which historical payout verification correctly rejects.
+    {
+        StratumSessionRegistry snapshot_registry(config);
+
+        const std::uint64_t snapshot_session =
+            snapshot_registry.create_session();
+
+        StratumLogin snapshot_login;
+        snapshot_login.username =
+            "parent-snapshot-regression";
+
+        snapshot_registry.login(
+            snapshot_session,
+            snapshot_login);
+
+        ShareId parent_a{};
+        parent_a[31] = 0x41;
+
+        ShareId parent_b{};
+        parent_b[31] = 0x42;
+
+        const StratumShareParentBinding binding_a{
+            parent_a,
+            41,
+        };
+
+        const StratumShareParentBinding binding_b{
+            parent_b,
+            42,
+        };
+
+        CHECK(
+            snapshot_registry.publish_template(
+                header1,
+                seed1,
+                165015,
+                network1,
+                binding_a) == 1);
+
+        CHECK(
+            snapshot_registry.current_template() !=
+            nullptr);
+
+        CHECK(
+            snapshot_registry
+                .current_template()
+                ->parent_binding ==
+            std::optional<
+                StratumShareParentBinding>{
+                    binding_a});
+
+        const StratumIssuedWork work_a =
+            snapshot_registry.issue_work(
+                snapshot_session);
+
+        CHECK(work_a.job_version == 1);
+
+        CHECK(
+            work_a.parent_binding ==
+            std::optional<
+                StratumShareParentBinding>{
+                    binding_a});
+
+        // Simulate the old behavior after the sidechain tip advanced from A
+        // to B: a caller attempts to substitute B while issuing work for the
+        // still-current A-built template. This must fail closed.
+        expect_runtime_error([&] {
+            static_cast<void>(
+                snapshot_registry.issue_work(
+                    snapshot_session,
+                    std::nullopt,
+                    binding_b));
+        });
+
+        CHECK(
+            snapshot_registry
+                .current_template()
+                ->parent_binding ==
+            std::optional<
+                StratumShareParentBinding>{
+                    binding_a});
+
+        // Once the node actually rebuilds/publishes the template against B,
+        // B becomes valid and receives a new immutable job generation.
+        CHECK(
+            snapshot_registry.publish_template(
+                header1,
+                seed1,
+                165015,
+                network1,
+                binding_b) == 2);
+
+        const StratumIssuedWork work_b =
+            snapshot_registry.issue_work(
+                snapshot_session);
+
+        CHECK(work_b.job_version == 2);
+
+        CHECK(
+            work_b.parent_binding ==
+            std::optional<
+                StratumShareParentBinding>{
+                    binding_b});
+
+        CHECK(
+            work_a.parent_binding !=
+            work_b.parent_binding);
+    }
+
     // Session/template misuse fails closed.
     expect_runtime_error([&] {
         (void)registry.issue_work(9999);
