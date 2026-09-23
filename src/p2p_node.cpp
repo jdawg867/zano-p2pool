@@ -519,6 +519,8 @@ P2pNodeProtocol::advance_replay_recovery(
                 result.historical_anchor_status;
             summary.historical_payout_status =
                 result.historical_payout_status;
+            summary.pruned_connected_shares +=
+                result.historical_pruned_connected_shares;
 
             if (result.historical_share_connected) {
                 ++summary.connected;
@@ -725,6 +727,49 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
                      trust.final_anchor.status ==
                          HistoricalAnchorStatus::
                              CanonicalPowContextUnavailable);
+
+                const bool stable_parent_mismatch =
+                    trust.status ==
+                        HistoricalTrustStatus::AnchorRejected &&
+                    trust.initial_anchor.status ==
+                        HistoricalAnchorStatus::ParentMismatch;
+
+                if (stable_parent_mismatch) {
+                    const ConnectedShare* replayed =
+                        chain_.find(candidate_id);
+
+                    if (replayed != nullptr &&
+                        !replayed->validated_ancestry) {
+                        const std::size_t pruned =
+                            chain_.prune_connected_subtree(
+                                candidate_id);
+
+                        result.
+                            historical_pruned_connected_shares +=
+                                pruned;
+
+                        if (pruned != 0) {
+                            // A structural replay branch can temporarily win
+                            // best-tip selection before it crosses historical
+                            // trust. Once canonical Zano history proves that
+                            // branch stale, invalidate all payout expectations
+                            // derived from the previous in-memory topology.
+                            expected_payout_.reset();
+                            expected_payout_plan_.reset();
+                            expected_payout_parent_id_.reset();
+
+                            const P2pTipHint current_tip =
+                                p2p_tip_hint_from_chain(chain_);
+
+                            if (!is_zero_share_id(
+                                    current_tip.share_id)) {
+                                relay_tip =
+                                    make_p2p_tip_announce_envelope(
+                                        current_tip);
+                            }
+                        }
+                    }
+                }
 
                 if (parent_blocked) {
                     retryable_historical_.erase(candidate_id);
@@ -1011,9 +1056,13 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
                          HistoricalAnchorStatus::
                              CanonicalPowContextUnavailable);
 
+                const bool replay_parent_mismatch_pruned =
+                    result.historical_pruned_connected_shares != 0;
+
                 return trusted ||
                        parent_blocked ||
-                       canonical_pow_temporarily_unavailable;
+                       canonical_pow_temporarily_unavailable ||
+                       replay_parent_mismatch_pruned;
             };
 
         switch (envelope.type) {

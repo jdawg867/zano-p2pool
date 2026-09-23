@@ -655,7 +655,8 @@ run_recursive_parent_sync_case(
     bool stale_provider_handshake = false,
     bool advance_recovery_clock = false,
     bool add_unadvertised_fork = false,
-    bool inject_idle_frontier = false) {
+    bool inject_idle_frontier = false,
+    bool inject_idle_parent_mismatch = false) {
     TemporaryDirectory temp("zano-historical-parent-sync");
     RuntimeFixture fixture = make_runtime_fixture();
 
@@ -822,6 +823,8 @@ run_recursive_parent_sync_case(
 
     std::atomic<int> lookup_calls{0};
     std::atomic<int> observation_loads{0};
+    std::atomic<bool> force_parent_mismatch{false};
+
     receiver_node.set_historical_trust_sources(
         fixture.params,
         [&receiver_archive, &observation_loads] {
@@ -829,12 +832,23 @@ run_recursive_parent_sync_case(
             return load_local_mining_anchors(
                 receiver_archive);
         },
-        [&fixture, &lookup_calls](std::uint64_t height) {
+        [&fixture,
+         &lookup_calls,
+         &force_parent_mismatch](std::uint64_t height) {
             ++lookup_calls;
             CHECK(height == fixture.proposal.zano_height - 1);
+
+            Hash256 canonical_parent =
+                fixture.proposal.prev_hash;
+
+            if (force_parent_mismatch.load()) {
+                canonical_parent[0] ^=
+                    static_cast<std::uint8_t>(0x80);
+            }
+
             return RpcCanonicalHeader{
                 height,
-                fixture.proposal.prev_hash,
+                canonical_parent,
             };
         },
         [&fixture](std::uint64_t height)
@@ -1025,7 +1039,8 @@ run_recursive_parent_sync_case(
     P2pReplayRecoverySummary idle_recovery;
 
     if (replay_existing &&
-        inject_idle_frontier &&
+        (inject_idle_frontier ||
+         inject_idle_parent_mismatch) &&
         completed.load() &&
         !failed.load()) {
 
@@ -1057,6 +1072,10 @@ run_recursive_parent_sync_case(
             CHECK(!replayed_idle->validated_ancestry);
         }
 
+        if (inject_idle_parent_mismatch) {
+            force_parent_mismatch.store(true);
+        }
+
         idle_recovery =
             receiver_node.advance_replay_recovery(
                 receiver_runtime,
@@ -1071,10 +1090,29 @@ run_recursive_parent_sync_case(
             idle_recovery.attempted_parent_id ==
             std::optional<ShareId>{base_id});
 
-        CHECK(
-            idle_recovery.historical_trust_status ==
-            std::optional<HistoricalTrustStatus>{
-                HistoricalTrustStatus::Trusted});
+        if (inject_idle_parent_mismatch) {
+            CHECK(
+                idle_recovery.historical_trust_status ==
+                std::optional<HistoricalTrustStatus>{
+                    HistoricalTrustStatus::AnchorRejected});
+
+            CHECK(
+                idle_recovery.historical_anchor_status ==
+                std::optional<HistoricalAnchorStatus>{
+                    HistoricalAnchorStatus::ParentMismatch});
+
+            CHECK(
+                idle_recovery.
+                    pruned_connected_shares == 1);
+
+            CHECK(idle_recovery.connected == 0);
+            CHECK(idle_recovery.remaining == 0);
+        } else {
+            CHECK(
+                idle_recovery.historical_trust_status ==
+                std::optional<HistoricalTrustStatus>{
+                    HistoricalTrustStatus::Trusted});
+        }
     }
 
     receiver_runtime.stop();
@@ -1589,6 +1627,48 @@ int main() {
     CHECK(idle_tick.idle_recovery.connected == 1);
     CHECK(idle_tick.idle_recovery.remaining == 0);
     CHECK(idle_tick.idle_frontier_validated);
+
+    // Production regression from the 59222d9 diagnostic soak. Once ordinary
+    // replay recovery has established a validated parent, a remaining durable
+    // frontier can independently prove that its archived Zano parent is no
+    // longer canonical. That result is terminal for the active in-memory
+    // replay branch: prune it rather than retrying ParentMismatch forever.
+    const RecursiveParentSyncResult idle_parent_mismatch =
+        run_recursive_parent_sync_case(
+            true,   // unchecked durable replay already exists
+            false,  // current provider handshake tip
+            false,  // normal recovery clock
+            false,  // no earlier unadvertised fork
+            false,  // do not inject the ordinary trusted idle case
+            true);  // inject idle frontier with canonical-parent mismatch
+
+    CHECK(!idle_parent_mismatch.failed);
+    CHECK(idle_parent_mismatch.completed);
+
+    CHECK(
+        idle_parent_mismatch.idle_recovery.attempted == 1);
+    CHECK(
+        idle_parent_mismatch.idle_recovery.connected == 0);
+    CHECK(
+        idle_parent_mismatch.idle_recovery.
+            pruned_connected_shares == 1);
+    CHECK(
+        idle_parent_mismatch.idle_recovery.remaining == 0);
+
+    CHECK(
+        idle_parent_mismatch.idle_recovery.
+            historical_trust_status ==
+        std::optional<HistoricalTrustStatus>{
+            HistoricalTrustStatus::AnchorRejected});
+
+    CHECK(
+        idle_parent_mismatch.idle_recovery.
+            historical_anchor_status ==
+        std::optional<HistoricalAnchorStatus>{
+            HistoricalAnchorStatus::ParentMismatch});
+
+    CHECK(!idle_parent_mismatch.idle_frontier_present);
+    CHECK(!idle_parent_mismatch.idle_frontier_validated);
 
     // Regression from the multinode soak: ancestry recovery is serial. A
     // healthy peer can therefore spend longer than the mining-work request

@@ -1237,7 +1237,8 @@ int main(int argc, char** argv) {
                             result.share_status ==
                                 zano_p2pool::P2pShareReceiveStatus::Connected;
                         if (direct_share_connected ||
-                            result.historical_share_connected) {
+                            result.historical_share_connected ||
+                            result.historical_pruned_connected_shares != 0) {
                             request_template_refresh();
                         }
 
@@ -1713,7 +1714,9 @@ int main(int argc, char** argv) {
                                             ProgPowZContextMode::Light);
 
                             replay_recovery_requires_rebuild =
-                                replay_recovery.connected != 0;
+                                replay_recovery.connected != 0 ||
+                                replay_recovery.
+                                    pruned_connected_shares != 0;
 
                             if (replay_recovery.attempted != 0 ||
                                 replay_recovery.connected != 0) {
@@ -1722,6 +1725,9 @@ int main(int argc, char** argv) {
                                     << replay_recovery.attempted
                                     << " connected="
                                     << replay_recovery.connected
+                                    << " pruned="
+                                    << replay_recovery.
+                                           pruned_connected_shares
                                     << " remaining="
                                     << replay_recovery.remaining;
 

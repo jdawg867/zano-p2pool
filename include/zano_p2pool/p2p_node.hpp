@@ -66,6 +66,12 @@ struct P2pNodeMessageResult {
     std::vector<Share> historical_admitted_shares;
     bool historical_share_retried{false};
     bool historical_share_connected{false};
+
+    // Connected structural replay records removed after local canonical
+    // history decisively proves their Zano parent is no longer canonical.
+    // Persistence is intentionally untouched.
+    std::size_t historical_pruned_connected_shares{0};
+
     bool sent_followup{false};
     bool relayed_share{false};
     bool relayed_tip{false};
@@ -81,6 +87,7 @@ struct P2pHistoricalRetrySummary {
 struct P2pReplayRecoverySummary {
     std::size_t attempted{};
     std::size_t connected{};
+    std::size_t pruned_connected_shares{};
     std::size_t remaining{};
 
     // Diagnostic identity/status for the exact frontier selected by this
