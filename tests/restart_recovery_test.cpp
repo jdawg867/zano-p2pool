@@ -273,6 +273,7 @@ int main() {
     CHECK(recovered.missing_local_work == 1);
     CHECK(recovered.parent_unvalidated == 0);
     CHECK(recovered.rejected == 0);
+    CHECK(recovered.pruned_connected_shares == 0);
     CHECK(lookup_calls == 8);
 
     CHECK(chain.find(root_id)->validated_ancestry);
@@ -294,6 +295,7 @@ int main() {
     CHECK(second.already_validated == 2);
     CHECK(second.missing_local_work == 1);
     CHECK(second.rejected == 0);
+    CHECK(second.pruned_connected_shares == 0);
     CHECK(lookup_calls == 0);
 
     // Live-running parent-replacement regression. This chain has already
@@ -380,6 +382,10 @@ int main() {
     CHECK(failed.rejected == 1);
     CHECK(failed.parent_unvalidated == 1);
     CHECK(failed.missing_local_work == 0);
+
+    // root + child are removed as one stale-parent subtree.
+    CHECK(failed.pruned_connected_shares == 2);
+
     CHECK(lookup_calls == 2);
 
     // A stable canonical-parent mismatch in this recovery snapshot is not

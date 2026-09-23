@@ -174,8 +174,8 @@ RestartRecoveryResult recover_replayed_history(
     // independently shown to reference a different current canonical parent.
     // ShareStore and MiningWorkArchive persistence are deliberately untouched.
     for (const ShareId& root_id : parent_mismatch_roots) {
-        static_cast<void>(
-            chain.prune_connected_subtree(root_id));
+        result.pruned_connected_shares +=
+            chain.prune_connected_subtree(root_id);
     }
 
     return result;

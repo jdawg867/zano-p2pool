@@ -19,6 +19,10 @@ struct RestartRecoveryResult {
     std::size_t missing_local_work{0};
     std::size_t parent_unvalidated{0};
     std::size_t rejected{0};
+
+    // Connected structural replay records removed because stable canonical
+    // Zano history proved a replay root referenced a stale parent.
+    std::size_t pruned_connected_shares{0};
 };
 
 // Revalidates connected persistence-replay history in explicit parent-first

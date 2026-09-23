@@ -980,6 +980,8 @@ int main(int argc, char** argv) {
                     << restart_recovery.parent_unvalidated
                     << " rejected="
                     << restart_recovery.rejected
+                    << " pruned="
+                    << restart_recovery.pruned_connected_shares
                     << '\n';
             } catch (const std::exception& e) {
                 // Recovery is an upgrade of replayed history, not permission to
