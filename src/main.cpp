@@ -1723,8 +1723,57 @@ int main(int argc, char** argv) {
                                     << " connected="
                                     << replay_recovery.connected
                                     << " remaining="
-                                    << replay_recovery.remaining
-                                    << '\n';
+                                    << replay_recovery.remaining;
+
+                                if (replay_recovery.
+                                        attempted_share_id.has_value()) {
+                                    std::cerr
+                                        << " attempt-share="
+                                        << zano_p2pool::hash_to_hex(
+                                               *replay_recovery.
+                                                    attempted_share_id);
+                                }
+
+                                if (replay_recovery.
+                                        attempted_parent_id.has_value()) {
+                                    std::cerr
+                                        << " attempt-parent="
+                                        << zano_p2pool::hash_to_hex(
+                                               *replay_recovery.
+                                                    attempted_parent_id);
+                                }
+
+                                if (replay_recovery.
+                                        historical_trust_status.has_value()) {
+                                    std::cerr
+                                        << " historical-trust="
+                                        << zano_p2pool::
+                                               historical_trust_status_name(
+                                                   *replay_recovery.
+                                                        historical_trust_status);
+                                }
+
+                                if (replay_recovery.
+                                        historical_anchor_status.has_value()) {
+                                    std::cerr
+                                        << " anchor="
+                                        << zano_p2pool::
+                                               historical_anchor_status_name(
+                                                   *replay_recovery.
+                                                        historical_anchor_status);
+                                }
+
+                                if (replay_recovery.
+                                        historical_payout_status.has_value()) {
+                                    std::cerr
+                                        << " payout="
+                                        << zano_p2pool::
+                                               historical_payout_status_name(
+                                                   *replay_recovery.
+                                                        historical_payout_status);
+                                }
+
+                                std::cerr << '\n';
                             }
                         } catch (const std::exception& e) {
                             // As with historical PoW retry, handle() may have

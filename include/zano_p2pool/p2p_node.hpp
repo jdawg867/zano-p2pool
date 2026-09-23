@@ -82,6 +82,15 @@ struct P2pReplayRecoverySummary {
     std::size_t attempted{};
     std::size_t connected{};
     std::size_t remaining{};
+
+    // Diagnostic identity/status for the exact frontier selected by this
+    // periodic pass. These fields report existing trust results only; they do
+    // not create or modify trust.
+    std::optional<ShareId> attempted_share_id;
+    std::optional<ShareId> attempted_parent_id;
+    std::optional<HistoricalTrustStatus> historical_trust_status;
+    std::optional<HistoricalAnchorStatus> historical_anchor_status;
+    std::optional<HistoricalPayoutStatus> historical_payout_status;
 };
 
 [[nodiscard]] std::uint32_t p2p_node_message_penalty(

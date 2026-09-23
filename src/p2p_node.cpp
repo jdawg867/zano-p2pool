@@ -491,10 +491,15 @@ P2pNodeProtocol::advance_replay_recovery(
 
         ++summary.attempted;
 
-        try {
-            const ShareId candidate_id =
-                share_id(*candidate);
+        const ShareId candidate_id =
+            share_id(*candidate);
 
+        summary.attempted_share_id =
+            candidate_id;
+        summary.attempted_parent_id =
+            candidate->parent_id;
+
+        try {
             const P2pEnvelope replay =
                 make_p2p_share_response_envelope(
                     candidate_id,
@@ -507,6 +512,13 @@ P2pNodeProtocol::advance_replay_recovery(
                     replay,
                     now,
                     mode);
+
+            summary.historical_trust_status =
+                result.historical_trust_status;
+            summary.historical_anchor_status =
+                result.historical_anchor_status;
+            summary.historical_payout_status =
+                result.historical_payout_status;
 
             if (result.historical_share_connected) {
                 ++summary.connected;

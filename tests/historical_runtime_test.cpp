@@ -1062,6 +1062,19 @@ run_recursive_parent_sync_case(
                 receiver_runtime,
                 260,
                 ProgPowZContextMode::Light);
+
+        CHECK(
+            idle_recovery.attempted_share_id ==
+            idle_frontier_id);
+
+        CHECK(
+            idle_recovery.attempted_parent_id ==
+            std::optional<ShareId>{base_id});
+
+        CHECK(
+            idle_recovery.historical_trust_status ==
+            std::optional<HistoricalTrustStatus>{
+                HistoricalTrustStatus::Trusted});
     }
 
     receiver_runtime.stop();
