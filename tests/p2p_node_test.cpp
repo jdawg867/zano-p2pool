@@ -179,6 +179,64 @@ int main() {
     P2pNodeProtocol leaf_protocol(
         leaf_chain, leaf_work, leaf_mutex);
 
+    // Metrics observability must never queue behind consensus/replay work.
+    // An idle snapshot is exact; while another thread owns the shared state
+    // mutex, the nonblocking API must return immediately with no snapshot so
+    // the HTTP layer can serve its previous consistent values.
+    {
+        const auto idle_metrics =
+            provider_protocol.try_metrics_snapshot();
+
+        CHECK(idle_metrics.has_value());
+        CHECK(idle_metrics->connected_shares == 2);
+        CHECK(idle_metrics->orphan_shares == 0);
+        CHECK(idle_metrics->tip_height == child.share_height);
+        CHECK(idle_metrics->trusted_work_contexts == 2);
+
+        std::atomic<bool> mutex_held{false};
+        std::atomic<bool> release_mutex{false};
+
+        std::thread holder([&] {
+            std::lock_guard lock(provider_mutex);
+            mutex_held.store(true, std::memory_order_release);
+
+            while (!release_mutex.load(
+                       std::memory_order_acquire)) {
+                std::this_thread::yield();
+            }
+        });
+
+        CHECK(wait_for([&] {
+            return mutex_held.load(
+                std::memory_order_acquire);
+        }));
+
+        const auto started =
+            std::chrono::steady_clock::now();
+
+        const auto busy_metrics =
+            provider_protocol.try_metrics_snapshot();
+
+        const auto elapsed =
+            std::chrono::steady_clock::now() - started;
+
+        release_mutex.store(
+            true,
+            std::memory_order_release);
+
+        holder.join();
+
+        CHECK(!busy_metrics.has_value());
+        CHECK(elapsed < 100ms);
+
+        const auto recovered_metrics =
+            provider_protocol.try_metrics_snapshot();
+
+        CHECK(recovered_metrics.has_value());
+        CHECK(recovered_metrics->connected_shares == 2);
+        CHECK(recovered_metrics->trusted_work_contexts == 2);
+    }
+
     {
         Share prefix = make_parent();
         prefix.zano_height = 100;

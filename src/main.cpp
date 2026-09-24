@@ -1082,6 +1082,18 @@ int main(int argc, char** argv) {
                       live.parent_binding->parent_id}
                 : std::nullopt);
 
+        const auto initial_metrics_consensus =
+            p2p_protocol.try_metrics_snapshot();
+
+        if (!initial_metrics_consensus.has_value()) {
+            throw std::logic_error(
+                "initial metrics consensus snapshot unexpectedly busy");
+        }
+
+        zano_p2pool::P2pNodeMetricsSnapshot
+            metrics_consensus_cache =
+                *initial_metrics_consensus;
+
         std::unique_ptr<zano_p2pool::P2pRuntime> p2p_runtime;
         if (options.p2p) {
             zano_p2pool::P2pHandshake handshake;
@@ -1543,24 +1555,29 @@ int main(int argc, char** argv) {
                     snapshot.zano_height = observed_zano_height.load(
                         std::memory_order_relaxed);
 
-                    {
-                        std::lock_guard lock(node_state_mutex);
-                        snapshot.sidechain_connected_shares =
-                            node_chain.connected_size();
-                        snapshot.sidechain_orphan_shares =
-                            node_chain.orphan_size();
-                        if (const zano_p2pool::ConnectedShare* tip =
-                                node_chain.best_tip();
-                            tip != nullptr) {
-                            snapshot.sidechain_tip_height = tip->share.share_height;
-                        }
+                    // Metrics are observability only and must never queue
+                    // behind expensive replay/trust work. Refresh the cached
+                    // consensus snapshot when the state mutex is immediately
+                    // available; otherwise serve the most recent consistent
+                    // values.
+                    if (const auto current =
+                            p2p_protocol.try_metrics_snapshot();
+                        current.has_value()) {
+                        metrics_consensus_cache = *current;
                     }
+
+                    snapshot.sidechain_connected_shares =
+                        metrics_consensus_cache.connected_shares;
+                    snapshot.sidechain_orphan_shares =
+                        metrics_consensus_cache.orphan_shares;
+                    snapshot.sidechain_tip_height =
+                        metrics_consensus_cache.tip_height;
 
                     snapshot.p2p_peers = p2p_runtime
                         ? p2p_runtime->peer_count()
                         : 0;
                     snapshot.p2p_trusted_work_contexts =
-                        p2p_protocol.trusted_work_count();
+                        metrics_consensus_cache.trusted_work_contexts;
                     snapshot.stratum_connections =
                         server && server->running()
                             ? server->client_count()

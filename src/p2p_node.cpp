@@ -2124,6 +2124,27 @@ std::size_t P2pNodeProtocol::trusted_work_count() const noexcept {
     return trusted_work_.size();
 }
 
+std::optional<P2pNodeMetricsSnapshot>
+P2pNodeProtocol::try_metrics_snapshot() const noexcept {
+    std::unique_lock lock(state_mutex_, std::try_to_lock);
+
+    if (!lock.owns_lock()) {
+        return std::nullopt;
+    }
+
+    P2pNodeMetricsSnapshot snapshot;
+    snapshot.connected_shares = chain_.connected_size();
+    snapshot.orphan_shares = chain_.orphan_size();
+
+    if (const ConnectedShare* tip = chain_.best_tip();
+        tip != nullptr) {
+        snapshot.tip_height = tip->share.share_height;
+    }
+
+    snapshot.trusted_work_contexts = trusted_work_.size();
+    return snapshot;
+}
+
 std::size_t P2pNodeProtocol::connected_share_count() const noexcept {
     std::lock_guard lock(state_mutex_);
     return chain_.connected_size();

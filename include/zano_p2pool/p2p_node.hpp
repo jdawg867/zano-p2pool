@@ -77,6 +77,13 @@ struct P2pNodeMessageResult {
     bool relayed_tip{false};
 };
 
+struct P2pNodeMetricsSnapshot {
+    std::size_t connected_shares{};
+    std::size_t orphan_shares{};
+    std::uint64_t tip_height{};
+    std::size_t trusted_work_contexts{};
+};
+
 struct P2pHistoricalRetrySummary {
     std::size_t attempted{};
     std::size_t trusted{};
@@ -186,6 +193,13 @@ public:
     void clear_expected_payout() noexcept;
 
     [[nodiscard]] std::size_t trusted_work_count() const noexcept;
+
+    // Metrics must never delay consensus/replay processing. Return a
+    // consistent node-state snapshot only when the consensus mutex is
+    // immediately available; callers may serve their previous snapshot when
+    // recovery currently owns the state.
+    [[nodiscard]] std::optional<P2pNodeMetricsSnapshot>
+    try_metrics_snapshot() const noexcept;
 
     // Snapshot of Zano heights for trusted work carrying independently
     // established canonical-parent provenance.
