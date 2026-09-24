@@ -1012,6 +1012,9 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
                     now,
                 };
 
+                const std::size_t pruned_before =
+                    result.historical_pruned_connected_shares;
+
                 const auto connected =
                     attempt_historical(
                         candidate_share,
@@ -1057,7 +1060,8 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
                              CanonicalPowContextUnavailable);
 
                 const bool replay_parent_mismatch_pruned =
-                    result.historical_pruned_connected_shares != 0;
+                    result.historical_pruned_connected_shares >
+                    pruned_before;
 
                 return trusted ||
                        parent_blocked ||
@@ -1399,6 +1403,7 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
             (peer.capabilities & kP2pCapabilityShareSync) != 0) {
             const P2pNodeMessageResult outer_result = result;
             bool replay_frontier_connected = false;
+            std::size_t replay_frontier_pruned_connected_shares = 0;
 
             {
                 std::lock_guard lock(state_mutex_);
@@ -1558,14 +1563,21 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
                 }
             }
 
+            replay_frontier_pruned_connected_shares =
+                result.historical_pruned_connected_shares -
+                outer_result.historical_pruned_connected_shares;
+
             // Frontier scheduling is ancillary to the outer protocol message.
-            // Do not overwrite its share/trust diagnostics or persistence
-            // semantics. Preserve only the fact that replay trust advanced so
-            // the runtime requests a canonical payout/template refresh.
+            // Do not overwrite its per-attempt share/trust diagnostics or
+            // persistence semantics. Preserve aggregate sidechain mutations
+            // so callers can account for pruned replay history and rebuild
+            // canonical payout/template state.
             result = outer_result;
             result.historical_share_connected =
                 result.historical_share_connected ||
                 replay_frontier_connected;
+            result.historical_pruned_connected_shares +=
+                replay_frontier_pruned_connected_shares;
         }
 
         const std::uint32_t penalty = p2p_node_message_penalty(result);

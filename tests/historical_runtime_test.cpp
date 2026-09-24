@@ -643,6 +643,8 @@ struct RecursiveParentSyncResult {
     bool idle_frontier_present{false};
     bool idle_frontier_validated{false};
     P2pReplayRecoverySummary idle_recovery{};
+    bool ancillary_frontier_present{false};
+    P2pNodeMessageResult ancillary_result{};
     int lookup_calls{};
     int observation_loads{};
     int work_requests{};
@@ -656,7 +658,8 @@ run_recursive_parent_sync_case(
     bool advance_recovery_clock = false,
     bool add_unadvertised_fork = false,
     bool inject_idle_frontier = false,
-    bool inject_idle_parent_mismatch = false) {
+    bool inject_idle_parent_mismatch = false,
+    bool inject_ancillary_parent_mismatch = false) {
     TemporaryDirectory temp("zano-historical-parent-sync");
     RuntimeFixture fixture = make_runtime_fixture();
 
@@ -1037,6 +1040,8 @@ run_recursive_parent_sync_case(
 
     std::optional<ShareId> idle_frontier_id;
     P2pReplayRecoverySummary idle_recovery;
+    std::optional<ShareId> ancillary_frontier_id;
+    P2pNodeMessageResult ancillary_result;
 
     if (replay_existing &&
         (inject_idle_frontier ||
@@ -1115,6 +1120,56 @@ run_recursive_parent_sync_case(
         }
     }
 
+    if (replay_existing &&
+        inject_ancillary_parent_mismatch &&
+        completed.load() &&
+        !failed.load()) {
+
+        // Regression for the ancillary replay scheduler inside handle().
+        // The outer TipAnnounce itself does not prune anything. Its ancillary
+        // replay pass finds this locally recoverable structural frontier,
+        // proves its archived Zano parent stale, and removes it. The returned
+        // message result must preserve that aggregate chain mutation.
+        Share ancillary = fixture.candidate;
+        ancillary.parent_id = base_id;
+        ancillary.share_height = 1;
+        ancillary.timestamp = 252;
+        ancillary.nonce = 252;
+
+        ancillary_frontier_id = share_id(ancillary);
+
+        {
+            std::lock_guard lock(receiver_state_mutex);
+
+            CHECK(receiver_chain.add_share_unchecked(
+                      ancillary).disposition ==
+                  ShareDisposition::Connected);
+
+            const ConnectedShare* replayed =
+                receiver_chain.find(
+                    *ancillary_frontier_id);
+
+            CHECK(replayed != nullptr);
+            CHECK(!replayed->validated_ancestry);
+        }
+
+        force_parent_mismatch.store(true);
+
+        ancillary_result =
+            receiver_node.handle(
+                receiver_runtime,
+                provider_handshake,
+                make_p2p_tip_announce_envelope(
+                    P2pTipHint{
+                        base_id,
+                        base.share_height,
+                    }),
+                261,
+                ProgPowZContextMode::Light);
+
+        force_parent_mismatch.store(false);
+    }
+
     receiver_runtime.stop();
     provider_runtime.stop();
 
@@ -1134,6 +1189,7 @@ run_recursive_parent_sync_case(
     result.observation_loads = observation_loads.load();
     result.work_requests = work_requests.load();
     result.share_requests = share_requests.load();
+    result.ancillary_result = ancillary_result;
 
     {
         std::lock_guard lock(receiver_state_mutex);
@@ -1195,6 +1251,12 @@ run_recursive_parent_sync_case(
             result.idle_frontier_validated =
                 connected_idle != nullptr &&
                 connected_idle->validated_ancestry;
+        }
+
+        if (ancillary_frontier_id.has_value()) {
+            result.ancillary_frontier_present =
+                receiver_chain.find(
+                    *ancillary_frontier_id) != nullptr;
         }
     }
 
@@ -1669,6 +1731,36 @@ int main() {
 
     CHECK(!idle_parent_mismatch.idle_frontier_present);
     CHECK(!idle_parent_mismatch.idle_frontier_validated);
+
+    // Ancillary-scheduler prune accounting regression. handle() snapshots the
+    // outer message result before opportunistically advancing other replay
+    // frontiers. A stale locally recoverable frontier may be pruned during
+    // that ancillary pass; the returned result must report that mutation.
+    const RecursiveParentSyncResult ancillary_parent_mismatch =
+        run_recursive_parent_sync_case(
+            true,   // unchecked durable replay already exists
+            false,  // current provider handshake
+            false,  // normal recovery clock
+            false,  // no earlier unadvertised fork
+            false,  // no periodic idle frontier
+            false,  // no periodic mismatch case
+            true);  // mismatch handled by ancillary scheduler
+
+    CHECK(!ancillary_parent_mismatch.failed);
+    CHECK(ancillary_parent_mismatch.completed);
+
+    CHECK(
+        ancillary_parent_mismatch.ancillary_result.status ==
+        P2pNodeMessageStatus::TipProcessed);
+
+    CHECK(
+        ancillary_parent_mismatch.
+            ancillary_result.
+            historical_pruned_connected_shares == 1);
+
+    CHECK(
+        !ancillary_parent_mismatch.
+            ancillary_frontier_present);
 
     // Regression from the multinode soak: ancestry recovery is serial. A
     // healthy peer can therefore spend longer than the mining-work request
