@@ -351,5 +351,149 @@ int main() {
     }
     remove_store(tail_path);
 
+    // Durable compaction regression. A subtree proven stale in memory must not
+    // reappear after ShareStore rewrite + restart replay. At the same time,
+    // unrelated connected history and unresolved orphan evidence must survive.
+    const std::filesystem::path rewrite_path =
+        temporary_store_path("rewrite");
+    remove_store(rewrite_path);
+    {
+        const Share rewrite_root =
+            make_store_share({}, 0, 1, 0x51);
+        const Share rewrite_child =
+            make_store_share(
+                share_id(rewrite_root),
+                1,
+                2,
+                0x52);
+        const Share survivor_root =
+            make_store_share({}, 0, 3, 0x61);
+
+        ShareId missing_parent{};
+        missing_parent[0] = 0xee;
+
+        const Share surviving_orphan =
+            make_store_share(
+                missing_parent,
+                1,
+                1,
+                0x71);
+
+        const ShareId rewrite_root_id =
+            share_id(rewrite_root);
+        const ShareId rewrite_child_id =
+            share_id(rewrite_child);
+        const ShareId survivor_root_id =
+            share_id(survivor_root);
+        const ShareId surviving_orphan_id =
+            share_id(surviving_orphan);
+
+        ShareStore store(rewrite_path, testnet_id);
+
+        store.append(rewrite_root);
+        store.append(rewrite_child);
+        store.append(survivor_root);
+        store.append(surviving_orphan);
+
+        const std::uintmax_t before_rewrite_size =
+            std::filesystem::file_size(rewrite_path);
+
+        ShareChain active(testnet_params);
+        const ShareStoreLoadResult initial =
+            store.load_into(active);
+
+        CHECK(initial.records_loaded == 4);
+        CHECK(initial.connected_shares == 3);
+        CHECK(initial.orphan_shares == 1);
+
+        CHECK(active.find(rewrite_root_id) != nullptr);
+        CHECK(active.find(rewrite_child_id) != nullptr);
+        CHECK(active.find(survivor_root_id) != nullptr);
+        CHECK(active.is_orphan(surviving_orphan_id));
+
+        CHECK(
+            active.prune_connected_subtree(
+                rewrite_root_id) == 2);
+
+        CHECK(active.find(rewrite_root_id) == nullptr);
+        CHECK(active.find(rewrite_child_id) == nullptr);
+        CHECK(active.find(survivor_root_id) != nullptr);
+        CHECK(active.is_orphan(surviving_orphan_id));
+
+        const std::vector<Share> snapshot =
+            active.persistence_snapshot();
+
+        CHECK(snapshot.size() == 2);
+
+        bool saw_survivor = false;
+        bool saw_orphan = false;
+        for (const Share& share : snapshot) {
+            const ShareId id = share_id(share);
+            saw_survivor |= id == survivor_root_id;
+            saw_orphan |= id == surviving_orphan_id;
+        }
+
+        CHECK(saw_survivor);
+        CHECK(saw_orphan);
+
+        store.rewrite(snapshot);
+
+        const std::uintmax_t after_rewrite_size =
+            std::filesystem::file_size(rewrite_path);
+
+        CHECK(after_rewrite_size < before_rewrite_size);
+
+        // First restart after compaction: stale records are physically gone.
+        ShareChain restored_after_rewrite(testnet_params);
+        const ShareStoreLoadResult first_restart =
+            store.load_into(restored_after_rewrite);
+
+        CHECK(first_restart.records_loaded == 2);
+        CHECK(first_restart.connected_shares == 1);
+        CHECK(first_restart.orphan_shares == 1);
+
+        CHECK(
+            restored_after_rewrite.find(
+                rewrite_root_id) == nullptr);
+        CHECK(
+            restored_after_rewrite.find(
+                rewrite_child_id) == nullptr);
+        CHECK(
+            restored_after_rewrite.find(
+                survivor_root_id) != nullptr);
+        CHECK(
+            restored_after_rewrite.is_orphan(
+                surviving_orphan_id));
+
+        CHECK(restored_after_rewrite.best_tip() != nullptr);
+        CHECK(
+            restored_after_rewrite.best_tip()->id ==
+            survivor_root_id);
+
+        // Second restart proves the removed subtree cannot resurrect on a later
+        // replay either.
+        ShareChain second_restart_chain(testnet_params);
+        const ShareStoreLoadResult second_restart =
+            store.load_into(second_restart_chain);
+
+        CHECK(second_restart.records_loaded == 2);
+        CHECK(second_restart.connected_shares == 1);
+        CHECK(second_restart.orphan_shares == 1);
+
+        CHECK(
+            second_restart_chain.find(
+                rewrite_root_id) == nullptr);
+        CHECK(
+            second_restart_chain.find(
+                rewrite_child_id) == nullptr);
+        CHECK(
+            second_restart_chain.find(
+                survivor_root_id) != nullptr);
+        CHECK(
+            second_restart_chain.is_orphan(
+                surviving_orphan_id));
+    }
+    remove_store(rewrite_path);
+
     return 0;
 }

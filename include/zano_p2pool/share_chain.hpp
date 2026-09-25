@@ -138,6 +138,14 @@ public:
     // meaning.
     [[nodiscard]] std::vector<ShareId> connected_share_ids() const;
 
+    // Deterministic snapshot of every record that should survive durable
+    // persistence: currently connected shares plus unresolved orphans.
+    //
+    // Records are ordered by share height and then ShareId. Replay does not
+    // require parent-first order, but deterministic ordering makes rewrites
+    // stable and normally places connected parents before descendants.
+    [[nodiscard]] std::vector<Share> persistence_snapshot() const;
+
     // Remove one connected share and every connected descendant from the
     // active in-memory chain, then deterministically select the best remaining
     // tip. Persistence is deliberately outside this API: callers may retain

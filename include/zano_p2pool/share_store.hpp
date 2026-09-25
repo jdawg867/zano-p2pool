@@ -11,6 +11,7 @@
 #include <fstream>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -87,6 +88,102 @@ public:
         out.flush();
         if (!out) {
             throw std::runtime_error("failed to append share store record");
+        }
+    }
+
+    // Atomically replace the append history with an exact live-state snapshot.
+    //
+    // The replacement uses the existing on-disk format. The temporary file is
+    // written completely and closed before a same-directory rename replaces
+    // the old store, so a process interruption before rename leaves the old
+    // store intact. Existing stores are verified against the expected
+    // SidechainId before any replacement is attempted.
+    void rewrite(const std::vector<Share>& shares) {
+        std::lock_guard lock(mutex_);
+
+        if (std::filesystem::exists(path_)) {
+            if (std::filesystem::file_size(path_) < kShareStoreHeaderSize) {
+                throw std::runtime_error(
+                    "existing share store header is truncated");
+            }
+
+            std::ifstream existing(path_, std::ios::binary);
+            if (!existing) {
+                throw std::runtime_error(
+                    "failed to open existing share store");
+            }
+            verify_header(existing);
+        }
+
+        const std::filesystem::path parent = path_.parent_path();
+        if (!parent.empty()) {
+            std::filesystem::create_directories(parent);
+        }
+
+        const std::filesystem::path temporary =
+            path_.string() + ".rewrite.tmp";
+
+        try {
+            std::ofstream out(
+                temporary,
+                std::ios::binary | std::ios::trunc);
+
+            if (!out) {
+                throw std::runtime_error(
+                    "failed to create share store rewrite");
+            }
+
+            write_bytes(out, kShareStoreMagic);
+            write_bytes(out, expected_sidechain_id_);
+
+            std::set<ShareId> seen;
+
+            for (const Share& share : shares) {
+                const std::vector<std::uint8_t> payload =
+                    serialize_share(share);
+
+                if (payload.size() != kShareV1SerializedSize &&
+                    payload.size() != kShareV2SerializedSize) {
+                    throw std::logic_error(
+                        "unexpected serialized share size");
+                }
+
+                const ShareId id = share_id(share);
+                if (!seen.insert(id).second) {
+                    throw std::invalid_argument(
+                        "share store rewrite contains duplicate record");
+                }
+
+                write_u32_be(
+                    out,
+                    static_cast<std::uint32_t>(payload.size()));
+                write_bytes(out, payload);
+                write_bytes(out, id);
+            }
+
+            out.flush();
+            if (!out) {
+                throw std::runtime_error(
+                    "failed to write share store rewrite");
+            }
+
+            out.close();
+            if (!out) {
+                throw std::runtime_error(
+                    "failed to close share store rewrite");
+            }
+
+            std::error_code ec;
+            std::filesystem::rename(temporary, path_, ec);
+            if (ec) {
+                throw std::runtime_error(
+                    "failed to install share store rewrite: " +
+                    ec.message());
+            }
+        } catch (...) {
+            std::error_code ignored;
+            std::filesystem::remove(temporary, ignored);
+            throw;
         }
     }
 
