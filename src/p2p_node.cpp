@@ -352,6 +352,14 @@ P2pNodeProtocol::retry_historical_pow_unavailable(
             ++summary.trusted;
         }
 
+        summary.pruned_share_ids.insert(
+            summary.pruned_share_ids.end(),
+            result.historical_pruned_share_ids.begin(),
+            result.historical_pruned_share_ids.end());
+
+        summary.pruned_connected_shares +=
+            result.historical_pruned_connected_shares;
+
         if (result.historical_share_connected) {
             ++summary.connected;
         }
@@ -519,6 +527,11 @@ P2pNodeProtocol::advance_replay_recovery(
                 result.historical_anchor_status;
             summary.historical_payout_status =
                 result.historical_payout_status;
+            summary.pruned_share_ids.insert(
+                summary.pruned_share_ids.end(),
+                result.historical_pruned_share_ids.begin(),
+                result.historical_pruned_share_ids.end());
+
             summary.pruned_connected_shares +=
                 result.historical_pruned_connected_shares;
 
@@ -740,15 +753,22 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
 
                     if (replayed != nullptr &&
                         !replayed->validated_ancestry) {
-                        const std::size_t pruned =
-                            chain_.prune_connected_subtree(
+                        const std::vector<ShareId> pruned_ids =
+                            chain_.prune_connected_subtree_ids(
                                 candidate_id);
 
                         result.
-                            historical_pruned_connected_shares +=
-                                pruned;
+                            historical_pruned_share_ids.insert(
+                                result.
+                                    historical_pruned_share_ids.end(),
+                                pruned_ids.begin(),
+                                pruned_ids.end());
 
-                        if (pruned != 0) {
+                        result.
+                            historical_pruned_connected_shares +=
+                                pruned_ids.size();
+
+                        if (!pruned_ids.empty()) {
                             // A structural replay branch can temporarily win
                             // best-tip selection before it crosses historical
                             // trust. Once canonical Zano history proves that
@@ -1404,6 +1424,7 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
             const P2pNodeMessageResult outer_result = result;
             bool replay_frontier_connected = false;
             std::size_t replay_frontier_pruned_connected_shares = 0;
+            std::vector<ShareId> replay_frontier_pruned_share_ids;
 
             {
                 std::lock_guard lock(state_mutex_);
@@ -1563,9 +1584,30 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
                 }
             }
 
+            if (result.historical_pruned_connected_shares <
+                    outer_result.historical_pruned_connected_shares ||
+                result.historical_pruned_share_ids.size() <
+                    outer_result.historical_pruned_share_ids.size()) {
+                throw std::logic_error(
+                    "historical prune aggregation regressed");
+            }
+
             replay_frontier_pruned_connected_shares =
                 result.historical_pruned_connected_shares -
                 outer_result.historical_pruned_connected_shares;
+
+            replay_frontier_pruned_share_ids.assign(
+                result.historical_pruned_share_ids.begin() +
+                    static_cast<std::ptrdiff_t>(
+                        outer_result.
+                            historical_pruned_share_ids.size()),
+                result.historical_pruned_share_ids.end());
+
+            if (replay_frontier_pruned_connected_shares !=
+                replay_frontier_pruned_share_ids.size()) {
+                throw std::logic_error(
+                    "historical prune ID/count mismatch");
+            }
 
             // Frontier scheduling is ancillary to the outer protocol message.
             // Do not overwrite its per-attempt share/trust diagnostics or
@@ -1576,6 +1618,12 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
             result.historical_share_connected =
                 result.historical_share_connected ||
                 replay_frontier_connected;
+
+            result.historical_pruned_share_ids.insert(
+                result.historical_pruned_share_ids.end(),
+                replay_frontier_pruned_share_ids.begin(),
+                replay_frontier_pruned_share_ids.end());
+
             result.historical_pruned_connected_shares +=
                 replay_frontier_pruned_connected_shares;
         }

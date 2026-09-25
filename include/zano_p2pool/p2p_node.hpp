@@ -69,7 +69,11 @@ struct P2pNodeMessageResult {
 
     // Connected structural replay records removed after local canonical
     // history decisively proves their Zano parent is no longer canonical.
-    // Persistence is intentionally untouched.
+    //
+    // These are exact locally proven stale identities. No durable persistence
+    // mutation occurs inside P2pNodeProtocol; callers may decide how to persist
+    // this evidence after the protocol operation completes.
+    std::vector<ShareId> historical_pruned_share_ids;
     std::size_t historical_pruned_connected_shares{0};
 
     bool sent_followup{false};
@@ -88,12 +92,15 @@ struct P2pHistoricalRetrySummary {
     std::size_t attempted{};
     std::size_t trusted{};
     std::size_t connected{};
+    std::vector<ShareId> pruned_share_ids;
+    std::size_t pruned_connected_shares{};
     std::size_t remaining{};
 };
 
 struct P2pReplayRecoverySummary {
     std::size_t attempted{};
     std::size_t connected{};
+    std::vector<ShareId> pruned_share_ids;
     std::size_t pruned_connected_shares{};
     std::size_t remaining{};
 

@@ -1110,6 +1110,15 @@ run_recursive_parent_sync_case(
                 idle_recovery.
                     pruned_connected_shares == 1);
 
+            CHECK(
+                idle_recovery.pruned_share_ids ==
+                std::vector<ShareId>{
+                    *idle_frontier_id});
+
+            CHECK(
+                idle_recovery.pruned_connected_shares ==
+                idle_recovery.pruned_share_ids.size());
+
             CHECK(idle_recovery.connected == 0);
             CHECK(idle_recovery.remaining == 0);
         } else {
@@ -1117,6 +1126,9 @@ run_recursive_parent_sync_case(
                 idle_recovery.historical_trust_status ==
                 std::optional<HistoricalTrustStatus>{
                     HistoricalTrustStatus::Trusted});
+
+            CHECK(idle_recovery.pruned_share_ids.empty());
+            CHECK(idle_recovery.pruned_connected_shares == 0);
         }
     }
 
@@ -1166,6 +1178,18 @@ run_recursive_parent_sync_case(
                     }),
                 261,
                 ProgPowZContextMode::Light);
+
+        CHECK(
+            ancillary_result.
+                historical_pruned_share_ids ==
+            std::vector<ShareId>{
+                *ancillary_frontier_id});
+
+        CHECK(
+            ancillary_result.
+                historical_pruned_connected_shares ==
+            ancillary_result.
+                historical_pruned_share_ids.size());
 
         force_parent_mismatch.store(false);
     }
@@ -1351,6 +1375,14 @@ int main() {
     CHECK(historical_oracle_recovers.autonomous_retry.attempted == 1);
     CHECK(historical_oracle_recovers.autonomous_retry.trusted == 1);
     CHECK(historical_oracle_recovers.autonomous_retry.connected == 1);
+    CHECK(
+        historical_oracle_recovers.
+            autonomous_retry.
+                pruned_connected_shares == 0);
+    CHECK(
+        historical_oracle_recovers.
+            autonomous_retry.
+                pruned_share_ids.empty());
     CHECK(historical_oracle_recovers.autonomous_retry.remaining == 0);
 
     CHECK(historical_oracle_recovers.trusted_work_count == 1);
