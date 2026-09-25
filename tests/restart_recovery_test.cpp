@@ -6,9 +6,11 @@
 #include "zano_p2pool/rpc_client.hpp"
 #include "zano_p2pool/p2p_node.hpp"
 #include "zano_p2pool/restart_recovery.hpp"
+#include "zano_p2pool/share_store.hpp"
 #include "zano_p2pool/sidechain_params.hpp"
 #include "test_check.hpp"
 
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <mutex>
@@ -394,11 +396,78 @@ int main() {
     // tip indefinitely, while a fresh node can never validate the same ancestry.
     // Restart recovery must
     // therefore remove the rejected share and its descendant subtree from the
-    // active in-memory chain. Durable ShareStore evidence remains untouched.
+    // active in-memory chain. recover_replayed_history() itself mutates only
+    // memory; the startup caller may compact ShareStore after this result.
     CHECK(bad_chain.find(root_id) == nullptr);
     CHECK(bad_chain.find(child_id) == nullptr);
     CHECK(bad_chain.connected_size() == 0);
     CHECK(bad_chain.best_tip() == nullptr);
+
+    // Durable restart-prune regression. The persisted file still contains the
+    // stale branch until startup compaction rewrites it from the already-pruned
+    // in-memory snapshot. After that rewrite, neither the first nor a later
+    // restart may resurrect the stale subtree.
+    const auto durable_stamp =
+        std::chrono::steady_clock::now().time_since_epoch().count();
+
+    const std::filesystem::path durable_path =
+        std::filesystem::temp_directory_path() /
+        ("zano_p2pool_restart_prune_" +
+         std::to_string(durable_stamp) +
+         ".dat");
+
+    std::filesystem::remove(durable_path);
+
+    {
+        ShareStore durable_store(
+            durable_path,
+            sidechain_id(params));
+
+        durable_store.append(root);
+        durable_store.append(child);
+
+        ShareChain before_compaction(params);
+        const ShareStoreLoadResult before_load =
+            durable_store.load_into(before_compaction);
+
+        CHECK(before_load.records_loaded == 2);
+        CHECK(before_load.connected_shares == 2);
+        CHECK(before_compaction.find(root_id) != nullptr);
+        CHECK(before_compaction.find(child_id) != nullptr);
+
+        const std::vector<Share> surviving =
+            bad_chain.persistence_snapshot();
+
+        CHECK(surviving.empty());
+
+        durable_store.rewrite(surviving);
+
+        // First restart: stale durable records are physically gone.
+        ShareChain first_restart(params);
+        const ShareStoreLoadResult first_load =
+            durable_store.load_into(first_restart);
+
+        CHECK(first_load.records_loaded == 0);
+        CHECK(first_load.connected_shares == 0);
+        CHECK(first_load.orphan_shares == 0);
+        CHECK(first_restart.find(root_id) == nullptr);
+        CHECK(first_restart.find(child_id) == nullptr);
+        CHECK(first_restart.best_tip() == nullptr);
+
+        // Second restart proves they cannot resurrect on later replay.
+        ShareChain second_restart(params);
+        const ShareStoreLoadResult second_load =
+            durable_store.load_into(second_restart);
+
+        CHECK(second_load.records_loaded == 0);
+        CHECK(second_load.connected_shares == 0);
+        CHECK(second_load.orphan_shares == 0);
+        CHECK(second_restart.find(root_id) == nullptr);
+        CHECK(second_restart.find(child_id) == nullptr);
+        CHECK(second_restart.best_tip() == nullptr);
+    }
+
+    std::filesystem::remove(durable_path);
 
     ShareChain bounded_chain(params);
     CHECK(bounded_chain.add_share_unchecked(root).disposition ==

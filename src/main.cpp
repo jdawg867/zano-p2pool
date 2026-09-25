@@ -953,8 +953,11 @@ int main(int argc, char** argv) {
         // work. Partial recovery is allowed: every share that cannot
         // independently complete the crossing remains validated_ancestry=false.
         if (mining_work_archive && node_chain.connected_size() != 0) {
+            std::optional<zano_p2pool::RestartRecoveryResult>
+                restart_recovery_result;
+
             try {
-                const zano_p2pool::RestartRecoveryResult restart_recovery =
+                restart_recovery_result =
                     zano_p2pool::recover_replayed_history(
                         node_chain,
                         sidechain_parameters,
@@ -967,22 +970,23 @@ int main(int argc, char** argv) {
 
                 std::cout
                     << "Restart history recovery: archive="
-                    << restart_recovery.archive_records
+                    << restart_recovery_result->archive_records
                     << " connected="
-                    << restart_recovery.connected_considered
+                    << restart_recovery_result->connected_considered
                     << " revalidated="
-                    << restart_recovery.revalidated
+                    << restart_recovery_result->revalidated
                     << " already="
-                    << restart_recovery.already_validated
+                    << restart_recovery_result->already_validated
                     << " missing-work="
-                    << restart_recovery.missing_local_work
+                    << restart_recovery_result->missing_local_work
                     << " parent-unvalidated="
-                    << restart_recovery.parent_unvalidated
+                    << restart_recovery_result->parent_unvalidated
                     << " rejected="
-                    << restart_recovery.rejected
+                    << restart_recovery_result->rejected
                     << " pruned="
-                    << restart_recovery.pruned_connected_shares
+                    << restart_recovery_result->pruned_connected_shares
                     << '\n';
+
             } catch (const std::exception& e) {
                 // Recovery is an upgrade of replayed history, not permission to
                 // trust it. A transient RPC or recovery failure therefore
@@ -993,6 +997,39 @@ int main(int argc, char** argv) {
                     << "Restart history recovery incomplete: "
                     << e.what()
                     << "; unrevalidated replay history remains untrusted\n";
+            }
+
+            // Durable compaction is deliberately outside the recovery try/catch.
+            // RPC/trust reconstruction may remain retryable, but once recovery
+            // has actually pruned stale ancestry, failure to persist that exact
+            // surviving topology is a persistence failure and must stop startup.
+            if (share_store &&
+                restart_recovery_result.has_value() &&
+                restart_recovery_result->pruned_connected_shares != 0) {
+                const std::vector<zano_p2pool::Share>
+                    surviving_shares =
+                        node_chain.persistence_snapshot();
+
+                try {
+                    share_store->rewrite(surviving_shares);
+                } catch (...) {
+                    g_persistence_failed.store(
+                        true,
+                        std::memory_order_release);
+
+                    std::cerr
+                        << "FATAL share-store compaction failed after "
+                           "restart pruning; stopping before runtime "
+                           "publication\n";
+                    throw;
+                }
+
+                std::cout
+                    << "Share store compacted after restart pruning: records="
+                    << surviving_shares.size()
+                    << " pruned="
+                    << restart_recovery_result->pruned_connected_shares
+                    << '\n';
             }
         }
 
