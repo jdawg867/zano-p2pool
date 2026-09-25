@@ -125,6 +125,132 @@ int main() {
         HistoricalAnchorStatus::AnchorMatchedUntrusted);
     CHECK(audit_historical_local_anchor(proposal, {}, lookup).status ==
         HistoricalAnchorStatus::LocalObservationMissing);
+
+    // A fresh independent receiver can use its own canonical daemon history
+    // when it never sampled this exact historical template locally.
+    int historical_pow_calls = 0;
+    const auto historical_pow_lookup =
+        [&](std::uint64_t height)
+            -> std::optional<RpcHistoricalPowContext> {
+            CHECK(height == proposal.zano_height);
+            ++historical_pow_calls;
+            return RpcHistoricalPowContext{
+                proposal.zano_height,
+                proposal.prev_hash,
+                proposal.network_difficulty,
+                proposal.block_reward_without_fee,
+                proposal.zano_height + 2,
+            };
+        };
+
+    const auto reconstructed =
+        audit_historical_local_anchor(
+            proposal,
+            {},
+            lookup,
+            historical_pow_lookup);
+
+    CHECK(reconstructed.status ==
+        HistoricalAnchorStatus::AnchorMatchedUntrusted);
+    CHECK(reconstructed.matching_observations == 0);
+    CHECK(historical_pow_calls == 1);
+
+    // Matching locally archived evidence remains preferred and must not call
+    // the historical daemon oracle at all.
+    historical_pow_calls = 0;
+    CHECK(audit_historical_local_anchor(
+              proposal,
+              std::span<const P2pMiningAnchor>(&local, 1),
+              lookup,
+              historical_pow_lookup).status ==
+          HistoricalAnchorStatus::AnchorMatchedUntrusted);
+    CHECK(historical_pow_calls == 0);
+
+    // A matching local archive observation that disagrees with the proposal
+    // must fail immediately. The daemon oracle is a missing-observation
+    // fallback, never a way to override conflicting local provenance.
+    auto local_mismatch_proposal = proposal;
+    local_mismatch_proposal.network_difficulty =
+        difficulty128_from_decimal("9");
+
+    historical_pow_calls = 0;
+
+    CHECK(audit_historical_local_anchor(
+              local_mismatch_proposal,
+              std::span<const P2pMiningAnchor>(&local, 1),
+              lookup,
+              historical_pow_lookup).status ==
+          HistoricalAnchorStatus::LocalObservationMismatch);
+
+    CHECK(historical_pow_calls == 0);
+
+    // A daemon that has not yet advanced far enough to expose the confirming
+    // PoW block must fail closed rather than guess the historical difficulty.
+    CHECK(audit_historical_local_anchor(
+              proposal,
+              {},
+              lookup,
+              [](std::uint64_t)
+                  -> std::optional<RpcHistoricalPowContext> {
+                  return std::nullopt;
+              }).status ==
+          HistoricalAnchorStatus::CanonicalPowContextUnavailable);
+
+    auto wrong_pow = RpcHistoricalPowContext{
+        proposal.zano_height,
+        proposal.prev_hash,
+        proposal.network_difficulty,
+        proposal.block_reward_without_fee,
+        proposal.zano_height,
+    };
+    wrong_pow.network_difficulty =
+        difficulty128_from_decimal("9");
+
+    CHECK(audit_historical_local_anchor(
+              proposal,
+              {},
+              lookup,
+              [&wrong_pow](std::uint64_t)
+                  -> std::optional<RpcHistoricalPowContext> {
+                  return wrong_pow;
+              }).status ==
+          HistoricalAnchorStatus::CanonicalPowContextMismatch);
+
+    auto wrong_reward = RpcHistoricalPowContext{
+        proposal.zano_height,
+        proposal.prev_hash,
+        proposal.network_difficulty,
+        proposal.block_reward_without_fee + 1,
+        proposal.zano_height,
+    };
+
+    CHECK(audit_historical_local_anchor(
+              proposal,
+              {},
+              lookup,
+              [&wrong_reward](std::uint64_t)
+                  -> std::optional<RpcHistoricalPowContext> {
+                  return wrong_reward;
+              }).status ==
+          HistoricalAnchorStatus::CanonicalPowContextMismatch);
+
+    auto wrong_oracle_parent = RpcHistoricalPowContext{
+        proposal.zano_height,
+        other,
+        proposal.network_difficulty,
+        proposal.block_reward_without_fee,
+        proposal.zano_height,
+    };
+
+    CHECK(audit_historical_local_anchor(
+              proposal,
+              {},
+              lookup,
+              [&wrong_oracle_parent](std::uint64_t)
+                  -> std::optional<RpcHistoricalPowContext> {
+                  return wrong_oracle_parent;
+              }).status ==
+          HistoricalAnchorStatus::CanonicalPowContextMismatch);
     auto wrong_parent = local;
     wrong_parent.prev_hash = other;
     observations = {wrong_parent};

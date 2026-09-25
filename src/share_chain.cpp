@@ -652,6 +652,56 @@ std::vector<ShareId> ShareChain::connected_share_ids() const {
     return ids;
 }
 
+std::size_t ShareChain::prune_connected_subtree(
+    const ShareId& root_id) {
+    if (!connected_.contains(root_id)) {
+        return 0;
+    }
+
+    std::map<ShareId, std::vector<ShareId>> children;
+    for (const auto& [id, connected] : connected_) {
+        if (!is_zero_share_id(connected.share.parent_id)) {
+            children[connected.share.parent_id].push_back(id);
+        }
+    }
+
+    std::vector<ShareId> removed{root_id};
+    for (std::size_t index = 0; index < removed.size(); ++index) {
+        const auto it = children.find(removed[index]);
+        if (it == children.end()) {
+            continue;
+        }
+        removed.insert(
+            removed.end(),
+            it->second.begin(),
+            it->second.end());
+    }
+
+    for (const ShareId& id : removed) {
+        connected_.erase(id);
+    }
+
+    best_tip_id_.reset();
+    for (const auto& [id, connected] : connected_) {
+        if (!best_tip_id_) {
+            best_tip_id_ = id;
+            continue;
+        }
+
+        const auto current = connected_.find(*best_tip_id_);
+        if (current == connected_.end()) {
+            throw std::logic_error(
+                "best-tip recomputation invariant failed");
+        }
+
+        if (better_tip(connected, current->second)) {
+            best_tip_id_ = id;
+        }
+    }
+
+    return removed.size();
+}
+
 const char* share_disposition_name(ShareDisposition disposition) noexcept {
     switch (disposition) {
     case ShareDisposition::Connected:

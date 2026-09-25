@@ -1,12 +1,17 @@
 #pragma once
 
 #include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 
 #include "zano_p2pool/block_template.hpp"
 #include "zano_p2pool/crypto_hash.hpp"
+#include "zano_p2pool/share.hpp"
 
 namespace zano_p2pool {
 
@@ -38,6 +43,24 @@ struct RpcCanonicalHeader {
     Hash256 hash{};
 };
 
+[[nodiscard]] Hash256 stable_canonical_parent_for_work_height(
+    std::uint64_t zano_height,
+    const std::function<RpcCanonicalHeader(std::uint64_t)>& lookup);
+
+// Independently reconstructed historical PoW-template authority from the
+// operator's local canonical Zano chain.
+//
+// parent_hash is block H-1. block_reward_without_fee is the canonical base
+// reward at H. network_difficulty is the first canonical PoW difficulty at or
+// after H; intervening PoS blocks do not advance Zano's PoW difficulty history.
+struct RpcHistoricalPowContext {
+    std::uint64_t height{};
+    Hash256 parent_hash{};
+    Difficulty128 network_difficulty{};
+    std::uint64_t block_reward_without_fee{};
+    std::uint64_t confirming_pow_height{};
+};
+
 class RpcClient {
 public:
     explicit RpcClient(
@@ -51,7 +74,15 @@ public:
     [[nodiscard]] RpcBlockSubmissionResult submit_block(
         const std::string& block_blob_hex) const;
 
-    [[nodiscard]] RpcCanonicalHeader get_canonical_header(std::uint64_t height) const;
+    [[nodiscard]] RpcCanonicalHeader get_canonical_header(
+        std::uint64_t height) const;
+
+    // Returns nullopt when canonical history has not yet advanced far enough
+    // to contain H and a subsequent PoW block within the bounded lookahead.
+    [[nodiscard]] std::optional<RpcHistoricalPowContext>
+    get_historical_pow_context(
+        std::uint64_t height,
+        std::size_t max_pow_lookahead = 256) const;
 
 private:
     [[nodiscard]] std::string call(

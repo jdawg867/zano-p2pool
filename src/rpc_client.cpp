@@ -284,6 +284,252 @@ RpcCanonicalHeader RpcClient::get_canonical_header(std::uint64_t height) const {
     return result;
 }
 
+Hash256 stable_canonical_parent_for_work_height(
+    std::uint64_t zano_height,
+    const std::function<RpcCanonicalHeader(std::uint64_t)>& lookup) {
+    if (zano_height == 0) {
+        throw std::invalid_argument(
+            "canonical-parent audit requires nonzero Zano work height");
+    }
+
+    const std::uint64_t parent_height = zano_height - 1;
+
+    const RpcCanonicalHeader first = lookup(parent_height);
+    const RpcCanonicalHeader second = lookup(parent_height);
+
+    if (first.height != parent_height ||
+        second.height != parent_height) {
+        throw std::runtime_error(
+            "canonical-parent audit returned the wrong Zano height");
+    }
+
+    if (first.hash != second.hash) {
+        throw std::runtime_error(
+            "canonical Zano parent changed during stable audit");
+    }
+
+    return first.hash;
+}
+
+std::optional<RpcHistoricalPowContext>
+RpcClient::get_historical_pow_context(
+    std::uint64_t height,
+    std::size_t max_pow_lookahead) const {
+
+    if (height == 0) {
+        throw std::invalid_argument(
+            "historical PoW context requires nonzero height");
+    }
+    if (max_pow_lookahead == 0 || max_pow_lookahead > 4096) {
+        throw std::invalid_argument(
+            "historical PoW lookahead must be between 1 and 4096");
+    }
+
+    JsonPtr params(json_object_new_object(), &json_object_put);
+    if (!params) {
+        throw std::runtime_error("json_object_new_object failed");
+    }
+
+    json_object_object_add(
+        params.get(),
+        "height_start",
+        json_object_new_int64(
+            static_cast<std::int64_t>(height - 1)));
+    json_object_object_add(
+        params.get(),
+        "count",
+        json_object_new_int64(
+            static_cast<std::int64_t>(max_pow_lookahead + 2)));
+    json_object_object_add(
+        params.get(),
+        "ignore_transactions",
+        json_object_new_boolean(true));
+
+    const std::string text = call(
+        "get_blocks_details",
+        json_to_string(params.get()));
+
+    auto root = parse_json(
+        text,
+        "historical PoW context result");
+
+    const auto field = [](
+        json_object* object,
+        const char* name,
+        json_type type) -> json_object* {
+
+        json_object* value = nullptr;
+        if (!object ||
+            json_object_get_type(object) != json_type_object ||
+            !json_object_object_get_ex(object, name, &value) ||
+            !value ||
+            json_object_get_type(value) != type) {
+            throw std::runtime_error(
+                std::string(
+                    "invalid historical PoW context field: ") +
+                name);
+        }
+        return value;
+    };
+
+    const auto string_value = [](
+        json_object* value) -> std::string {
+        return std::string(
+            json_object_get_string(value),
+            json_object_get_string_len(value));
+    };
+
+    const auto uint64_value = [](
+        json_object* value,
+        const char* name) -> std::uint64_t {
+
+        const std::int64_t parsed =
+            json_object_get_int64(value);
+
+        if (parsed < 0) {
+            throw std::runtime_error(
+                std::string(
+                    "negative historical PoW context field: ") +
+                name);
+        }
+
+        return static_cast<std::uint64_t>(parsed);
+    };
+
+    const auto hash_value = [&](
+        json_object* object,
+        const char* name) -> Hash256 {
+
+        const std::string hex = string_value(
+            field(object, name, json_type_string));
+
+        if (hex.size() != 64) {
+            throw std::runtime_error(
+                std::string(
+                    "invalid historical PoW context hash length: ") +
+                name);
+        }
+
+        const auto bytes = hex_to_bytes(hex);
+        Hash256 result{};
+        std::copy(
+            bytes.begin(),
+            bytes.end(),
+            result.begin());
+
+        if (result == Hash256{}) {
+            throw std::runtime_error(
+                std::string(
+                    "zero historical PoW context hash: ") +
+                name);
+        }
+
+        return result;
+    };
+
+    if (string_value(
+            field(root.get(), "status", json_type_string)) !=
+        "OK") {
+        throw std::runtime_error(
+            "historical PoW context RPC status is not OK");
+    }
+
+    json_object* blocks =
+        field(root.get(), "blocks", json_type_array);
+
+    const std::size_t count =
+        json_object_array_length(blocks);
+
+    std::optional<Hash256> parent_id;
+    std::optional<Hash256> height_prev_id;
+    std::optional<std::uint64_t> base_reward;
+    std::optional<Difficulty128> pow_difficulty;
+    std::optional<std::uint64_t> pow_height;
+
+    for (std::size_t i = 0; i < count; ++i) {
+        json_object* block =
+            json_object_array_get_idx(blocks, i);
+
+        if (!block ||
+            json_object_get_type(block) != json_type_object) {
+            throw std::runtime_error(
+                "invalid historical PoW context block entry");
+        }
+
+        const std::uint64_t block_height =
+            uint64_value(
+                field(block, "height", json_type_int),
+                "height");
+
+        if (block_height == height - 1) {
+            parent_id = hash_value(block, "id");
+        }
+
+        if (block_height == height) {
+            height_prev_id =
+                hash_value(block, "prev_id");
+
+            base_reward =
+                uint64_value(
+                    field(
+                        block,
+                        "base_reward",
+                        json_type_int),
+                    "base_reward");
+        }
+
+        if (block_height >= height &&
+            !pow_difficulty.has_value()) {
+
+            const std::int64_t type =
+                json_object_get_int64(
+                    field(block, "type", json_type_int));
+
+            if (type != 0 && type != 1) {
+                throw std::runtime_error(
+                    "invalid historical PoW context block type");
+            }
+
+            if (type == 1) {
+                const std::string difficulty =
+                    string_value(
+                        field(
+                            block,
+                            "difficulty",
+                            json_type_string));
+
+                pow_difficulty =
+                    difficulty128_from_decimal(
+                        difficulty);
+                pow_height = block_height;
+            }
+        }
+    }
+
+    // Near the current tip it is normal for H or the next PoW block not to
+    // exist yet. Historical trust must remain deferred rather than guessing.
+    if (!parent_id.has_value() ||
+        !height_prev_id.has_value() ||
+        !base_reward.has_value() ||
+        !pow_difficulty.has_value() ||
+        !pow_height.has_value()) {
+        return std::nullopt;
+    }
+
+    if (*parent_id != *height_prev_id) {
+        throw std::runtime_error(
+            "historical PoW context canonical parent changed");
+    }
+
+    return RpcHistoricalPowContext{
+        height,
+        *parent_id,
+        *pow_difficulty,
+        *base_reward,
+        *pow_height,
+    };
+}
+
 RpcBlockSubmissionResult RpcClient::submit_block(
     const std::string& block_blob_hex) const {
     if (block_blob_hex.empty()) {

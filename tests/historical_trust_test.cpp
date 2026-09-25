@@ -165,9 +165,167 @@ int main() {
           HistoricalPayoutStatus::UnverifiedAncestry);
     CHECK(unchecked_registry.size() == 0);
 
-    // The success/reorg tests need fresh checked sidechain ancestry.
+    // A zero-parent historical candidate is bootstrap work only when it is the
+    // canonical v2 root shape. Malformed root-like shares fail before anchoring
+    // or trusted-work insertion.
+    Share root_candidate = candidate;
+    root_candidate.parent_id = ShareId{};
+    root_candidate.share_height = 0;
+
+    Share bad_root_height = root_candidate;
+    bad_root_height.share_height = 1;
+
+    int bad_root_lookup_calls = 0;
+    P2pTrustedWorkRegistry bad_root_height_registry;
+
+    const auto bad_root_height_result =
+        promote_historical_mining_context(
+            bad_root_height_registry,
+            empty_chain,
+            params,
+            bad_root_height,
+            peer,
+            proposal,
+            observations,
+            [&](std::uint64_t height) {
+                ++bad_root_lookup_calls;
+                return canonical_lookup(height);
+            });
+
+    CHECK(bad_root_height_result.status ==
+          HistoricalTrustStatus::CandidateMismatch);
+    CHECK(bad_root_lookup_calls == 0);
+    CHECK(bad_root_height_registry.size() == 0);
+
+    Share bad_root_v1 = root_candidate;
+    bad_root_v1.version = kShareVersion1;
+    bad_root_v1.payout.reset();
+
+    P2pTrustedWorkRegistry bad_root_v1_registry;
+
+    const auto bad_root_v1_result =
+        promote_historical_mining_context(
+            bad_root_v1_registry,
+            empty_chain,
+            params,
+            bad_root_v1,
+            peer,
+            proposal,
+            observations,
+            canonical_lookup);
+
+    CHECK(bad_root_v1_result.status ==
+          HistoricalTrustStatus::CandidateMismatch);
+    CHECK(bad_root_v1_registry.size() == 0);
+
+    Share bad_root_binding = root_candidate;
+    CHECK(bad_root_binding.payout.has_value());
+    bad_root_binding.miner_id[0] ^= 0x01U;
+
+    P2pTrustedWorkRegistry bad_root_binding_registry;
+
+    const auto bad_root_binding_result =
+        promote_historical_mining_context(
+            bad_root_binding_registry,
+            empty_chain,
+            params,
+            bad_root_binding,
+            peer,
+            proposal,
+            observations,
+            canonical_lookup);
+
+    CHECK(bad_root_binding_result.status ==
+          HistoricalTrustStatus::CandidateMismatch);
+    CHECK(bad_root_binding_registry.size() == 0);
+
+    // The success/reorg tests need real share PoW validation.
     if (!progpowz_available()) {
         return 0;
+    }
+
+    // A genuine historical root has no earlier sidechain PPLNS plan. Its exact
+    // work must still pass independent local anchoring plus the complete
+    // bootstrap miner-tx accounting/balance/range proof crossing.
+    P2pTrustedWorkRegistry root_registry;
+
+    const auto trusted_root =
+        promote_historical_mining_context(
+            root_registry,
+            empty_chain,
+            params,
+            root_candidate,
+            peer,
+            proposal,
+            observations,
+            canonical_lookup);
+
+    if (!zano_curve_backend_available()) {
+        CHECK(trusted_root.status ==
+              HistoricalTrustStatus::PromotionRejected);
+        CHECK(trusted_root.promotion.status ==
+              P2pMiningContextTrustStatus::ProofsRejected);
+        CHECK(trusted_root.promotion.proof_status ==
+              P2pMinerTxProofStatus::BackendUnavailable);
+        CHECK(root_registry.size() == 0);
+    } else {
+        CHECK(trusted_root.status ==
+              HistoricalTrustStatus::Trusted);
+        CHECK(trusted_root.payout.status ==
+              HistoricalPayoutStatus::BootstrapRoot);
+        CHECK(is_zero_share_id(trusted_root.payout.parent_id));
+        CHECK(std::string(historical_payout_status_name(
+                  trusted_root.payout.status)) == "bootstrap-root");
+        CHECK(trusted_root.initial_anchor.status ==
+              HistoricalAnchorStatus::AnchorMatchedUntrusted);
+        CHECK(trusted_root.final_anchor.status ==
+              HistoricalAnchorStatus::AnchorMatchedUntrusted);
+        CHECK(trusted_root.promotion.status ==
+              P2pMiningContextTrustStatus::Trusted);
+        CHECK(trusted_root.promotion.proof_status ==
+              P2pMinerTxProofStatus::ProofsVerified);
+        CHECK(trusted_root.promotion.payout_status ==
+              P2pPayoutPolicyStatus::Verified);
+        CHECK(trusted_root.promotion.registry_inserted);
+        CHECK(root_registry.size() == 1);
+
+        CHECK(root_registry.find(
+                  root_candidate.zano_height,
+                  root_candidate.mining_header_hash,
+                  ShareId{}) != nullptr);
+
+        ShareId wrong_root_parent{};
+        wrong_root_parent.back() = 0x01U;
+
+        CHECK(root_registry.find(
+                  root_candidate.zano_height,
+                  root_candidate.mining_header_hash,
+                  wrong_root_parent) == nullptr);
+
+        // The validated root work must be sufficient for ordinary share
+        // admission, which then establishes the first validated payout-history
+        // entry used by subsequent PPLNS templates.
+        ShareChain root_chain(params);
+        P2pShareReceiver root_receiver(
+            root_chain,
+            root_registry);
+
+        const auto admitted_root =
+            root_receiver.receive_share(
+                peer,
+                root_candidate,
+                kP2pCapabilityShareGossip,
+                200,
+                ProgPowZContextMode::Light);
+
+        CHECK(admitted_root.status ==
+              P2pShareReceiveStatus::Connected);
+        CHECK(admitted_root.chain_result.disposition ==
+              ShareDisposition::Connected);
+        CHECK(root_chain.contains(
+              share_id(root_candidate)));
+        CHECK(root_chain.find(
+              share_id(root_candidate))->validated_ancestry);
     }
 
     ShareChain chain(params);

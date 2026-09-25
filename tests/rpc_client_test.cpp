@@ -133,6 +133,122 @@ int main() {
         CHECK(failed);
     }
 
+    {
+        const std::string parent(64, 'b');
+        const std::string block_h(64, 'c');
+        const std::string block_h1(64, 'd');
+        const std::string block_h2(64, 'e');
+
+        const std::string response =
+            "{\"jsonrpc\":\"2.0\",\"id\":0,\"result\":{"
+            "\"status\":\"OK\",\"blocks\":["
+            "{\"height\":99,\"id\":\"" + parent +
+            "\",\"prev_id\":\"" + std::string(64, 'a') +
+            "\",\"type\":0,\"difficulty\":\"999999999\","
+            "\"base_reward\":1000000000000},"
+            "{\"height\":100,\"id\":\"" + block_h +
+            "\",\"prev_id\":\"" + parent +
+            "\",\"type\":0,\"difficulty\":\"888888888\","
+            "\"base_reward\":1000000000000},"
+            "{\"height\":101,\"id\":\"" + block_h1 +
+            "\",\"prev_id\":\"" + block_h +
+            "\",\"type\":0,\"difficulty\":\"777777777\","
+            "\"base_reward\":1000000000000},"
+            "{\"height\":102,\"id\":\"" + block_h2 +
+            "\",\"prev_id\":\"" + block_h1 +
+            "\",\"type\":1,\"difficulty\":\"4744728\","
+            "\"base_reward\":1000000000000}"
+            "]}}";
+
+        OneShotRpcServer server(response);
+
+        const auto historical =
+            zano_p2pool::RpcClient(server.url())
+                .get_historical_pow_context(100, 8);
+
+        CHECK(historical.has_value());
+        CHECK(historical->height == 100);
+        CHECK(historical->parent_hash[0] == 0xbb);
+        CHECK(
+            zano_p2pool::difficulty128_to_decimal(
+                historical->network_difficulty) ==
+            "4744728");
+        CHECK(
+            historical->block_reward_without_fee ==
+            1'000'000'000'000ULL);
+        CHECK(historical->confirming_pow_height == 102);
+    }
+
+    {
+        const std::string parent(64, 'b');
+        const std::string wrong_parent(64, 'f');
+        const std::string block_h(64, 'c');
+
+        const std::string response =
+            "{\"jsonrpc\":\"2.0\",\"id\":0,\"result\":{"
+            "\"status\":\"OK\",\"blocks\":["
+            "{\"height\":99,\"id\":\"" + parent +
+            "\",\"prev_id\":\"" + std::string(64, 'a') +
+            "\",\"type\":1,\"difficulty\":\"4700000\","
+            "\"base_reward\":1000000000000},"
+            "{\"height\":100,\"id\":\"" + block_h +
+            "\",\"prev_id\":\"" + wrong_parent +
+            "\",\"type\":1,\"difficulty\":\"4744728\","
+            "\"base_reward\":1000000000000}"
+            "]}}";
+
+        OneShotRpcServer server(response);
+
+        bool failed = false;
+        try {
+            static_cast<void>(
+                zano_p2pool::RpcClient(server.url())
+                    .get_historical_pow_context(100, 8));
+        } catch (const std::runtime_error&) {
+            failed = true;
+        }
+
+        CHECK(failed);
+    }
+
+    {
+        const std::string parent(64, 'b');
+        const std::string block_h(64, 'c');
+
+        const std::string response =
+            "{\"jsonrpc\":\"2.0\",\"id\":0,\"result\":{"
+            "\"status\":\"OK\",\"blocks\":["
+            "{\"height\":99,\"id\":\"" + parent +
+            "\",\"prev_id\":\"" + std::string(64, 'a') +
+            "\",\"type\":1,\"difficulty\":\"4700000\","
+            "\"base_reward\":1000000000000},"
+            "{\"height\":100,\"id\":\"" + block_h +
+            "\",\"prev_id\":\"" + parent +
+            "\",\"type\":0,\"difficulty\":\"900000000\","
+            "\"base_reward\":1000000000000}"
+            "]}}";
+
+        OneShotRpcServer server(response);
+
+        CHECK(
+            !zano_p2pool::RpcClient(server.url())
+                 .get_historical_pow_context(100, 8)
+                 .has_value());
+    }
+
+    {
+        bool failed = false;
+        try {
+            static_cast<void>(
+                zano_p2pool::RpcClient(
+                    "http://127.0.0.1:1")
+                    .get_historical_pow_context(0));
+        } catch (const std::invalid_argument&) {
+            failed = true;
+        }
+        CHECK(failed);
+    }
+
     using namespace zano_p2pool;
 
     CHECK(submit_with_response(

@@ -31,6 +31,18 @@ struct P2pMiningContextTrustResult {
     bool registry_inserted{false};
 };
 
+// Bootstrap-only trust crossing. A zero-parent mining template predates the
+// first sidechain payout identity, so its node-specific coinbase destination is
+// not treated as sidechain consensus. All normal anchoring, reward/accounting,
+// balance-proof, range-proof and trusted-registry gates remain mandatory.
+// Successful work is bound only to the zero ShareId parent.
+[[nodiscard]] P2pMiningContextTrustResult
+promote_bootstrap_p2p_mining_context(
+    P2pTrustedWorkRegistry& trusted_work,
+    const P2pHandshake& peer,
+    const P2pEnvelope& envelope,
+    const P2pMiningAnchor& local_anchor);
+
 // Parses and locally anchors the peer proposal, verifies the current-HF6 miner
 // transaction payout and both consensus proof variants, and only then promotes
 // the independently derived mining header into trusted_work. The trusted

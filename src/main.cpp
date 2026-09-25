@@ -33,6 +33,7 @@
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
+#include <functional>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -120,6 +121,10 @@ struct LiveTemplate {
     zano_p2pool::Hash256 seed_hash{};
     zano_p2pool::Difficulty128 network_difficulty{};
     std::optional<zano_p2pool::PplnsCoinbasePlan> payout_plan;
+
+    // Exact sidechain parent snapshot used while constructing payout_plan and
+    // the miner transaction embedded in block.
+    std::optional<zano_p2pool::StratumShareParentBinding> parent_binding;
 };
 
 const char* network_name(Network network) {
@@ -662,6 +667,11 @@ bool apply_canonical_pplns_template(
     std::lock_guard lock(state_mutex);
     if (chain.connected_size() == 0) {
         live.payout_plan.reset();
+        live.parent_binding =
+            zano_p2pool::StratumShareParentBinding{
+                zano_p2pool::ShareId{},
+                0,
+            };
         return false;
     }
 
@@ -671,8 +681,24 @@ bool apply_canonical_pplns_template(
     const zano_p2pool::ConnectedShare* tip = chain.best_tip();
     if (tip == nullptr || !tip->validated_ancestry) {
         live.payout_plan.reset();
+        live.parent_binding.reset();
         return false;
     }
+
+    if (tip->share.share_height ==
+        std::numeric_limits<std::uint64_t>::max()) {
+        throw std::runtime_error(
+            "sidechain share height exhausted while constructing PPLNS template");
+    }
+
+    // This is the exact sidechain snapshot used below to construct the
+    // PPLNS miner transaction. Carry it with the template instead of
+    // resampling best_tip() later when Stratum work is issued.
+    live.parent_binding =
+        zano_p2pool::StratumShareParentBinding{
+            tip->id,
+            tip->share.share_height + 1,
+        };
 
     zano_p2pool::PplnsTemplateResult rebuilt =
         zano_p2pool::build_canonical_pplns_template(
@@ -757,7 +783,16 @@ void set_local_p2p_context(
         zano_p2pool::p2p_mining_context_proposal_from_template(live.block);
 
     if (live.payout_plan.has_value()) {
-        protocol.set_local_mining_context(anchor, proposal, *live.payout_plan);
+        if (!live.parent_binding.has_value()) {
+            throw std::runtime_error(
+                "canonical PPLNS context has no captured sidechain parent");
+        }
+
+        protocol.set_local_mining_context(
+            anchor,
+            proposal,
+            *live.payout_plan,
+            live.parent_binding->parent_id);
         return;
     }
 
@@ -856,6 +891,16 @@ int main(int argc, char** argv) {
         std::atomic<std::uint64_t> block_submission_failures_total{0};
         std::atomic<std::uint64_t> template_refresh_failures_total{
             initial_template_failures};
+        std::atomic<std::uint64_t>
+            historical_pow_retry_attempts_total{0};
+        std::atomic<std::uint64_t>
+            historical_pow_retry_trusted_total{0};
+        std::atomic<std::uint64_t>
+            historical_pow_retry_connected_total{0};
+        std::atomic<std::uint64_t>
+            historical_pow_retry_failures_total{0};
+        std::atomic<std::uint64_t>
+            historical_pow_retry_remaining{0};
 
         std::unique_ptr<zano_p2pool::ShareStore> share_store;
         if (!options.no_share_store) {
@@ -935,6 +980,8 @@ int main(int argc, char** argv) {
                     << restart_recovery.parent_unvalidated
                     << " rejected="
                     << restart_recovery.rejected
+                    << " pruned="
+                    << restart_recovery.pruned_connected_shares
                     << '\n';
             } catch (const std::exception& e) {
                 // Recovery is an upgrade of replayed history, not permission to
@@ -1022,10 +1069,30 @@ int main(int argc, char** argv) {
                 },
                 [&rpc](std::uint64_t height) {
                     return rpc.get_canonical_header(height);
+                },
+                [&rpc](std::uint64_t height) {
+                    return rpc.get_historical_pow_context(height);
                 });
         }
-        p2p_protocol.remember_trusted_work(trusted_context_from_live(live));
         set_local_p2p_context(p2p_protocol, live);
+        p2p_protocol.remember_trusted_work(
+            trusted_context_from_live(live),
+            live.parent_binding.has_value()
+                ? std::optional<zano_p2pool::ShareId>{
+                      live.parent_binding->parent_id}
+                : std::nullopt);
+
+        const auto initial_metrics_consensus =
+            p2p_protocol.try_metrics_snapshot();
+
+        if (!initial_metrics_consensus.has_value()) {
+            throw std::logic_error(
+                "initial metrics consensus snapshot unexpectedly busy");
+        }
+
+        zano_p2pool::P2pNodeMetricsSnapshot
+            metrics_consensus_cache =
+                *initial_metrics_consensus;
 
         std::unique_ptr<zano_p2pool::P2pRuntime> p2p_runtime;
         if (options.p2p) {
@@ -1077,6 +1144,74 @@ int main(int argc, char** argv) {
                                     << zano_p2pool::
                                            historical_trust_status_name(
                                                *result.historical_trust_status);
+
+                                if (result.historical_attempt_share_id.has_value()) {
+                                    std::cerr
+                                        << " attempt-share="
+                                        << zano_p2pool::hash_to_hex(
+                                               *result.historical_attempt_share_id);
+                                }
+
+                                if (result.historical_attempt_parent_id.has_value()) {
+                                    std::cerr
+                                        << " attempt-parent="
+                                        << zano_p2pool::hash_to_hex(
+                                               *result.historical_attempt_parent_id);
+                                }
+
+                                if (result.historical_attempt_zano_height.has_value()) {
+                                    std::cerr
+                                        << " attempt-zano-height="
+                                        << *result.historical_attempt_zano_height;
+                                }
+
+                                if (result.historical_attempt_mining_header_hash.has_value()) {
+                                    std::cerr
+                                        << " attempt-header="
+                                        << zano_p2pool::hash_to_hex(
+                                               *result.historical_attempt_mining_header_hash);
+                                }
+
+                                if (result.historical_anchor_status.has_value()) {
+                                    std::cerr
+                                        << " anchor="
+                                        << zano_p2pool::
+                                               historical_anchor_status_name(
+                                                   *result.historical_anchor_status);
+                                }
+
+                                if (result.historical_payout_status.has_value()) {
+                                    std::cerr
+                                        << " payout="
+                                        << zano_p2pool::
+                                               historical_payout_status_name(
+                                                   *result.historical_payout_status);
+                                }
+
+                                if (result.historical_promotion_status.has_value()) {
+                                    std::cerr
+                                        << " promotion="
+                                        << zano_p2pool::
+                                               p2p_mining_context_trust_status_name(
+                                                   *result.historical_promotion_status);
+                                }
+
+                                if (result.historical_proof_status.has_value()) {
+                                    std::cerr
+                                        << " proof="
+                                        << zano_p2pool::
+                                               p2p_miner_tx_proof_status_name(
+                                                   *result.historical_proof_status);
+                                }
+
+                                if (result.historical_payout_policy_status.has_value()) {
+                                    std::cerr
+                                        << " payout-policy="
+                                        << zano_p2pool::
+                                               p2p_payout_policy_status_name(
+                                                   *result.historical_payout_policy_status);
+                                }
+
                                 if (result.historical_share_retried) {
                                     std::cerr
                                         << " share-retry="
@@ -1092,41 +1227,41 @@ int main(int argc, char** argv) {
                             }
                         }
 
-                        const bool direct_share_admitted =
-                            (result.status ==
-                                 zano_p2pool::P2pNodeMessageStatus::ShareProcessed ||
-                             result.status ==
-                                 zano_p2pool::P2pNodeMessageStatus::ShareResponseProcessed) &&
-                            (result.share_status ==
-                                 zano_p2pool::P2pShareReceiveStatus::Connected ||
-                             result.share_status ==
-                                 zano_p2pool::P2pShareReceiveStatus::Orphan);
+                        if (result.historical_pruned_connected_shares != 0) {
+                            std::cerr
+                                << "P2P historical replay prune: pruned-connected="
+                                << result.historical_pruned_connected_shares;
 
-                        std::size_t admitted_count =
-                            result.historical_admitted_shares.size();
-                        if (direct_share_admitted) {
-                            ++admitted_count;
-                            if (result.status ==
-                                zano_p2pool::P2pNodeMessageStatus::ShareProcessed) {
-                                persist_share(
-                                    zano_p2pool::parse_p2p_share_announce_envelope(
-                                        envelope));
-                            } else {
-                                const zano_p2pool::P2pShareResponse response =
-                                    zano_p2pool::parse_p2p_share_response_envelope(
-                                        envelope);
-                                if (response.share.has_value()) {
-                                    persist_share(*response.share);
-                                }
+                            if (result.historical_attempt_share_id.has_value()) {
+                                std::cerr
+                                    << " attempt-share="
+                                    << zano_p2pool::hash_to_hex(
+                                           *result.historical_attempt_share_id);
                             }
+
+                            if (result.historical_attempt_parent_id.has_value()) {
+                                std::cerr
+                                    << " attempt-parent="
+                                    << zano_p2pool::hash_to_hex(
+                                           *result.historical_attempt_parent_id);
+                            }
+
+                            std::cerr << '\n';
                         }
-                        for (const auto& admitted :
-                             result.historical_admitted_shares) {
+
+                        const std::vector<zano_p2pool::Share>
+                            admitted_shares =
+                                zano_p2pool::p2p_node_unique_admitted_shares(
+                                    result,
+                                    envelope);
+
+                        for (const auto& admitted : admitted_shares) {
                             persist_share(admitted);
                         }
-                        if (admitted_count != 0) {
+
+                        if (!admitted_shares.empty()) {
                             p2p_admitted_shares_total.fetch_add(
-                                admitted_count,
+                                admitted_shares.size(),
                                 std::memory_order_relaxed);
                         }
 
@@ -1138,7 +1273,8 @@ int main(int argc, char** argv) {
                             result.share_status ==
                                 zano_p2pool::P2pShareReceiveStatus::Connected;
                         if (direct_share_connected ||
-                            result.historical_share_connected) {
+                            result.historical_share_connected ||
+                            result.historical_pruned_connected_shares != 0) {
                             request_template_refresh();
                         }
 
@@ -1381,7 +1517,8 @@ int main(int argc, char** argv) {
                     live.mining_work.header_hash,
                     live.seed_hash,
                     live.block.height,
-                    live.network_difficulty);
+                    live.network_difficulty,
+                    live.parent_binding);
                 server->start();
 
                 std::cout << "\nStratum listening: "
@@ -1418,24 +1555,29 @@ int main(int argc, char** argv) {
                     snapshot.zano_height = observed_zano_height.load(
                         std::memory_order_relaxed);
 
-                    {
-                        std::lock_guard lock(node_state_mutex);
-                        snapshot.sidechain_connected_shares =
-                            node_chain.connected_size();
-                        snapshot.sidechain_orphan_shares =
-                            node_chain.orphan_size();
-                        if (const zano_p2pool::ConnectedShare* tip =
-                                node_chain.best_tip();
-                            tip != nullptr) {
-                            snapshot.sidechain_tip_height = tip->share.share_height;
-                        }
+                    // Metrics are observability only and must never queue
+                    // behind expensive replay/trust work. Refresh the cached
+                    // consensus snapshot when the state mutex is immediately
+                    // available; otherwise serve the most recent consistent
+                    // values.
+                    if (const auto current =
+                            p2p_protocol.try_metrics_snapshot();
+                        current.has_value()) {
+                        metrics_consensus_cache = *current;
                     }
+
+                    snapshot.sidechain_connected_shares =
+                        metrics_consensus_cache.connected_shares;
+                    snapshot.sidechain_orphan_shares =
+                        metrics_consensus_cache.orphan_shares;
+                    snapshot.sidechain_tip_height =
+                        metrics_consensus_cache.tip_height;
 
                     snapshot.p2p_peers = p2p_runtime
                         ? p2p_runtime->peer_count()
                         : 0;
                     snapshot.p2p_trusted_work_contexts =
-                        p2p_protocol.trusted_work_count();
+                        metrics_consensus_cache.trusted_work_contexts;
                     snapshot.stratum_connections =
                         server && server->running()
                             ? server->client_count()
@@ -1522,10 +1664,354 @@ int main(int argc, char** argv) {
                         live.mining_work,
                         next.block,
                         next.mining_work);
+
+                zano_p2pool::P2pHistoricalRetrySummary
+                    historical_retry;
+                bool historical_retry_attempted = false;
+                bool historical_retry_requires_rebuild = false;
+
+                zano_p2pool::P2pReplayRecoverySummary
+                    replay_recovery;
+                bool replay_recovery_attempted = false;
+                bool replay_recovery_requires_rebuild = false;
+
+                const auto retry_historical_pow =
+                    [&] {
+                        historical_retry_attempted = true;
+                        if (!p2p_runtime) {
+                            return;
+                        }
+
+                        try {
+                            historical_retry =
+                                p2p_protocol.
+                                    retry_historical_pow_unavailable(
+                                        *p2p_runtime,
+                                        unix_time_seconds(),
+                                        zano_p2pool::
+                                            ProgPowZContextMode::Light);
+
+                            historical_pow_retry_attempts_total.fetch_add(
+                                historical_retry.attempted,
+                                std::memory_order_relaxed);
+                            historical_pow_retry_trusted_total.fetch_add(
+                                historical_retry.trusted,
+                                std::memory_order_relaxed);
+                            historical_pow_retry_connected_total.fetch_add(
+                                historical_retry.connected,
+                                std::memory_order_relaxed);
+                            historical_pow_retry_remaining.store(
+                                historical_retry.remaining,
+                                std::memory_order_relaxed);
+
+                            historical_retry_requires_rebuild =
+                                historical_retry.connected != 0;
+
+                            if (historical_retry.attempted != 0 ||
+                                historical_retry.remaining != 0) {
+                                std::cerr
+                                    << "Historical PoW retry: attempted="
+                                    << historical_retry.attempted
+                                    << " trusted="
+                                    << historical_retry.trusted
+                                    << " connected="
+                                    << historical_retry.connected
+                                    << " remaining="
+                                    << historical_retry.remaining
+                                    << '\n';
+                            }
+                        } catch (const std::exception& e) {
+                            historical_pow_retry_failures_total.fetch_add(
+                                1,
+                                std::memory_order_relaxed);
+
+                            // Historical recovery is fail-closed and must not
+                            // prevent installation of an otherwise valid live
+                            // template. A retry may have connected earlier
+                            // candidates before a later one failed, so force
+                            // the payout rebuild before publishing miner work.
+                            historical_retry_requires_rebuild = true;
+                            std::cerr
+                                << "Historical PoW retry deferred: "
+                                << e.what() << '\n';
+                        }
+                    };
+
+                const auto advance_replay_recovery =
+                    [&] {
+                        replay_recovery_attempted = true;
+
+                        if (!p2p_runtime) {
+                            return;
+                        }
+
+                        try {
+                            replay_recovery =
+                                p2p_protocol.
+                                    advance_replay_recovery(
+                                        *p2p_runtime,
+                                        unix_time_seconds(),
+                                        zano_p2pool::
+                                            ProgPowZContextMode::Light);
+
+                            replay_recovery_requires_rebuild =
+                                replay_recovery.connected != 0 ||
+                                replay_recovery.
+                                    pruned_connected_shares != 0;
+
+                            if (replay_recovery.attempted != 0 ||
+                                replay_recovery.connected != 0) {
+                                std::cerr
+                                    << "Replay recovery tick: attempted="
+                                    << replay_recovery.attempted
+                                    << " connected="
+                                    << replay_recovery.connected
+                                    << " pruned="
+                                    << replay_recovery.
+                                           pruned_connected_shares
+                                    << " remaining="
+                                    << replay_recovery.remaining;
+
+                                if (replay_recovery.
+                                        attempted_share_id.has_value()) {
+                                    std::cerr
+                                        << " attempt-share="
+                                        << zano_p2pool::hash_to_hex(
+                                               *replay_recovery.
+                                                    attempted_share_id);
+                                }
+
+                                if (replay_recovery.
+                                        attempted_parent_id.has_value()) {
+                                    std::cerr
+                                        << " attempt-parent="
+                                        << zano_p2pool::hash_to_hex(
+                                               *replay_recovery.
+                                                    attempted_parent_id);
+                                }
+
+                                if (replay_recovery.
+                                        historical_trust_status.has_value()) {
+                                    std::cerr
+                                        << " historical-trust="
+                                        << zano_p2pool::
+                                               historical_trust_status_name(
+                                                   *replay_recovery.
+                                                        historical_trust_status);
+                                }
+
+                                if (replay_recovery.
+                                        historical_anchor_status.has_value()) {
+                                    std::cerr
+                                        << " anchor="
+                                        << zano_p2pool::
+                                               historical_anchor_status_name(
+                                                   *replay_recovery.
+                                                        historical_anchor_status);
+                                }
+
+                                if (replay_recovery.
+                                        historical_payout_status.has_value()) {
+                                    std::cerr
+                                        << " payout="
+                                        << zano_p2pool::
+                                               historical_payout_status_name(
+                                                   *replay_recovery.
+                                                        historical_payout_status);
+                                }
+
+                                std::cerr << '\n';
+                            }
+                        } catch (const std::exception& e) {
+                            // As with historical PoW retry, handle() may have
+                            // connected earlier replay descendants before a
+                            // later local/RPC failure. Force the payout rebuild
+                            // before publishing miner work.
+                            replay_recovery_requires_rebuild = true;
+
+                            std::cerr
+                                << "Replay recovery tick deferred: "
+                                << e.what() << '\n';
+                        }
+                    };
+
+                // If the daemon template itself is unchanged, this successful
+                // RPC refresh is still an opportunity for historical PoW
+                // authority to have become available. Only preserve the old
+                // early-continue behavior when recovery changed no sidechain
+                // trust state.
                 if (!forced_refresh && !daemon_changed) {
-                    continue;
+                    retry_historical_pow();
+                    advance_replay_recovery();
+
+                    if (!historical_retry_requires_rebuild &&
+                        !replay_recovery_requires_rebuild) {
+                        continue;
+                    }
                 }
 
+                bool advanced_parent_replacement = false;
+
+                // A reorg can occur and advance beyond the replaced height
+                // between template polls. Comparing only the newly observed
+                // template height would miss that transition, so verify the
+                // parent that authorized the previously installed local work.
+                //
+                // This first stable observation is only reorg detection. No
+                // trust state is mutated until the full post-stop audit below
+                // has completed successfully.
+                if (next.block.height > live.block.height &&
+                    live.block.height != 0) {
+                    const zano_p2pool::Hash256 current_old_parent =
+                        zano_p2pool::stable_canonical_parent_for_work_height(
+                            live.block.height,
+                            [&rpc](std::uint64_t height) {
+                                return rpc.get_canonical_header(height);
+                            });
+
+                    advanced_parent_replacement =
+                        current_old_parent !=
+                        parse_hash256(live.block.prev_hash);
+                }
+
+                const zano_p2pool::CanonicalReorgKind
+                    canonical_reorg_kind =
+                        zano_p2pool::classify_canonical_reorg(
+                            live.block,
+                            next.block,
+                            advanced_parent_replacement);
+
+                const bool canonical_reorg =
+                    canonical_reorg_kind !=
+                    zano_p2pool::CanonicalReorgKind::None;
+
+                std::optional<zano_p2pool::CanonicalReorgAuditPlan>
+                    canonical_reorg_audit;
+
+                if (canonical_reorg) {
+                    canonical_reorg_audit =
+                        zano_p2pool::prepare_canonical_reorg_audit(
+                            canonical_reorg_kind,
+                            next.block.height,
+                            [&] {
+                                if (!options.stratum) {
+                                    return;
+                                }
+
+                                if (server && server->running()) {
+                                    server->stop();
+                                }
+                                if (block_submitter &&
+                                    block_submitter->running()) {
+                                    block_submitter->stop();
+                                }
+                                job_sequence = 0;
+                            },
+                            [&] {
+                                return p2p_protocol
+                                    .trusted_work_provenance_heights();
+                            },
+                            [&rpc](std::uint64_t height) {
+                                return zano_p2pool::
+                                    stable_canonical_parent_for_work_height(
+                                        height,
+                                        [&rpc](
+                                            std::uint64_t parent_height) {
+                                            return rpc.get_canonical_header(
+                                                parent_height);
+                                        });
+                            });
+                }
+
+                if (canonical_reorg_audit.has_value()) {
+                    std::size_t pruned = 0;
+                    std::size_t revoked = 0;
+
+                    // Work whose mining height is still available is retained
+                    // only when its recorded parent provenance agrees with
+                    // current canonical Zano history.
+                    for (const auto& [height, canonical_parent] :
+                         canonical_reorg_audit->canonical_parents) {
+                        const auto result =
+                            p2p_protocol.reconcile_canonical_parent(
+                                height,
+                                canonical_parent);
+
+                        pruned +=
+                            result.pruned_connected_shares;
+                        revoked +=
+                            result.revoked_trusted_work;
+                    }
+
+                    // Any connected share or trusted-work authorization above
+                    // the daemon's current template height is unavailable after
+                    // this canonical transition. Apply the boundary in one pass
+                    // so even replayed shares or compatibility work without
+                    // canonical-parent provenance cannot survive above it.
+                    const auto unavailable_result =
+                        p2p_protocol.reconcile_unavailable_work_above(
+                            canonical_reorg_audit->maximum_work_height);
+
+                    pruned +=
+                        unavailable_result.pruned_connected_shares;
+                    revoked +=
+                        unavailable_result.revoked_trusted_work;
+
+                    const char* reorg_type = "unknown";
+                    switch (canonical_reorg_audit->kind) {
+                    case zano_p2pool::CanonicalReorgKind::
+                        SameHeightReplacement:
+                        reorg_type = "same-height";
+                        break;
+                    case zano_p2pool::CanonicalReorgKind::
+                        AdvancedReplacement:
+                        reorg_type = "advanced";
+                        break;
+                    case zano_p2pool::CanonicalReorgKind::Rollback:
+                        reorg_type = "rollback";
+                        break;
+                    case zano_p2pool::CanonicalReorgKind::None:
+                        reorg_type = "none";
+                        break;
+                    }
+
+                    std::cerr
+                        << "Canonical Zano reorg reconciled: "
+                        << "type=" << reorg_type
+                        << " canonical-heights="
+                        << canonical_reorg_audit->canonical_parents.size()
+                        << " maximum-work-height="
+                        << canonical_reorg_audit->maximum_work_height
+                        << " pruned-connected=" << pruned
+                        << " revoked-work=" << revoked
+                        << '\n';
+
+                    // No payout expectation derived from the displaced branch
+                    // may remain authoritative. Install only the raw daemon
+                    // context here; canonical PPLNS is rebuilt below against
+                    // the surviving reconciled sidechain.
+                    p2p_protocol.clear_expected_payout();
+                    set_local_p2p_context(
+                        p2p_protocol,
+                        next);
+                }
+
+                // Changed/forced template paths deliberately wait until any
+                // canonical reorg reconciliation above has removed displaced
+                // ancestry before retrying historical candidates.
+                if (!historical_retry_attempted) {
+                    retry_historical_pow();
+                }
+
+                if (!replay_recovery_attempted) {
+                    advance_replay_recovery();
+                }
+
+                // Rebuild only after any displaced ancestry has been removed
+                // and after autonomous historical recovery has had a chance to
+                // validate newly available ancestry. This prevents both stale
+                // and newly recovered shares from being omitted from the
+                // canonical payout plan installed below.
                 const bool canonical_pplns = apply_canonical_pplns_template(
                     next,
                     node_chain,
@@ -1548,9 +2034,15 @@ int main(int argc, char** argv) {
                         next.block.blocktemplate_blob);
                 }
 
-                p2p_protocol.remember_trusted_work(
-                    trusted_context_from_live(next));
+                // Install the final post-reconciliation template before granting
+                // its parent-bound work authorization.
                 set_local_p2p_context(p2p_protocol, next);
+                p2p_protocol.remember_trusted_work(
+                    trusted_context_from_live(next),
+                    next.parent_binding.has_value()
+                        ? std::optional<zano_p2pool::ShareId>{
+                              next.parent_binding->parent_id}
+                        : std::nullopt);
 
                 if (options.stratum &&
                     server &&
@@ -1591,7 +2083,8 @@ int main(int argc, char** argv) {
                             next.mining_work.header_hash,
                             next.seed_hash,
                             next.block.height,
-                            next.network_difficulty);
+                            next.network_difficulty,
+                            next.parent_binding);
 
                     if (!block_submitter->running()) {
                         block_submitter->start();

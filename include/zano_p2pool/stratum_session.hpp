@@ -17,17 +17,24 @@ struct StratumSessionConfig {
     std::uint64_t maximum_share_difficulty{100000000000ULL};
 };
 
+struct StratumShareParentBinding {
+    ShareId parent_id{};
+    std::uint64_t share_height{0};
+
+    bool operator==(const StratumShareParentBinding&) const = default;
+};
+
 struct StratumTemplate {
     std::uint64_t version{0};
     Hash256 header_hash{};
     Hash256 seed_hash{};
     std::uint64_t height{0};
     Difficulty128 network_difficulty{};
-};
 
-struct StratumShareParentBinding {
-    ShareId parent_id{};
-    std::uint64_t share_height{0};
+    // Immutable sidechain snapshot used to construct this template's payout
+    // transaction. Full-node Stratum work must extend this exact parent rather
+    // than resampling best_tip() when a miner asks for work.
+    std::optional<StratumShareParentBinding> parent_binding;
 };
 
 struct StratumIssuedWork {
@@ -77,7 +84,9 @@ public:
         const Hash256& header_hash,
         const Hash256& seed_hash,
         std::uint64_t height,
-        const Difficulty128& network_difficulty);
+        const Difficulty128& network_difficulty,
+        std::optional<StratumShareParentBinding> parent_binding =
+            std::nullopt);
 
     // A full sidechain node supplies consensus_share_difficulty so miner work
     // uses the exact branch-derived target required by ShareChain admission.

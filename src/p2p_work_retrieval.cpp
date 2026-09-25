@@ -83,6 +83,20 @@ void P2pWorkRetrieval::remember_local(const P2pMiningContextProposal& proposal) 
     const auto key=checked_key(proposal);
     std::lock_guard lock(mutex_); local_.try_emplace(key,id);
 }
+std::optional<std::vector<std::uint8_t>>
+P2pWorkRetrieval::read_local(const MiningWorkKey& key) {
+    std::optional<Hash256> id;
+    {
+        std::lock_guard lock(mutex_);
+        const auto it=local_.find(key);
+        if (it!=local_.end()) id=it->second;
+    }
+    if (!id) return std::nullopt;
+
+    // MiningWorkArchive::read() revalidates sidechain binding, length,
+    // content ID and checksum before returning the proposal bytes.
+    return archive_.read(*id);
+}
 void P2pWorkRetrieval::expire(std::uint64_t now) {
     for (auto it=pending_.begin(); it!=pending_.end();) {
         if (now<it->second.started || now-it->second.started>=kMiningWorkRequestLifetime)

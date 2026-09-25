@@ -228,6 +228,61 @@ int main() {
     CHECK(chain.is_stale(child_id));
     CHECK(chain.is_on_best_chain(sibling_id));
 
+    // Pruning one connected subtree removes only that root and its connected
+    // descendants, then recomputes the best remaining tip using the ordinary
+    // deterministic chain-selection rule.
+    ShareChain prune_chain;
+
+    Share prune_root = make_share("10", 40);
+    const ShareId prune_root_id = share_id(prune_root);
+    CHECK(prune_chain.add_share_unchecked(prune_root).disposition ==
+          ShareDisposition::Connected);
+
+    Share prune_left = make_child(prune_root, "20", 41);
+    const ShareId prune_left_id = share_id(prune_left);
+    CHECK(prune_chain.add_share_unchecked(prune_left).disposition ==
+          ShareDisposition::Connected);
+
+    Share prune_left_tip = make_child(prune_left, "20", 42);
+    const ShareId prune_left_tip_id = share_id(prune_left_tip);
+    CHECK(prune_chain.add_share_unchecked(prune_left_tip).disposition ==
+          ShareDisposition::Connected);
+
+    Share prune_right = make_child(prune_root, "5", 43);
+    const ShareId prune_right_id = share_id(prune_right);
+    CHECK(prune_chain.add_share_unchecked(prune_right).disposition ==
+          ShareDisposition::Connected);
+
+    Share prune_right_tip = make_child(prune_right, "15", 44);
+    const ShareId prune_right_tip_id = share_id(prune_right_tip);
+    CHECK(prune_chain.add_share_unchecked(prune_right_tip).disposition ==
+          ShareDisposition::Connected);
+
+    CHECK(prune_chain.connected_size() == 5);
+    CHECK(prune_chain.best_tip() != nullptr);
+    CHECK(prune_chain.best_tip()->id == prune_left_tip_id);
+
+    CHECK(prune_chain.prune_connected_subtree(prune_left_id) == 2);
+    CHECK(prune_chain.connected_size() == 3);
+    CHECK(prune_chain.find(prune_left_id) == nullptr);
+    CHECK(prune_chain.find(prune_left_tip_id) == nullptr);
+    CHECK(prune_chain.find(prune_root_id) != nullptr);
+    CHECK(prune_chain.find(prune_right_id) != nullptr);
+    CHECK(prune_chain.find(prune_right_tip_id) != nullptr);
+    CHECK(prune_chain.best_tip() != nullptr);
+    CHECK(prune_chain.best_tip()->id == prune_right_tip_id);
+
+    ShareId unknown_prune_id{};
+    unknown_prune_id[0] = 0xff;
+    CHECK(prune_chain.prune_connected_subtree(unknown_prune_id) == 0);
+    CHECK(prune_chain.connected_size() == 3);
+    CHECK(prune_chain.best_tip() != nullptr);
+    CHECK(prune_chain.best_tip()->id == prune_right_tip_id);
+
+    CHECK(prune_chain.prune_connected_subtree(prune_root_id) == 3);
+    CHECK(prune_chain.connected_size() == 0);
+    CHECK(prune_chain.best_tip() == nullptr);
+
     // Root/non-root height rules fail closed.
     Share bad_root = make_share("1", 10);
     bad_root.share_height = 1;

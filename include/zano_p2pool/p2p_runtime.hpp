@@ -96,6 +96,12 @@ public:
     [[nodiscard]] P2pHandshake local_handshake() const;
     [[nodiscard]] std::size_t peer_count() const noexcept;
 
+    // Snapshot the already validated handshakes for currently live peers.
+    // Protocol-level autonomous recovery may use these identities without
+    // reaching into transport-owned connection state.
+    [[nodiscard]] std::vector<P2pHandshake>
+    peer_handshakes() const;
+
 private:
     struct Peer;
     struct OutboundTarget;

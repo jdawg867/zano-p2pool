@@ -28,6 +28,19 @@ struct P2pMinerTxProofResult {
         P2pPayoutPolicyStatus::MalformedMinerTxPrefix};
 };
 
+// Bootstrap proof path. No sidechain-authoritative destination exists yet,
+// but destination-independent payout accounting and both HF6 proof variants
+// remain mandatory.
+[[nodiscard]] P2pMinerTxProofResult
+verify_p2p_mining_context_bootstrap_balance_proof(
+    const P2pMiningContextProposal& proposal,
+    const P2pMiningContextCheckResult& anchored_check) noexcept;
+
+[[nodiscard]] P2pMinerTxProofResult
+verify_p2p_mining_context_bootstrap_proofs(
+    const P2pMiningContextProposal& proposal,
+    const P2pMiningContextCheckResult& anchored_check) noexcept;
+
 // Checkpoint 6B.3a: runs only after 6A anchoring and 6B.1/6B.2 payout-policy
 // validation. This verifies Zano's current HF6 zc_balance_proof but
 // deliberately does not verify zc_outs_range_proof yet. There is intentionally

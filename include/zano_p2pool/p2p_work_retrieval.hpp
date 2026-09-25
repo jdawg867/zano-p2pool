@@ -34,6 +34,13 @@ public:
     explicit P2pWorkRetrieval(MiningWorkArchive& archive);
     // Call only after the local proposal has been durably archived.
     void remember_local(const P2pMiningContextProposal& proposal);
+
+    // Return exact immutable evidence already present in this node's own
+    // archive. Archive presence grants no trust; callers must still perform
+    // the complete historical trust crossing for the candidate share.
+    [[nodiscard]] std::optional<std::vector<std::uint8_t>>
+    read_local(const MiningWorkKey& key);
+
     [[nodiscard]] std::optional<P2pEnvelope> begin(
         const P2pHandshake& peer, const MiningWorkKey& key, std::uint64_t now);
     [[nodiscard]] P2pEnvelope answer(const P2pHandshake& peer, const P2pEnvelope& request);

@@ -430,6 +430,135 @@ P2pPayoutPolicyResult verify_miner_tx_payout_policy(
     return result;
 }
 
+P2pPayoutPolicyResult verify_miner_tx_bootstrap_policy(
+    std::span<const std::uint8_t> miner_tx_prefix,
+    std::string_view miner_tx_tgc_json,
+    std::uint64_t block_reward_without_fee,
+    std::uint64_t block_reward,
+    std::uint64_t txs_fee) noexcept {
+    P2pPayoutPolicyResult result;
+
+    const auto binding = verify_miner_tx_tgc_key_binding(
+        miner_tx_prefix,
+        miner_tx_tgc_json);
+
+    result.binding_status = binding.status;
+
+    if (binding.status != P2pMinerTxBindingStatus::Verified) {
+        result.status =
+            binding.status ==
+                    P2pMinerTxBindingStatus::BackendUnavailable
+                ? P2pPayoutPolicyStatus::BackendUnavailable
+                : P2pPayoutPolicyStatus::KeyBindingFailed;
+        return result;
+    }
+
+    if (!zano_curve_backend_available()) {
+        result.status =
+            P2pPayoutPolicyStatus::BackendUnavailable;
+        return result;
+    }
+
+    // HF6 burns fees. Bootstrap changes destination authority only;
+    // reward accounting remains identical to normal/PPLNS work.
+    static_cast<void>(txs_fee);
+
+    if (block_reward_without_fee == 0 ||
+        block_reward != block_reward_without_fee) {
+        result.status =
+            P2pPayoutPolicyStatus::RewardMetadataMismatch;
+        return result;
+    }
+
+    std::vector<ParsedPayoutOutput> outputs;
+    try {
+        outputs =
+            parse_current_outputs(miner_tx_prefix);
+    } catch (...) {
+        result.status =
+            P2pPayoutPolicyStatus::MalformedMinerTxPrefix;
+        return result;
+    }
+
+    result.output_count = outputs.size();
+
+    if (outputs.size() < kCurrentMinerMinOutputs ||
+        outputs.size() > kCurrentMinerMaxOutputs) {
+        result.status =
+            P2pPayoutPolicyStatus::InvalidOutputCount;
+        return result;
+    }
+
+    ParsedTgcPayoutData tgc;
+    try {
+        tgc =
+            parse_tgc_payout_data(miner_tx_tgc_json);
+    } catch (...) {
+        result.status =
+            P2pPayoutPolicyStatus::MalformedTgc;
+        return result;
+    }
+
+    if (tgc.amounts.size() != outputs.size() ||
+        tgc.amount_blinding_masks.size() != outputs.size() ||
+        tgc.asset_id_blinding_masks.size() != outputs.size()) {
+        result.status =
+            P2pPayoutPolicyStatus::TgcOutputCountMismatch;
+        return result;
+    }
+
+    std::uint64_t reward_sum = 0;
+
+    for (std::size_t i = 0; i < outputs.size(); ++i) {
+        const auto& output = outputs[i];
+
+        if (output.blinded_asset_id !=
+                kNativeCoinAssetId1Div8 ||
+            !is_zero_key(
+                tgc.asset_id_blinding_masks[i])) {
+            result.status =
+                P2pPayoutPolicyStatus::NonNativeAsset;
+            return result;
+        }
+
+        // Deliberately no destination comparison here. The
+        // bootstrap template existed before the first sidechain
+        // share and may pay the template node's own wallet.
+        if (!zano_amount_commitment_matches(
+                tgc.amounts[i],
+                tgc.amount_blinding_masks[i],
+                output.blinded_asset_id,
+                output.amount_commitment)) {
+            result.status =
+                P2pPayoutPolicyStatus::
+                    AmountCommitmentMismatch;
+            return result;
+        }
+
+        if (tgc.amounts[i] >
+            std::numeric_limits<std::uint64_t>::max() -
+                reward_sum) {
+            result.status =
+                P2pPayoutPolicyStatus::RewardSumMismatch;
+            return result;
+        }
+
+        reward_sum += tgc.amounts[i];
+    }
+
+    result.verified_reward = reward_sum;
+
+    if (reward_sum != block_reward) {
+        result.status =
+            P2pPayoutPolicyStatus::RewardSumMismatch;
+        return result;
+    }
+
+    result.status =
+        P2pPayoutPolicyStatus::Verified;
+    return result;
+}
+
 P2pPayoutPolicyResult verify_miner_tx_payout_policy(
     std::span<const std::uint8_t> miner_tx_prefix,
     std::string_view miner_tx_tgc_json,
@@ -623,6 +752,48 @@ P2pPayoutPolicyResult verify_p2p_mining_context_payout_policy(
             expected_payout);
     } catch (...) {
         result.status = P2pPayoutPolicyStatus::MalformedMinerTxPrefix;
+        return result;
+    }
+}
+
+P2pPayoutPolicyResult
+verify_p2p_mining_context_bootstrap_payout_policy(
+    const P2pMiningContextProposal& proposal,
+    const P2pMiningContextCheckResult& anchored_check) noexcept {
+    P2pPayoutPolicyResult result;
+
+    if (anchored_check.status !=
+            P2pMiningContextCheckStatus::
+                AnchoredUnverifiedMinerTx ||
+        anchored_check.proposal_id !=
+            p2p_mining_context_id(proposal)) {
+        result.status =
+            P2pPayoutPolicyStatus::NotAnchored;
+        return result;
+    }
+
+    try {
+        const auto work =
+            derive_mining_header_work(
+                proposal.block_template_blob);
+
+        if (work.header_hash !=
+            anchored_check.mining_header_hash) {
+            result.status =
+                P2pPayoutPolicyStatus::NotAnchored;
+            return result;
+        }
+
+        return verify_miner_tx_bootstrap_policy(
+            work.miner_tx_prefix.serialized,
+            proposal.miner_tx_tgc_json,
+            proposal.block_reward_without_fee,
+            proposal.block_reward,
+            proposal.txs_fee);
+    } catch (...) {
+        result.status =
+            P2pPayoutPolicyStatus::
+                MalformedMinerTxPrefix;
         return result;
     }
 }

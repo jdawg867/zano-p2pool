@@ -30,6 +30,11 @@ enum class P2pNodeMessageStatus : std::uint8_t {
     MiningWorkResponseProcessed,
 };
 
+struct P2pCanonicalReconciliationResult {
+    std::size_t pruned_connected_shares{0};
+    std::size_t revoked_trusted_work{0};
+};
+
 struct P2pNodeMessageResult {
     P2pNodeMessageStatus status{P2pNodeMessageStatus::UnexpectedHandshake};
     P2pShareReceiveStatus share_status{P2pShareReceiveStatus::Rejected};
@@ -40,17 +45,78 @@ struct P2pNodeMessageResult {
     bool mining_context_registry_inserted{false};
     std::optional<Hash256> untrusted_work_received;
     std::optional<HistoricalTrustStatus> historical_trust_status;
+    std::optional<HistoricalAnchorStatus> historical_anchor_status;
+    std::optional<HistoricalPayoutStatus> historical_payout_status;
+    std::optional<P2pMiningContextTrustStatus>
+        historical_promotion_status;
+    std::optional<P2pMinerTxProofStatus>
+        historical_proof_status;
+    std::optional<P2pPayoutPolicyStatus>
+        historical_payout_policy_status;
+
+    // Identifies the exact final historical candidate whose trust diagnostics
+    // are reported below. Recursive ancestry recovery may process several
+    // candidates inside one outer MiningWorkResponse.
+    std::optional<ShareId> historical_attempt_share_id;
+    std::optional<ShareId> historical_attempt_parent_id;
+    std::optional<std::uint64_t> historical_attempt_zano_height;
+    std::optional<Hash256> historical_attempt_mining_header_hash;
+
     std::optional<Share> historical_share;
     std::vector<Share> historical_admitted_shares;
     bool historical_share_retried{false};
     bool historical_share_connected{false};
+
+    // Connected structural replay records removed after local canonical
+    // history decisively proves their Zano parent is no longer canonical.
+    // Persistence is intentionally untouched.
+    std::size_t historical_pruned_connected_shares{0};
+
     bool sent_followup{false};
     bool relayed_share{false};
     bool relayed_tip{false};
 };
 
+struct P2pNodeMetricsSnapshot {
+    std::size_t connected_shares{};
+    std::size_t orphan_shares{};
+    std::uint64_t tip_height{};
+    std::size_t trusted_work_contexts{};
+};
+
+struct P2pHistoricalRetrySummary {
+    std::size_t attempted{};
+    std::size_t trusted{};
+    std::size_t connected{};
+    std::size_t remaining{};
+};
+
+struct P2pReplayRecoverySummary {
+    std::size_t attempted{};
+    std::size_t connected{};
+    std::size_t pruned_connected_shares{};
+    std::size_t remaining{};
+
+    // Diagnostic identity/status for the exact frontier selected by this
+    // periodic pass. These fields report existing trust results only; they do
+    // not create or modify trust.
+    std::optional<ShareId> attempted_share_id;
+    std::optional<ShareId> attempted_parent_id;
+    std::optional<HistoricalTrustStatus> historical_trust_status;
+    std::optional<HistoricalAnchorStatus> historical_anchor_status;
+    std::optional<HistoricalPayoutStatus> historical_payout_status;
+};
+
 [[nodiscard]] std::uint32_t p2p_node_message_penalty(
     const P2pNodeMessageResult& result) noexcept;
+
+// Convert one completed outer P2P message into the exact unique shares whose
+// admission became durable during that handling pass. A historical retry can
+// update share_status for the same share carried by the original envelope, so
+// deduplicate by canonical ShareId rather than by admission path.
+[[nodiscard]] std::vector<Share> p2p_node_unique_admitted_shares(
+    const P2pNodeMessageResult& result,
+    const P2pEnvelope& envelope);
 
 class P2pNodeProtocol {
 public:
@@ -66,9 +132,30 @@ public:
         std::uint64_t now,
         ProgPowZContextMode mode = ProgPowZContextMode::Light);
 
-    // The authenticated transport handshake already carries the peer's best
-    // share id/height. Use it as a synchronization hint immediately on
-    // connection instead of waiting for an incidental TipAnnounce.
+    // Retry exact historical candidates that previously failed only because
+    // the local canonical daemon could not yet reconstruct historical PoW
+    // authority. Each retry re-enters the normal gossip/sync handling path and
+    // therefore reruns the complete historical trust crossing.
+    [[nodiscard]] P2pHistoricalRetrySummary
+    retry_historical_pow_unavailable(
+        P2pRuntime& runtime,
+        std::uint64_t now,
+        ProgPowZContextMode mode = ProgPowZContextMode::Light);
+
+    // Periodic runtime entry point for durable replay recovery. It selects
+    // one eligible frontier using a currently live authenticated ShareSync
+    // peer, then re-enters the normal ShareResponse historical-trust path.
+    // No transport trust or historical authority is synthesized here.
+    [[nodiscard]] P2pReplayRecoverySummary
+    advance_replay_recovery(
+        P2pRuntime& runtime,
+        std::uint64_t now,
+        ProgPowZContextMode mode = ProgPowZContextMode::Light);
+
+    // Use the authenticated handshake tip as an initial synchronization hint.
+    // Because that transport snapshot can become stale on a long-lived node,
+    // advertise the current local application-level tip when the handshake
+    // itself gives us nothing that needs to be requested.
     [[nodiscard]] std::optional<P2pEnvelope>
     initial_sync_request(const P2pHandshake& peer);
 
@@ -79,8 +166,12 @@ public:
     void set_historical_trust_sources(
         const SidechainParameters& params,
         std::function<std::vector<P2pMiningAnchor>()> load_local_observations,
-        std::function<RpcCanonicalHeader(std::uint64_t)> lookup);
-    void remember_trusted_work(const ShareWorkContext& context);
+        std::function<RpcCanonicalHeader(std::uint64_t)> lookup,
+        std::function<std::optional<RpcHistoricalPowContext>(
+            std::uint64_t)> historical_pow_lookup);
+    void remember_trusted_work(
+        const ShareWorkContext& context,
+        std::optional<ShareId> parent_id = std::nullopt);
     void set_local_mining_context(
         const P2pMiningAnchor& anchor,
         const P2pMiningContextProposal& proposal);
@@ -91,7 +182,8 @@ public:
     void set_local_mining_context(
         const P2pMiningAnchor& anchor,
         const P2pMiningContextProposal& proposal,
-        const PplnsCoinbasePlan& plan);
+        const PplnsCoinbasePlan& plan,
+        std::optional<ShareId> parent_id = std::nullopt);
 
     // Exactly one payout expectation is active at a time. Bootstrap/legacy
     // daemon templates use the single public payout identity; canonical PPLNS
@@ -101,6 +193,39 @@ public:
     void clear_expected_payout() noexcept;
 
     [[nodiscard]] std::size_t trusted_work_count() const noexcept;
+
+    // Metrics must never delay consensus/replay processing. Return a
+    // consistent node-state snapshot only when the consensus mutex is
+    // immediately available; callers may serve their previous snapshot when
+    // recovery currently owns the state.
+    [[nodiscard]] std::optional<P2pNodeMetricsSnapshot>
+    try_metrics_snapshot() const noexcept;
+
+    // Snapshot of Zano heights for trusted work carrying independently
+    // established canonical-parent provenance.
+    [[nodiscard]] std::vector<std::uint64_t>
+    trusted_work_provenance_heights() const;
+
+    // Reconcile one historical mining height against a stable canonical Zano
+    // parent. Only provenance-bearing work that conflicts with canonical
+    // history is revoked. Connected shares using that stale work are removed
+    // with their descendants, preserving any valid older prefix.
+    [[nodiscard]] P2pCanonicalReconciliationResult
+    reconcile_canonical_parent(
+        std::uint64_t zano_height,
+        const Hash256& canonical_parent_hash);
+
+    // Revoke a trusted-work height that is ahead of the daemon's current
+    // canonical template after a rollback. No canonical parent exists against
+    // which this work can remain authorized.
+    [[nodiscard]] P2pCanonicalReconciliationResult
+    reconcile_unavailable_work_height(
+        std::uint64_t zano_height);
+
+    [[nodiscard]] P2pCanonicalReconciliationResult
+    reconcile_unavailable_work_above(
+        std::uint64_t maximum_zano_height);
+
     [[nodiscard]] std::size_t connected_share_count() const noexcept;
     [[nodiscard]] P2pTipHint local_tip() const noexcept;
     [[nodiscard]] bool mining_context_trust_ready() const noexcept;
@@ -125,10 +250,27 @@ private:
         P2pHandshake candidate_peer;
         HistoricalEvidence evidence;
         std::uint64_t required_capability{};
+
+        // Identifies one backward ancestry-recovery walk. Descendants in the
+        // same walk share this root so valid parent progress refreshes only
+        // that recovery session rather than unrelated peer state.
+        ShareId recovery_root{};
+
+        // Inactivity timestamp. Active ancestry recovery may legitimately
+        // exceed the mining-work request lifetime in total, but a stalled
+        // recovery session still expires after that lifetime without progress.
+        std::uint64_t last_progress{};
+    };
+
+    struct RetryableHistoricalCandidate {
+        Share share;
+        P2pHandshake candidate_peer;
+        std::uint64_t required_capability{};
         std::uint64_t started{};
     };
 
     using PendingHistoricalKey = std::pair<NodeId, MiningWorkKey>;
+    using ReplayFrontierKey = std::pair<NodeId, ShareId>;
 
     [[nodiscard]] bool historical_trust_sources_ready_unlocked() const noexcept;
     void expire_historical_state(std::uint64_t now);
@@ -147,6 +289,31 @@ private:
         const HistoricalEvidence& evidence,
         std::uint64_t required_capability,
         std::uint64_t now);
+    void remember_retryable_historical(
+        const Share& share,
+        const P2pHandshake& candidate_peer,
+        std::uint64_t required_capability,
+        std::uint64_t now);
+
+    // Called with state_mutex_ held. A same-height canonical-parent
+    // replacement invalidates every work authorization anchored to the
+    // displaced Zano parent and any active sidechain subtree using that
+    // mining height.
+    [[nodiscard]] P2pCanonicalReconciliationResult
+    reconcile_canonical_parent_unlocked(
+        std::uint64_t zano_height,
+        const Hash256& canonical_parent_hash);
+
+    [[nodiscard]] P2pCanonicalReconciliationResult
+    reconcile_unavailable_work_height_unlocked(
+        std::uint64_t zano_height);
+
+    [[nodiscard]] P2pCanonicalReconciliationResult
+    reconcile_unavailable_work_above_unlocked(
+        std::uint64_t maximum_zano_height);
+
+    void reconcile_local_parent_replacement_unlocked(
+        const P2pMiningAnchor& next_anchor);
 
     P2pWorkRetrieval* work_retrieval_{nullptr};
     ShareChain& chain_;
@@ -163,12 +330,23 @@ private:
         load_historical_observations_;
     std::function<RpcCanonicalHeader(std::uint64_t)>
         historical_parent_lookup_;
+    std::function<std::optional<RpcHistoricalPowContext>(
+        std::uint64_t)>
+        historical_pow_lookup_;
     std::map<PendingHistoricalKey, PendingHistoricalCandidate>
         pending_historical_;
     std::map<MiningWorkKey, HistoricalEvidence>
         historical_evidence_;
     std::map<ShareId, DeferredHistoricalCandidate>
         deferred_historical_;
+    std::map<ShareId, RetryableHistoricalCandidate>
+        retryable_historical_;
+
+    // Prevent one unavailable or terminally rejected replay frontier from
+    // creating a tight recovery loop. The key is peer-specific so another
+    // authenticated peer may still supply independent evidence immediately.
+    std::map<ReplayFrontierKey, std::uint64_t>
+        replay_frontier_attempts_;
 };
 
 [[nodiscard]] const char* p2p_node_message_status_name(

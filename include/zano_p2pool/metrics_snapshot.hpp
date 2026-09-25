@@ -23,6 +23,11 @@ struct MetricsSnapshot {
     std::uint64_t blocks_alternative_total{0};
     std::uint64_t block_submission_failures_total{0};
     std::uint64_t template_refresh_failures_total{0};
+    std::uint64_t historical_pow_retry_attempts_total{0};
+    std::uint64_t historical_pow_retry_trusted_total{0};
+    std::uint64_t historical_pow_retry_connected_total{0};
+    std::uint64_t historical_pow_retry_failures_total{0};
+    std::uint64_t historical_pow_retry_remaining{0};
     bool persistence_ok{true};
 };
 
@@ -156,6 +161,36 @@ inline void append_metric(
         "counter",
         "Template refresh attempts that raised an error since process start.",
         snapshot.template_refresh_failures_total);
+    detail::append_metric(
+        out,
+        "zano_p2pool_historical_pow_retry_attempts_total",
+        "counter",
+        "Historical PoW candidates reported by completed autonomous retry passes since process start.",
+        snapshot.historical_pow_retry_attempts_total);
+    detail::append_metric(
+        out,
+        "zano_p2pool_historical_pow_retry_trusted_total",
+        "counter",
+        "Historical PoW candidates that crossed full trust during autonomous retry since process start.",
+        snapshot.historical_pow_retry_trusted_total);
+    detail::append_metric(
+        out,
+        "zano_p2pool_historical_pow_retry_connected_total",
+        "counter",
+        "Historical shares connected by autonomous PoW retry since process start.",
+        snapshot.historical_pow_retry_connected_total);
+    detail::append_metric(
+        out,
+        "zano_p2pool_historical_pow_retry_failures_total",
+        "counter",
+        "Autonomous historical PoW retry passes that raised an exception since process start.",
+        snapshot.historical_pow_retry_failures_total);
+    detail::append_metric(
+        out,
+        "zano_p2pool_historical_pow_retry_remaining",
+        "gauge",
+        "Retryable historical PoW candidates remaining after the latest completed retry pass.",
+        snapshot.historical_pow_retry_remaining);
     detail::append_metric(
         out,
         "zano_p2pool_persistence_ok",

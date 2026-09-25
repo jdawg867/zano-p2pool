@@ -1,5 +1,6 @@
 #include "zano_p2pool/p2p_node.hpp"
 
+#include <algorithm>
 #include <optional>
 #include <stdexcept>
 #include <vector>
@@ -17,7 +18,8 @@ P2pNodeProtocol::P2pNodeProtocol(
 bool P2pNodeProtocol::historical_trust_sources_ready_unlocked() const noexcept {
     return historical_params_.has_value() &&
            static_cast<bool>(load_historical_observations_) &&
-           static_cast<bool>(historical_parent_lookup_);
+           static_cast<bool>(historical_parent_lookup_) &&
+           static_cast<bool>(historical_pow_lookup_);
 }
 
 void P2pNodeProtocol::expire_historical_state(std::uint64_t now) {
@@ -43,9 +45,30 @@ void P2pNodeProtocol::expire_historical_state(std::uint64_t now) {
 
     for (auto it = deferred_historical_.begin();
          it != deferred_historical_.end();) {
+        if (now < it->second.last_progress ||
+            now - it->second.last_progress >=
+                kMiningWorkRequestLifetime) {
+            it = deferred_historical_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    for (auto it = retryable_historical_.begin();
+         it != retryable_historical_.end();) {
         if (now < it->second.started ||
             now - it->second.started >= kMiningWorkRequestLifetime) {
-            it = deferred_historical_.erase(it);
+            it = retryable_historical_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    for (auto it = replay_frontier_attempts_.begin();
+         it != replay_frontier_attempts_.end();) {
+        if (now < it->second ||
+            now - it->second >= kMiningWorkRequestLifetime) {
+            it = replay_frontier_attempts_.erase(it);
         } else {
             ++it;
         }
@@ -80,8 +103,18 @@ void P2pNodeProtocol::remember_historical_evidence(
     HistoricalEvidence evidence,
     std::uint64_t now) {
     expire_historical_state(now);
-    evidence.received = now;
-    if (!historical_evidence_.contains(key) &&
+
+    const auto existing =
+        historical_evidence_.find(key);
+    if (existing != historical_evidence_.end()) {
+        // Reuse never renews the lifetime of peer-supplied evidence. The
+        // bounded cache expires relative to the first retained receipt.
+        evidence.received = existing->second.received;
+    } else {
+        evidence.received = now;
+    }
+
+    if (existing == historical_evidence_.end() &&
         historical_evidence_.size() >= kMiningWorkMaxReceived) {
         historical_evidence_.erase(historical_evidence_.begin());
     }
@@ -117,6 +150,57 @@ bool P2pNodeProtocol::remember_deferred_historical(
         return false;
     }
 
+    // A newly audited parent is positive progress for only the recovery walk
+    // whose deferred child points directly at it. Carry the original recovery
+    // root backward and refresh every still-live member of that exact walk.
+    //
+    // This deliberately occurs after expire_historical_state(): a session that
+    // has already been inactive for the full lifetime is not resurrected by a
+    // later message.
+    ShareId recovery_root = id;
+    std::vector<ShareId> joined_roots;
+
+    for (const auto& [deferred_id, deferred] :
+         deferred_historical_) {
+        static_cast<void>(deferred_id);
+
+        if (deferred.candidate_peer.node_id ==
+                candidate_peer.node_id &&
+            deferred.share.parent_id == id) {
+            joined_roots.push_back(
+                deferred.recovery_root);
+        }
+    }
+
+    if (!joined_roots.empty()) {
+        recovery_root = joined_roots.front();
+
+        for (auto& [deferred_id, deferred] :
+             deferred_historical_) {
+            static_cast<void>(deferred_id);
+
+            if (deferred.candidate_peer.node_id !=
+                candidate_peer.node_id) {
+                continue;
+            }
+
+            for (const ShareId& joined_root :
+                 joined_roots) {
+                if (deferred.recovery_root !=
+                    joined_root) {
+                    continue;
+                }
+
+                // If two deferred branches converge on the same exact parent,
+                // merge them into one recovery session from this point back.
+                deferred.recovery_root =
+                    recovery_root;
+                deferred.last_progress = now;
+                break;
+            }
+        }
+    }
+
     deferred_historical_.insert_or_assign(
         id,
         DeferredHistoricalCandidate{
@@ -124,9 +208,356 @@ bool P2pNodeProtocol::remember_deferred_historical(
             candidate_peer,
             evidence,
             required_capability,
+            recovery_root,
             now,
         });
     return true;
+}
+
+void P2pNodeProtocol::remember_retryable_historical(
+    const Share& share,
+    const P2pHandshake& candidate_peer,
+    std::uint64_t required_capability,
+    std::uint64_t now) {
+    expire_historical_state(now);
+
+    if (required_capability != kP2pCapabilityShareGossip &&
+        required_capability != kP2pCapabilityShareSync) {
+        throw std::logic_error(
+            "unsupported historical retry capability");
+    }
+
+    const ShareId id = share_id(share);
+
+    const auto existing =
+        retryable_historical_.find(id);
+    const std::uint64_t started =
+        existing != retryable_historical_.end()
+            ? existing->second.started
+            : now;
+
+    if (existing == retryable_historical_.end() &&
+        retryable_historical_.size() >= kMiningWorkMaxReceived) {
+        auto oldest = retryable_historical_.begin();
+        for (auto it = retryable_historical_.begin();
+             it != retryable_historical_.end();
+             ++it) {
+            if (it->second.started < oldest->second.started) {
+                oldest = it;
+            }
+        }
+        retryable_historical_.erase(oldest);
+    }
+
+    retryable_historical_.insert_or_assign(
+        id,
+        RetryableHistoricalCandidate{
+            share,
+            candidate_peer,
+            required_capability,
+            started,
+        });
+}
+
+P2pHistoricalRetrySummary
+P2pNodeProtocol::retry_historical_pow_unavailable(
+    P2pRuntime& runtime,
+    std::uint64_t now,
+    ProgPowZContextMode mode) {
+
+    std::vector<RetryableHistoricalCandidate> retry;
+
+    {
+        std::lock_guard lock(state_mutex_);
+        expire_historical_state(now);
+
+        retry.reserve(retryable_historical_.size());
+        for (const auto& [candidate_id, candidate] :
+             retryable_historical_) {
+            static_cast<void>(candidate_id);
+            retry.push_back(candidate);
+        }
+
+        // Leave registrations in place while processing the snapshot.
+        // attempt_historical() consumes the exact ShareId when its full trust
+        // crossing begins and re-registers it only when canonical PoW context
+        // remains temporarily unavailable. This also means an exception cannot
+        // silently discard candidates that have not been attempted yet.
+    }
+
+    P2pHistoricalRetrySummary summary;
+    summary.attempted = retry.size();
+
+    for (const RetryableHistoricalCandidate& candidate : retry) {
+        P2pEnvelope envelope;
+
+        if (candidate.required_capability ==
+            kP2pCapabilityShareGossip) {
+            envelope =
+                make_p2p_share_announce_envelope(candidate.share);
+        } else if (
+            candidate.required_capability ==
+            kP2pCapabilityShareSync) {
+            const ShareId requested_id =
+                share_id(candidate.share);
+            envelope =
+                make_p2p_share_response_envelope(
+                    requested_id,
+                    &candidate.share);
+        } else {
+            throw std::logic_error(
+                "unsupported historical retry capability");
+        }
+
+        P2pNodeMessageResult result;
+        try {
+            result =
+                handle(
+                    runtime,
+                    candidate.candidate_peer,
+                    envelope,
+                    now,
+                    mode);
+        } catch (...) {
+            // attempt_historical() removes the registration immediately before
+            // crossing local trust. Restore the original bounded candidate if
+            // an exceptional local/RPC failure interrupted that crossing.
+            std::lock_guard lock(state_mutex_);
+            if (now >= candidate.started &&
+                now - candidate.started <
+                    kMiningWorkRequestLifetime &&
+                !retryable_historical_.contains(
+                    share_id(candidate.share))) {
+                retryable_historical_.insert_or_assign(
+                    share_id(candidate.share),
+                    candidate);
+            }
+            throw;
+        }
+
+        if (!result.historical_trust_status.has_value() &&
+            result.share_status !=
+                P2pShareReceiveStatus::UnknownWorkContext) {
+            // A concurrent path may already have admitted or rejected this
+            // exact share before the synthetic retry reached historical trust.
+            // It no longer needs an oracle-retry registration.
+            std::lock_guard lock(state_mutex_);
+            retryable_historical_.erase(
+                share_id(candidate.share));
+        }
+
+        if (result.historical_trust_status.has_value() &&
+            *result.historical_trust_status ==
+                HistoricalTrustStatus::Trusted) {
+            ++summary.trusted;
+        }
+
+        if (result.historical_share_connected) {
+            ++summary.connected;
+        }
+    }
+
+    {
+        std::lock_guard lock(state_mutex_);
+        expire_historical_state(now);
+        summary.remaining = retryable_historical_.size();
+    }
+
+    return summary;
+}
+
+P2pReplayRecoverySummary
+P2pNodeProtocol::advance_replay_recovery(
+    P2pRuntime& runtime,
+    std::uint64_t now,
+    ProgPowZContextMode mode) {
+
+    P2pReplayRecoverySummary summary;
+
+    // retry_historical_pow_unavailable() already establishes the precedent
+    // that autonomous local recovery may re-enter handle() with a synthetic
+    // ShareResponse while preserving the real authenticated peer identity.
+    // Do the same for structurally replayed frontiers, but select that identity
+    // only from connections the transport currently reports as live.
+    const std::vector<P2pHandshake> peers =
+        runtime.peer_handshakes();
+
+    for (const P2pHandshake& peer : peers) {
+        if ((peer.capabilities &
+             kP2pCapabilityShareSync) == 0) {
+            continue;
+        }
+
+        std::optional<Share> candidate;
+        std::optional<ReplayFrontierKey> attempt_key;
+
+        {
+            std::lock_guard lock(state_mutex_);
+            expire_historical_state(now);
+
+            if (!work_retrieval_ ||
+                !historical_trust_sources_ready_unlocked()) {
+                break;
+            }
+
+            std::vector<ShareId> replay_ids =
+                chain_.connected_share_ids();
+
+            std::sort(
+                replay_ids.begin(),
+                replay_ids.end(),
+                [this](const ShareId& left,
+                       const ShareId& right) {
+                    const ConnectedShare* lhs =
+                        chain_.find(left);
+                    const ConnectedShare* rhs =
+                        chain_.find(right);
+
+                    if (lhs == nullptr ||
+                        rhs == nullptr) {
+                        throw std::logic_error(
+                            "connected replay share disappeared "
+                            "during periodic recovery scheduling");
+                    }
+
+                    if (lhs->share.share_height !=
+                        rhs->share.share_height) {
+                        return lhs->share.share_height <
+                               rhs->share.share_height;
+                    }
+
+                    return left < right;
+                });
+
+            for (const ShareId& candidate_id :
+                 replay_ids) {
+                const ConnectedShare* connected =
+                    chain_.find(candidate_id);
+
+                if (connected == nullptr ||
+                    connected->validated_ancestry) {
+                    continue;
+                }
+
+                bool parent_ready = false;
+
+                if (is_zero_share_id(
+                        connected->share.parent_id)) {
+                    parent_ready = true;
+                } else {
+                    const ConnectedShare* parent =
+                        chain_.find(
+                            connected->share.parent_id);
+
+                    parent_ready =
+                        parent != nullptr &&
+                        parent->validated_ancestry;
+                }
+
+                if (!parent_ready) {
+                    continue;
+                }
+
+                const ReplayFrontierKey key{
+                    peer.node_id,
+                    candidate_id,
+                };
+
+                if (replay_frontier_attempts_.contains(
+                        key)) {
+                    continue;
+                }
+
+                candidate = connected->share;
+                attempt_key = key;
+
+                // Reserve this exact peer/frontier before re-entering handle().
+                // handle() may itself expose more replay work, and this keeps
+                // the selected frontier from being immediately selected again
+                // by the ancillary scheduler at the end of that same pass.
+                replay_frontier_attempts_.
+                    insert_or_assign(
+                        key,
+                        now);
+
+                break;
+            }
+        }
+
+        if (!candidate.has_value() ||
+            !attempt_key.has_value()) {
+            continue;
+        }
+
+        ++summary.attempted;
+
+        const ShareId candidate_id =
+            share_id(*candidate);
+
+        summary.attempted_share_id =
+            candidate_id;
+        summary.attempted_parent_id =
+            candidate->parent_id;
+
+        try {
+            const P2pEnvelope replay =
+                make_p2p_share_response_envelope(
+                    candidate_id,
+                    &*candidate);
+
+            const P2pNodeMessageResult result =
+                handle(
+                    runtime,
+                    peer,
+                    replay,
+                    now,
+                    mode);
+
+            summary.historical_trust_status =
+                result.historical_trust_status;
+            summary.historical_anchor_status =
+                result.historical_anchor_status;
+            summary.historical_payout_status =
+                result.historical_payout_status;
+            summary.pruned_connected_shares +=
+                result.historical_pruned_connected_shares;
+
+            if (result.historical_share_connected) {
+                ++summary.connected;
+            }
+        } catch (...) {
+            // Exceptional local/RPC failure did not complete the periodic
+            // attempt. Remove the reservation so a later refresh may retry
+            // immediately rather than waiting for the normal attempt timeout.
+            std::lock_guard lock(state_mutex_);
+            replay_frontier_attempts_.erase(
+                *attempt_key);
+            throw;
+        }
+
+        // Keep one explicit periodic trigger bounded. handle() may itself
+        // advance additional immediately eligible local frontiers using the
+        // existing kMiningWorkMaxPending budget.
+        break;
+    }
+
+    {
+        std::lock_guard lock(state_mutex_);
+        expire_historical_state(now);
+
+        for (const ShareId& id :
+             chain_.connected_share_ids()) {
+            const ConnectedShare* connected =
+                chain_.find(id);
+
+            if (connected != nullptr &&
+                !connected->validated_ancestry) {
+                ++summary.remaining;
+            }
+        }
+    }
+
+    return summary;
 }
 
 std::optional<P2pEnvelope>
@@ -144,26 +575,41 @@ P2pNodeProtocol::initial_sync_request(
             *decision.requested_id);
     }
 
-    if (decision.status !=
-            P2pTipSyncStatus::KnownConnectedTip ||
-        !work_retrieval_ ||
-        !historical_trust_sources_ready_unlocked()) {
-        return std::nullopt;
+    if (decision.status ==
+            P2pTipSyncStatus::KnownConnectedTip &&
+        work_retrieval_ &&
+        historical_trust_sources_ready_unlocked()) {
+        const ConnectedShare* connected =
+            chain_.find(hint.share_id);
+
+        if (connected != nullptr &&
+            !connected->validated_ancestry) {
+            // Structural replay is not synchronization completion. Re-request
+            // the exact known tip so historical recovery can walk backward
+            // through UnverifiedAncestry until it reaches a validated parent
+            // boundary.
+            return make_p2p_share_request_envelope(
+                hint.share_id);
+        }
     }
 
-    const ConnectedShare* connected =
-        chain_.find(hint.share_id);
-
-    if (connected == nullptr ||
-        connected->validated_ancestry) {
-        return std::nullopt;
+    // A transport handshake is only a connection-time snapshot. A long-lived
+    // node may have advanced its sidechain substantially since that handshake
+    // was created. When the peer's snapshot gives us nothing to request,
+    // advertise our current application-level tip so the peer can make its own
+    // synchronization decision from fresh state.
+    if ((peer.capabilities & kP2pCapabilityShareSync) != 0 &&
+        (decision.status == P2pTipSyncStatus::NoRemoteTip ||
+         decision.status == P2pTipSyncStatus::KnownConnectedTip)) {
+        const P2pTipHint local_hint =
+            p2p_tip_hint_from_chain(chain_);
+        if (!is_zero_share_id(local_hint.share_id)) {
+            return make_p2p_tip_announce_envelope(
+                local_hint);
+        }
     }
 
-    // Structural replay is not synchronization completion. Re-request the
-    // exact known tip so historical recovery can walk backward through
-    // UnverifiedAncestry until it reaches a validated parent boundary.
-    return make_p2p_share_request_envelope(
-        hint.share_id);
+    return std::nullopt;
 }
 
 P2pNodeMessageResult P2pNodeProtocol::handle(
@@ -176,6 +622,7 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
         P2pNodeMessageResult result;
         std::optional<P2pEnvelope> followup;
         NodeId followup_peer = peer.node_id;
+        std::optional<P2pEnvelope> fresh_tip_followup;
         std::optional<P2pEnvelope> relay_share;
         std::optional<P2pEnvelope> relay_tip;
 
@@ -190,6 +637,27 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
                 return std::nullopt;
             }
 
+            const ShareId candidate_id =
+                share_id(candidate_share);
+
+            // Keep per-attempt diagnostics aligned with the exact candidate.
+            // Aggregate admission fields intentionally remain cumulative for
+            // the complete outer message handling pass.
+            result.historical_attempt_share_id =
+                candidate_id;
+            result.historical_attempt_parent_id =
+                candidate_share.parent_id;
+            result.historical_attempt_zano_height =
+                candidate_share.zano_height;
+            result.historical_attempt_mining_header_hash =
+                candidate_share.mining_header_hash;
+
+            result.historical_anchor_status.reset();
+            result.historical_payout_status.reset();
+            result.historical_promotion_status.reset();
+            result.historical_proof_status.reset();
+            result.historical_payout_policy_status.reset();
+
             const std::vector<P2pMiningAnchor> observations =
                 load_historical_observations_();
             const HistoricalTrustResult trust =
@@ -201,8 +669,36 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
                     evidence.source_peer,
                     evidence.proposal,
                     observations,
-                    historical_parent_lookup_);
+                    historical_parent_lookup_,
+                    historical_pow_lookup_);
             result.historical_trust_status = trust.status;
+
+            if (trust.status ==
+                HistoricalTrustStatus::PromotionRejected) {
+                result.historical_promotion_status =
+                    trust.promotion.status;
+                result.historical_proof_status =
+                    trust.promotion.proof_status;
+                result.historical_payout_policy_status =
+                    trust.promotion.payout_status;
+            }
+
+            if (trust.status ==
+                HistoricalTrustStatus::AnchorRejected) {
+                result.historical_anchor_status =
+                    trust.initial_anchor.status;
+            } else if (
+                trust.status ==
+                HistoricalTrustStatus::AnchorChangedBeforePromotion) {
+                result.historical_anchor_status =
+                    trust.final_anchor.status;
+            }
+
+            if (trust.status ==
+                HistoricalTrustStatus::PayoutRejected) {
+                result.historical_payout_status =
+                    trust.payout.status;
+            }
 
             const MiningWorkKey candidate_work_key{
                 candidate_share.zano_height,
@@ -219,6 +715,66 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
                          HistoricalPayoutStatus::ParentMissing ||
                      trust.payout.status ==
                          HistoricalPayoutStatus::UnverifiedAncestry);
+                const bool canonical_pow_temporarily_unavailable =
+                    (trust.status ==
+                         HistoricalTrustStatus::AnchorRejected &&
+                     trust.initial_anchor.status ==
+                         HistoricalAnchorStatus::
+                             CanonicalPowContextUnavailable) ||
+                    (trust.status ==
+                         HistoricalTrustStatus::
+                             AnchorChangedBeforePromotion &&
+                     trust.final_anchor.status ==
+                         HistoricalAnchorStatus::
+                             CanonicalPowContextUnavailable);
+
+                const bool stable_parent_mismatch =
+                    trust.status ==
+                        HistoricalTrustStatus::AnchorRejected &&
+                    trust.initial_anchor.status ==
+                        HistoricalAnchorStatus::ParentMismatch;
+
+                if (stable_parent_mismatch) {
+                    const ConnectedShare* replayed =
+                        chain_.find(candidate_id);
+
+                    if (replayed != nullptr &&
+                        !replayed->validated_ancestry) {
+                        const std::size_t pruned =
+                            chain_.prune_connected_subtree(
+                                candidate_id);
+
+                        result.
+                            historical_pruned_connected_shares +=
+                                pruned;
+
+                        if (pruned != 0) {
+                            // A structural replay branch can temporarily win
+                            // best-tip selection before it crosses historical
+                            // trust. Once canonical Zano history proves that
+                            // branch stale, invalidate all payout expectations
+                            // derived from the previous in-memory topology.
+                            expected_payout_.reset();
+                            expected_payout_plan_.reset();
+                            expected_payout_parent_id_.reset();
+
+                            const P2pTipHint current_tip =
+                                p2p_tip_hint_from_chain(chain_);
+
+                            if (!is_zero_share_id(
+                                    current_tip.share_id)) {
+                                relay_tip =
+                                    make_p2p_tip_announce_envelope(
+                                        current_tip);
+                            }
+                        }
+                    }
+                }
+
+                if (parent_blocked) {
+                    retryable_historical_.erase(candidate_id);
+                }
+
                 if (parent_blocked &&
                     remember_deferred_historical(
                         candidate_share,
@@ -239,13 +795,35 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
                     followup = make_p2p_share_request_envelope(
                         candidate_share.parent_id);
                     followup_peer = candidate_peer.node_id;
+                } else if (canonical_pow_temporarily_unavailable) {
+                    // The peer work was structurally checked, but the local
+                    // canonical daemon cannot yet reconstruct the historical
+                    // PoW authority. Preserve only the bounded untrusted
+                    // evidence so a later local retry or exact candidate can
+                    // rerun the full historical trust crossing without downloading
+                    // work again. No trusted-work or share admission occurs
+                    // here.
+                    remember_historical_evidence(
+                        candidate_work_key,
+                        evidence,
+                        now);
+                    remember_retryable_historical(
+                        candidate_share,
+                        candidate_peer,
+                        required_capability,
+                        now);
                 } else {
                     // Never let malformed/stale evidence poison reuse of this
                     // height/header key. A later peer may provide fresh bytes.
+                    retryable_historical_.erase(candidate_id);
                     historical_evidence_.erase(candidate_work_key);
                 }
                 return std::nullopt;
             }
+
+            // Successful trust consumes any outstanding local-oracle retry
+            // registration for this exact share.
+            retryable_historical_.erase(candidate_id);
 
             // Trusted evidence may be reused by another share with the same
             // Zano work key, but every candidate still reruns the complete
@@ -257,9 +835,6 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
 
             result.historical_share = candidate_share;
             result.historical_share_retried = true;
-
-            const ShareId candidate_id =
-                share_id(candidate_share);
 
             if (const ConnectedShare* replayed =
                     chain_.find(candidate_id);
@@ -283,25 +858,21 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
                         now,
                         mode);
 
-                if (result.status ==
-                    P2pNodeMessageStatus::
-                        MiningWorkResponseProcessed) {
-                    switch (revalidated.status) {
-                    case RevalidateShareStatus::Validated:
-                        result.share_status =
-                            P2pShareReceiveStatus::Connected;
-                        break;
-                    case RevalidateShareStatus::AlreadyValidated:
-                        result.share_status =
-                            P2pShareReceiveStatus::Duplicate;
-                        break;
-                    case RevalidateShareStatus::ParentUnvalidated:
-                    case RevalidateShareStatus::NotConnected:
-                    case RevalidateShareStatus::Rejected:
-                        result.share_status =
-                            P2pShareReceiveStatus::Rejected;
-                        break;
-                    }
+                switch (revalidated.status) {
+                case RevalidateShareStatus::Validated:
+                    result.share_status =
+                        P2pShareReceiveStatus::Connected;
+                    break;
+                case RevalidateShareStatus::AlreadyValidated:
+                    result.share_status =
+                        P2pShareReceiveStatus::Duplicate;
+                    break;
+                case RevalidateShareStatus::ParentUnvalidated:
+                case RevalidateShareStatus::NotConnected:
+                case RevalidateShareStatus::Rejected:
+                    result.share_status =
+                        P2pShareReceiveStatus::Rejected;
+                    break;
                 }
 
                 switch (revalidated.status) {
@@ -339,10 +910,11 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
                     required_capability,
                     now,
                     mode);
-            if (result.status ==
-                P2pNodeMessageStatus::MiningWorkResponseProcessed) {
-                result.share_status = retried.status;
-            }
+            // Report the final historical admission result regardless of
+            // whether the retry was triggered directly by completed work
+            // retrieval or by a later ShareAnnounce/ShareResponse reusing
+            // retained evidence.
+            result.share_status = retried.status;
 
             if (retried.chain_result.best_tip_changed) {
                 expected_payout_.reset();
@@ -405,6 +977,97 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
                 }
             }
         };
+
+        // A structurally replayed share may already have the exact immutable
+        // mining-work proposal in this node's own archive. Prefer that local
+        // evidence before asking the peer for identical bytes. Archive presence
+        // is not trust: attempt_historical() reruns candidate binding,
+        // canonical anchoring, payout ancestry and miner-tx proofs before any
+        // trusted-work authorization or share revalidation can occur.
+        const auto attempt_local_historical =
+            [&](const Share& candidate_share,
+                const P2pHandshake& candidate_peer,
+                std::uint64_t required_capability) {
+                if (!work_retrieval_ ||
+                    !historical_trust_sources_ready_unlocked()) {
+                    return false;
+                }
+
+                const MiningWorkKey work_key{
+                    candidate_share.zano_height,
+                    candidate_share.mining_header_hash,
+                };
+
+                const auto local_bytes =
+                    work_retrieval_->read_local(work_key);
+
+                if (!local_bytes.has_value()) {
+                    return false;
+                }
+
+                HistoricalEvidence evidence{
+                    deserialize_p2p_mining_context_payload(
+                        *local_bytes),
+                    candidate_peer,
+                    now,
+                };
+
+                const std::size_t pruned_before =
+                    result.historical_pruned_connected_shares;
+
+                const auto connected =
+                    attempt_historical(
+                        candidate_share,
+                        candidate_peer,
+                        evidence,
+                        required_capability,
+                        true);
+
+                if (connected.has_value()) {
+                    resume_deferred_descendants(*connected);
+                }
+
+                // Local archive presence alone must never suppress retrieval of
+                // fresh peer evidence. Keep the local result only when it
+                // actually crossed trust, is blocked solely on sidechain
+                // ancestry (which starts the parent-first recovery walk), or
+                // is waiting on temporarily unavailable canonical PoW context.
+                const bool trusted =
+                    result.historical_trust_status.has_value() &&
+                    *result.historical_trust_status ==
+                        HistoricalTrustStatus::Trusted;
+
+                const bool parent_blocked =
+                    result.historical_trust_status.has_value() &&
+                    *result.historical_trust_status ==
+                        HistoricalTrustStatus::PayoutRejected &&
+                    result.historical_payout_status.has_value() &&
+                    (*result.historical_payout_status ==
+                         HistoricalPayoutStatus::ParentMissing ||
+                     *result.historical_payout_status ==
+                         HistoricalPayoutStatus::UnverifiedAncestry);
+
+                const bool canonical_pow_temporarily_unavailable =
+                    result.historical_trust_status.has_value() &&
+                    ((*result.historical_trust_status ==
+                          HistoricalTrustStatus::AnchorRejected ||
+                      *result.historical_trust_status ==
+                          HistoricalTrustStatus::
+                              AnchorChangedBeforePromotion) &&
+                     result.historical_anchor_status.has_value() &&
+                     *result.historical_anchor_status ==
+                         HistoricalAnchorStatus::
+                             CanonicalPowContextUnavailable);
+
+                const bool replay_parent_mismatch_pruned =
+                    result.historical_pruned_connected_shares >
+                    pruned_before;
+
+                return trusted ||
+                       parent_blocked ||
+                       canonical_pow_temporarily_unavailable ||
+                       replay_parent_mismatch_pruned;
+            };
 
         switch (envelope.type) {
         case P2pMessageType::ShareAnnounce: {
@@ -471,6 +1134,26 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
         case P2pMessageType::ShareRequest: {
             std::lock_guard lock(state_mutex_);
             followup = answer_p2p_share_request(peer, envelope, chain_);
+
+            // A transport handshake is only a connection-time snapshot. If
+            // that advertised share was later pruned by canonical
+            // reconciliation, a reconnecting peer can legitimately request an
+            // ID we no longer have. Preserve the explicit NotFound response,
+            // then advertise the current application-level tip directly to
+            // that same peer so synchronization can resume from fresh state.
+            const P2pShareResponse response =
+                parse_p2p_share_response_envelope(*followup);
+
+            if (response.code == P2pShareResponseCode::NotFound) {
+                const P2pTipHint current_tip =
+                    p2p_tip_hint_from_chain(chain_);
+
+                if (!is_zero_share_id(current_tip.share_id)) {
+                    fresh_tip_followup =
+                        make_p2p_tip_announce_envelope(current_tip);
+                }
+            }
+
             result.status = P2pNodeMessageStatus::ShareRequestAnswered;
             break;
         }
@@ -507,7 +1190,10 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
                             if (connected.has_value()) {
                                 resume_deferred_descendants(*connected);
                             }
-                        } else {
+                        } else if (!attempt_local_historical(
+                                       *response.share,
+                                       peer,
+                                       kP2pCapabilityShareSync)) {
                             auto work_request =
                                 work_retrieval_->begin(
                                     peer,
@@ -698,6 +1384,202 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
             break;
         }
 
+        // Persistence replay can contain several independent unvalidated
+        // frontiers. Connection-time tip recovery starts only one ancestry
+        // walk, so once protocol handling has no required reply outstanding,
+        // opportunistically advance other replay frontiers using this same
+        // authenticated peer.
+        //
+        // Only a share whose exact parent already has validated ancestry is
+        // eligible. That keeps recovery parent-first and prevents this
+        // scheduler from creating an alternative ancestry authority.
+        //
+        // The scheduler does not invent another trust path: exact immutable
+        // local work is tried through attempt_local_historical(), and when no
+        // acceptable local evidence exists the existing MiningWorkRequest /
+        // pending_historical_ path is used.
+        if (!followup.has_value() &&
+            work_retrieval_ &&
+            (peer.capabilities & kP2pCapabilityShareSync) != 0) {
+            const P2pNodeMessageResult outer_result = result;
+            bool replay_frontier_connected = false;
+            std::size_t replay_frontier_pruned_connected_shares = 0;
+
+            {
+                std::lock_guard lock(state_mutex_);
+                expire_historical_state(now);
+
+                if (historical_trust_sources_ready_unlocked()) {
+                    std::vector<ShareId> replay_ids =
+                        chain_.connected_share_ids();
+
+                    std::sort(
+                        replay_ids.begin(),
+                        replay_ids.end(),
+                        [this](const ShareId& left,
+                               const ShareId& right) {
+                            const ConnectedShare* lhs =
+                                chain_.find(left);
+                            const ConnectedShare* rhs =
+                                chain_.find(right);
+
+                            if (lhs == nullptr ||
+                                rhs == nullptr) {
+                                throw std::logic_error(
+                                    "connected replay share disappeared "
+                                    "during frontier scheduling");
+                            }
+
+                            if (lhs->share.share_height !=
+                                rhs->share.share_height) {
+                                return lhs->share.share_height <
+                                       rhs->share.share_height;
+                            }
+
+                            return left < right;
+                        });
+
+                    // Keep one inbound protocol pass bounded. Local replay
+                    // validation may expose several immediately adjacent
+                    // frontiers, while the first frontier requiring network
+                    // evidence stops the batch and remains serialized through
+                    // the existing request machinery.
+                    std::size_t frontier_budget =
+                        kMiningWorkMaxPending;
+
+                    result.historical_share_connected = false;
+
+                    for (const ShareId& candidate_id :
+                         replay_ids) {
+                        if (frontier_budget == 0 ||
+                            followup.has_value()) {
+                            break;
+                        }
+
+                        const ConnectedShare* connected =
+                            chain_.find(candidate_id);
+
+                        if (connected == nullptr ||
+                            connected->validated_ancestry) {
+                            continue;
+                        }
+
+                        bool parent_ready = false;
+
+                        if (is_zero_share_id(
+                                connected->share.parent_id)) {
+                            parent_ready = true;
+                        } else {
+                            const ConnectedShare* parent =
+                                chain_.find(
+                                    connected->share.parent_id);
+
+                            parent_ready =
+                                parent != nullptr &&
+                                parent->validated_ancestry;
+                        }
+
+                        if (!parent_ready) {
+                            continue;
+                        }
+
+                        const ReplayFrontierKey attempt_key{
+                            peer.node_id,
+                            candidate_id,
+                        };
+
+                        if (replay_frontier_attempts_.contains(
+                                attempt_key)) {
+                            continue;
+                        }
+
+                        const Share candidate =
+                            connected->share;
+
+                        --frontier_budget;
+
+                        const bool handled_locally =
+                            attempt_local_historical(
+                                candidate,
+                                peer,
+                                kP2pCapabilityShareSync);
+
+                        if (handled_locally) {
+                            replay_frontier_attempts_.
+                                insert_or_assign(
+                                    attempt_key,
+                                    now);
+
+                            replay_frontier_connected =
+                                replay_frontier_connected ||
+                                result.
+                                    historical_share_connected;
+
+                            // Parent-first local recovery may expose the next
+                            // child immediately. Continue the bounded scan
+                            // unless the trust crossing itself scheduled a
+                            // required protocol reply.
+                            continue;
+                        }
+
+                        const MiningWorkKey work_key{
+                            candidate.zano_height,
+                            candidate.mining_header_hash,
+                        };
+
+                        auto work_request =
+                            work_retrieval_->begin(
+                                peer,
+                                work_key,
+                                now);
+
+                        if (work_request.has_value()) {
+                            replay_frontier_attempts_.
+                                insert_or_assign(
+                                    attempt_key,
+                                    now);
+
+                            followup =
+                                std::move(work_request);
+                            followup_peer =
+                                peer.node_id;
+
+                            remember_pending_historical(
+                                peer,
+                                candidate,
+                                kP2pCapabilityShareSync,
+                                now);
+                        }
+
+                        // Network evidence remains serialized. If begin()
+                        // could not start a request, leave the frontier
+                        // unmarked so a later protocol event may retry.
+                        break;
+                    }
+
+                    replay_frontier_connected =
+                        replay_frontier_connected ||
+                        result.historical_share_connected;
+                }
+            }
+
+            replay_frontier_pruned_connected_shares =
+                result.historical_pruned_connected_shares -
+                outer_result.historical_pruned_connected_shares;
+
+            // Frontier scheduling is ancillary to the outer protocol message.
+            // Do not overwrite its per-attempt share/trust diagnostics or
+            // persistence semantics. Preserve aggregate sidechain mutations
+            // so callers can account for pruned replay history and rebuild
+            // canonical payout/template state.
+            result = outer_result;
+            result.historical_share_connected =
+                result.historical_share_connected ||
+                replay_frontier_connected;
+            result.historical_pruned_connected_shares +=
+                replay_frontier_pruned_connected_shares;
+        }
+
         const std::uint32_t penalty = p2p_node_message_penalty(result);
         if (penalty != 0) {
             runtime.report_peer_misbehavior(peer.node_id, penalty);
@@ -707,6 +1589,12 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
             result.sent_followup =
                 runtime.send_to(followup_peer, *followup);
         }
+
+        if (fresh_tip_followup.has_value()) {
+            static_cast<void>(
+                runtime.send_to(peer.node_id, *fresh_tip_followup));
+        }
+
         if (relay_share.has_value()) {
             runtime.broadcast_except(peer.node_id, *relay_share);
             result.relayed_share = true;
@@ -719,6 +1607,63 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
     } catch (...) {
         throw;
     }
+}
+
+std::vector<Share> p2p_node_unique_admitted_shares(
+    const P2pNodeMessageResult& result,
+    const P2pEnvelope& envelope) {
+    std::vector<Share> admitted;
+
+    const auto append_unique =
+        [&admitted](const Share& share) {
+            const ShareId id = share_id(share);
+
+            const bool already_present =
+                std::any_of(
+                    admitted.begin(),
+                    admitted.end(),
+                    [&id](const Share& existing) {
+                        return share_id(existing) == id;
+                    });
+
+            if (!already_present) {
+                admitted.push_back(share);
+            }
+        };
+
+    const bool direct_share_admitted =
+        (result.status ==
+             P2pNodeMessageStatus::ShareProcessed ||
+         result.status ==
+             P2pNodeMessageStatus::ShareResponseProcessed) &&
+        (result.share_status ==
+             P2pShareReceiveStatus::Connected ||
+         result.share_status ==
+             P2pShareReceiveStatus::Orphan);
+
+    if (direct_share_admitted) {
+        if (result.status ==
+            P2pNodeMessageStatus::ShareProcessed) {
+            append_unique(
+                parse_p2p_share_announce_envelope(
+                    envelope));
+        } else {
+            const P2pShareResponse response =
+                parse_p2p_share_response_envelope(
+                    envelope);
+
+            if (response.share.has_value()) {
+                append_unique(*response.share);
+            }
+        }
+    }
+
+    for (const Share& historical :
+         result.historical_admitted_shares) {
+        append_unique(historical);
+    }
+
+    return admitted;
 }
 
 std::uint32_t p2p_node_message_penalty(
@@ -764,8 +1709,12 @@ std::uint32_t p2p_node_message_penalty(
 void P2pNodeProtocol::set_historical_trust_sources(
     const SidechainParameters& params,
     std::function<std::vector<P2pMiningAnchor>()> load_local_observations,
-    std::function<RpcCanonicalHeader(std::uint64_t)> lookup) {
-    if (!load_local_observations || !lookup) {
+    std::function<RpcCanonicalHeader(std::uint64_t)> lookup,
+    std::function<std::optional<RpcHistoricalPowContext>(
+        std::uint64_t)> historical_pow_lookup) {
+    if (!load_local_observations ||
+        !lookup ||
+        !historical_pow_lookup) {
         throw std::invalid_argument(
             "historical trust sources must be callable");
     }
@@ -779,20 +1728,309 @@ void P2pNodeProtocol::set_historical_trust_sources(
     load_historical_observations_ =
         std::move(load_local_observations);
     historical_parent_lookup_ = std::move(lookup);
+    historical_pow_lookup_ =
+        std::move(historical_pow_lookup);
 }
 
 void P2pNodeProtocol::remember_trusted_work(
-    const ShareWorkContext& context) {
+    const ShareWorkContext& context,
+    std::optional<ShareId> parent_id) {
     std::lock_guard lock(state_mutex_);
-    const ConnectedShare* parent = chain_.best_tip();
+
+    if (!local_mining_anchor_.has_value() ||
+        !local_mining_context_.has_value()) {
+        throw std::runtime_error(
+            "trusted local work has no installed Zano mining context");
+    }
+
+    const P2pMiningAnchor& anchor =
+        *local_mining_anchor_;
+    const P2pMiningContextProposal& proposal =
+        *local_mining_context_;
+
+    if (anchor.zano_height != context.zano_height ||
+        proposal.zano_height != context.zano_height ||
+        anchor.network_difficulty != context.network_difficulty ||
+        proposal.network_difficulty != context.network_difficulty ||
+        anchor.prev_hash != proposal.prev_hash ||
+        validate_p2p_mining_context_structure(proposal) !=
+            context.mining_header_hash) {
+        throw std::runtime_error(
+            "trusted local work does not match installed Zano mining context");
+    }
+
+    ShareId resolved_parent{};
+
+    if (parent_id.has_value()) {
+        resolved_parent = *parent_id;
+
+        if (!is_zero_share_id(resolved_parent)) {
+            const ConnectedShare* parent =
+                chain_.find(resolved_parent);
+
+            if (parent == nullptr) {
+                throw std::runtime_error(
+                    "trusted local work parent is not connected");
+            }
+
+            if (chain_.enforces_sidechain_difficulty() &&
+                !parent->validated_ancestry) {
+                throw std::runtime_error(
+                    "trusted local work parent lacks validated ancestry");
+            }
+        }
+
+        // When a payout plan is installed, work provenance must be bound to
+        // that exact same sidechain snapshot.
+        if (expected_payout_parent_id_.has_value() &&
+            *expected_payout_parent_id_ != resolved_parent) {
+            throw std::runtime_error(
+                "trusted local work parent does not match payout parent");
+        }
+    } else {
+        const ConnectedShare* parent =
+            chain_.best_tip();
+
+        if (parent != nullptr) {
+            resolved_parent = parent->id;
+        }
+    }
+
     trusted_work_.remember(
-        context, parent == nullptr ? ShareId{} : parent->id);
+        context,
+        resolved_parent,
+        anchor.prev_hash);
+}
+
+P2pCanonicalReconciliationResult
+P2pNodeProtocol::reconcile_canonical_parent_unlocked(
+    std::uint64_t zano_height,
+    const Hash256& canonical_parent_hash) {
+    P2pCanonicalReconciliationResult result;
+
+    // Prune oldest affected roots first. Once an ancestor is removed, later
+    // IDs from the snapshot may already have disappeared as descendants.
+    std::vector<ShareId> connected_ids =
+        chain_.connected_share_ids();
+
+    std::sort(
+        connected_ids.begin(),
+        connected_ids.end(),
+        [this](const ShareId& left, const ShareId& right) {
+            const ConnectedShare* left_share = chain_.find(left);
+            const ConnectedShare* right_share = chain_.find(right);
+
+            if (left_share == nullptr || right_share == nullptr) {
+                return left < right;
+            }
+            if (left_share->share.share_height !=
+                right_share->share.share_height) {
+                return left_share->share.share_height <
+                       right_share->share.share_height;
+            }
+            return left < right;
+        });
+
+    for (const ShareId& id : connected_ids) {
+        const ConnectedShare* connected = chain_.find(id);
+        if (connected == nullptr ||
+            connected->share.zano_height != zano_height) {
+            continue;
+        }
+
+        const Hash256* recorded_parent =
+            trusted_work_.find_zano_parent_hash(
+                connected->share.zano_height,
+                connected->share.mining_header_hash,
+                connected->share.parent_id);
+
+        // Compatibility/synthetic work carries no canonical-parent provenance
+        // and is never guessed stale. Production trust crossings do carry it.
+        if (recorded_parent == nullptr ||
+            *recorded_parent == canonical_parent_hash) {
+            continue;
+        }
+
+        result.pruned_connected_shares +=
+            chain_.prune_connected_subtree(id);
+    }
+
+    // Revoke stale authorization even when it is currently off-chain, so an
+    // old share cannot later regain admission merely because its work survived
+    // in the registry.
+    result.revoked_trusted_work =
+        trusted_work_.erase_zano_parent_mismatch(
+            zano_height,
+            canonical_parent_hash);
+
+    if (result.pruned_connected_shares != 0) {
+        expected_payout_.reset();
+        expected_payout_plan_.reset();
+        expected_payout_parent_id_.reset();
+    }
+
+    return result;
+}
+
+P2pCanonicalReconciliationResult
+P2pNodeProtocol::reconcile_unavailable_work_height_unlocked(
+    std::uint64_t zano_height) {
+    P2pCanonicalReconciliationResult result;
+
+    std::vector<ShareId> connected_ids =
+        chain_.connected_share_ids();
+
+    std::sort(
+        connected_ids.begin(),
+        connected_ids.end(),
+        [this](const ShareId& left, const ShareId& right) {
+            const ConnectedShare* left_share = chain_.find(left);
+            const ConnectedShare* right_share = chain_.find(right);
+
+            if (left_share == nullptr || right_share == nullptr) {
+                return left < right;
+            }
+            if (left_share->share.share_height !=
+                right_share->share.share_height) {
+                return left_share->share.share_height <
+                       right_share->share.share_height;
+            }
+            return left < right;
+        });
+
+    for (const ShareId& id : connected_ids) {
+        const ConnectedShare* connected = chain_.find(id);
+        if (connected == nullptr ||
+            connected->share.zano_height != zano_height) {
+            continue;
+        }
+
+        result.pruned_connected_shares +=
+            chain_.prune_connected_subtree(id);
+    }
+
+    result.revoked_trusted_work =
+        trusted_work_.erase_zano_height(zano_height);
+
+    if (result.pruned_connected_shares != 0 ||
+        result.revoked_trusted_work != 0) {
+        expected_payout_.reset();
+        expected_payout_plan_.reset();
+        expected_payout_parent_id_.reset();
+    }
+
+    return result;
+}
+
+P2pCanonicalReconciliationResult
+P2pNodeProtocol::reconcile_unavailable_work_above_unlocked(
+    std::uint64_t maximum_zano_height) {
+    P2pCanonicalReconciliationResult result;
+
+    std::vector<ShareId> connected_ids =
+        chain_.connected_share_ids();
+
+    std::sort(
+        connected_ids.begin(),
+        connected_ids.end(),
+        [this](const ShareId& left, const ShareId& right) {
+            const ConnectedShare* left_share = chain_.find(left);
+            const ConnectedShare* right_share = chain_.find(right);
+
+            if (left_share == nullptr || right_share == nullptr) {
+                return left < right;
+            }
+            if (left_share->share.share_height !=
+                right_share->share.share_height) {
+                return left_share->share.share_height <
+                       right_share->share.share_height;
+            }
+            return left < right;
+        });
+
+    for (const ShareId& id : connected_ids) {
+        const ConnectedShare* connected = chain_.find(id);
+        if (connected == nullptr ||
+            connected->share.zano_height <= maximum_zano_height) {
+            continue;
+        }
+
+        result.pruned_connected_shares +=
+            chain_.prune_connected_subtree(id);
+    }
+
+    result.revoked_trusted_work =
+        trusted_work_.erase_zano_heights_above(
+            maximum_zano_height);
+
+    if (result.pruned_connected_shares != 0 ||
+        result.revoked_trusted_work != 0) {
+        expected_payout_.reset();
+        expected_payout_plan_.reset();
+        expected_payout_parent_id_.reset();
+    }
+
+    return result;
+}
+
+std::vector<std::uint64_t>
+P2pNodeProtocol::trusted_work_provenance_heights() const {
+    std::lock_guard lock(state_mutex_);
+    return trusted_work_.provenance_zano_heights();
+}
+
+P2pCanonicalReconciliationResult
+P2pNodeProtocol::reconcile_canonical_parent(
+    std::uint64_t zano_height,
+    const Hash256& canonical_parent_hash) {
+    std::lock_guard lock(state_mutex_);
+    return reconcile_canonical_parent_unlocked(
+        zano_height,
+        canonical_parent_hash);
+}
+
+P2pCanonicalReconciliationResult
+P2pNodeProtocol::reconcile_unavailable_work_height(
+    std::uint64_t zano_height) {
+    std::lock_guard lock(state_mutex_);
+    return reconcile_unavailable_work_height_unlocked(
+        zano_height);
+}
+
+P2pCanonicalReconciliationResult
+P2pNodeProtocol::reconcile_unavailable_work_above(
+    std::uint64_t maximum_zano_height) {
+    std::lock_guard lock(state_mutex_);
+    return reconcile_unavailable_work_above_unlocked(
+        maximum_zano_height);
+}
+
+void P2pNodeProtocol::reconcile_local_parent_replacement_unlocked(
+    const P2pMiningAnchor& next_anchor) {
+    if (!local_mining_anchor_.has_value() ||
+        local_mining_anchor_->zano_height != next_anchor.zano_height ||
+        local_mining_anchor_->prev_hash == next_anchor.prev_hash) {
+        return;
+    }
+
+    static_cast<void>(
+        reconcile_canonical_parent_unlocked(
+            next_anchor.zano_height,
+            next_anchor.prev_hash));
+
+    // A same-height canonical-parent replacement also invalidates any payout
+    // expectation installed for the previous daemon template, even when no
+    // connected share happened to require pruning.
+    expected_payout_.reset();
+    expected_payout_plan_.reset();
+    expected_payout_parent_id_.reset();
 }
 
 void P2pNodeProtocol::set_local_mining_context(
     const P2pMiningAnchor& anchor,
     const P2pMiningContextProposal& proposal) {
     std::lock_guard lock(state_mutex_);
+    reconcile_local_parent_replacement_unlocked(anchor);
     local_mining_anchor_ = anchor;
     local_mining_context_ = proposal;
 }
@@ -802,6 +2040,7 @@ void P2pNodeProtocol::set_local_mining_context(
     const P2pMiningContextProposal& proposal,
     const P2pPayoutAddress& payout) {
     std::lock_guard lock(state_mutex_);
+    reconcile_local_parent_replacement_unlocked(anchor);
     local_mining_anchor_ = anchor;
     local_mining_context_ = proposal;
     expected_payout_ = payout;
@@ -813,14 +2052,46 @@ void P2pNodeProtocol::set_local_mining_context(
 void P2pNodeProtocol::set_local_mining_context(
     const P2pMiningAnchor& anchor,
     const P2pMiningContextProposal& proposal,
-    const PplnsCoinbasePlan& plan) {
+    const PplnsCoinbasePlan& plan,
+    std::optional<ShareId> parent_id) {
     std::lock_guard lock(state_mutex_);
+
+    reconcile_local_parent_replacement_unlocked(anchor);
+
+    ShareId resolved_parent{};
+
+    if (parent_id.has_value()) {
+        resolved_parent = *parent_id;
+
+        if (!is_zero_share_id(resolved_parent)) {
+            const ConnectedShare* parent =
+                chain_.find(resolved_parent);
+
+            if (parent == nullptr) {
+                throw std::runtime_error(
+                    "local payout-plan parent is not connected");
+            }
+
+            if (chain_.enforces_sidechain_difficulty() &&
+                !parent->validated_ancestry) {
+                throw std::runtime_error(
+                    "local payout-plan parent lacks validated ancestry");
+            }
+        }
+    } else {
+        const ConnectedShare* parent =
+            chain_.best_tip();
+
+        if (parent != nullptr) {
+            resolved_parent = parent->id;
+        }
+    }
+
     local_mining_anchor_ = anchor;
     local_mining_context_ = proposal;
     expected_payout_plan_ = plan;
     expected_payout_.reset();
-    const ConnectedShare* parent = chain_.best_tip();
-    expected_payout_parent_id_ = parent == nullptr ? ShareId{} : parent->id;
+    expected_payout_parent_id_ = resolved_parent;
 }
 
 void P2pNodeProtocol::set_expected_payout(
@@ -851,6 +2122,27 @@ void P2pNodeProtocol::clear_expected_payout() noexcept {
 std::size_t P2pNodeProtocol::trusted_work_count() const noexcept {
     std::lock_guard lock(state_mutex_);
     return trusted_work_.size();
+}
+
+std::optional<P2pNodeMetricsSnapshot>
+P2pNodeProtocol::try_metrics_snapshot() const noexcept {
+    std::unique_lock lock(state_mutex_, std::try_to_lock);
+
+    if (!lock.owns_lock()) {
+        return std::nullopt;
+    }
+
+    P2pNodeMetricsSnapshot snapshot;
+    snapshot.connected_shares = chain_.connected_size();
+    snapshot.orphan_shares = chain_.orphan_size();
+
+    if (const ConnectedShare* tip = chain_.best_tip();
+        tip != nullptr) {
+        snapshot.tip_height = tip->share.share_height;
+    }
+
+    snapshot.trusted_work_contexts = trusted_work_.size();
+    return snapshot;
 }
 
 std::size_t P2pNodeProtocol::connected_share_count() const noexcept {

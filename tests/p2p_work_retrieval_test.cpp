@@ -128,6 +128,25 @@ int main() {
     P2pWorkRetrieval receiver(receiver_archive);
     const auto peer=make_handshake(10);
     const MiningWorkKey key{proposal.zano_height,derive_mining_header_work(proposal.block_template_blob).header_hash};
+
+    // Restart-built local evidence must be retrievable only by its exact
+    // height/header key. Reading it does not copy anything into a peer cache or
+    // grant trusted-work authority.
+    const auto local_payload=provider.read_local(key);
+    CHECK(local_payload);
+    CHECK(*local_payload==payload);
+
+    auto wrong_local_height=key;
+    ++wrong_local_height.first;
+    CHECK(!provider.read_local(wrong_local_height));
+
+    auto wrong_local_header=key;
+    wrong_local_header.second[0]^=1;
+    CHECK(!provider.read_local(wrong_local_header));
+
+    CHECK(!receiver.read_local(key));
+    CHECK(receiver_archive.verify_all()==0);
+
     auto request=receiver.begin(peer,key,100);
     CHECK(request);
     CHECK(!receiver.begin(peer,key,100));

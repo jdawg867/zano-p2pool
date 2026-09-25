@@ -416,6 +416,30 @@ struct ParsedRangeProof {
 
 }  // namespace
 
+P2pMinerTxProofResult
+verify_p2p_mining_context_bootstrap_balance_proof(
+    const P2pMiningContextProposal& proposal,
+    const P2pMiningContextCheckResult& anchored_check) noexcept {
+    return verify_balance_after_payout(
+        proposal,
+        anchored_check,
+        verify_p2p_mining_context_bootstrap_payout_policy(
+            proposal,
+            anchored_check));
+}
+
+P2pMinerTxProofResult
+verify_p2p_mining_context_bootstrap_proofs(
+    const P2pMiningContextProposal& proposal,
+    const P2pMiningContextCheckResult& anchored_check) noexcept {
+    return verify_range_after_balance(
+        proposal,
+        anchored_check,
+        verify_p2p_mining_context_bootstrap_balance_proof(
+            proposal,
+            anchored_check));
+}
+
 P2pMinerTxProofResult verify_p2p_mining_context_balance_proof(
     const P2pMiningContextProposal& proposal,
     const P2pMiningContextCheckResult& anchored_check,

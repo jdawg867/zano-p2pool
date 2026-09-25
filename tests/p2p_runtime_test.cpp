@@ -154,6 +154,33 @@ int main() {
     CHECK(wait_for_counts(node_a, 2, node_c, 1));
     CHECK(node_a.peer_count() == 2);
 
+    // The protocol's autonomous replay scheduler consumes only this
+    // transport-owned snapshot of currently live authenticated peers.
+    {
+        const std::vector<P2pHandshake> peers =
+            node_a.peer_handshakes();
+
+        CHECK(peers.size() == 2);
+
+        bool saw_b = false;
+        bool saw_c = false;
+
+        for (const P2pHandshake& peer : peers) {
+            if (peer.node_id ==
+                node_b.local_handshake().node_id) {
+                saw_b = true;
+            }
+
+            if (peer.node_id ==
+                node_c.local_handshake().node_id) {
+                saw_c = true;
+            }
+        }
+
+        CHECK(saw_b);
+        CHECK(saw_c);
+    }
+
     P2pTipHint tip_a;
     tip_a.share_id[31] = 0xa1;
     tip_a.share_height = 41;
@@ -209,6 +236,7 @@ int main() {
     node_a.stop();
     CHECK(!node_a.running());
     CHECK(node_a.peer_count() == 0);
+    CHECK(node_a.peer_handshakes().empty());
 
     const auto deadline = std::chrono::steady_clock::now() + 2s;
     while (std::chrono::steady_clock::now() < deadline &&

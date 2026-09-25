@@ -56,13 +56,37 @@ P2pMiningContextTrustResult promote_p2p_mining_context_impl(
         result.trusted_context.mining_header_hash,
         expected_parent_id) != nullptr;
 
-    trusted_work.remember(result.trusted_context, expected_parent_id);
+    trusted_work.remember(
+        result.trusted_context,
+        expected_parent_id,
+        local_anchor.prev_hash);
     result.registry_inserted = !already_trusted;
     result.status = P2pMiningContextTrustStatus::Trusted;
     return result;
 }
 
 }  // namespace
+
+P2pMiningContextTrustResult
+promote_bootstrap_p2p_mining_context(
+    P2pTrustedWorkRegistry& trusted_work,
+    const P2pHandshake& peer,
+    const P2pEnvelope& envelope,
+    const P2pMiningAnchor& local_anchor) {
+    return promote_p2p_mining_context_impl(
+        trusted_work,
+        peer,
+        envelope,
+        local_anchor,
+        ShareId{},
+        [](
+            const P2pMiningContextProposal& proposal,
+            const P2pMiningContextCheckResult& check) {
+            return verify_p2p_mining_context_bootstrap_proofs(
+                proposal,
+                check);
+        });
+}
 
 P2pMiningContextTrustResult promote_p2p_mining_context(
     P2pTrustedWorkRegistry& trusted_work,

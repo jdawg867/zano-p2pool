@@ -42,12 +42,47 @@ void P2pTrustedWorkRegistry::remember(
     const Key key{context.zano_height, context.mining_header_hash, parent_id};
     const auto it = contexts_.find(key);
     if (it != contexts_.end()) {
-        if (it->second.network_difficulty != context.network_difficulty) {
+        if (it->second.context.network_difficulty !=
+            context.network_difficulty) {
             throw std::runtime_error("conflicting trusted P2P work context");
         }
         return;
     }
-    contexts_.emplace(key, context);
+
+    contexts_.emplace(
+        key,
+        Entry{context, std::nullopt});
+}
+
+void P2pTrustedWorkRegistry::remember(
+    const ShareWorkContext& context,
+    const ShareId& parent_id,
+    const Hash256& zano_parent_hash) {
+    if (difficulty128_is_zero(context.network_difficulty)) {
+        throw std::runtime_error("trusted P2P work context has zero network difficulty");
+    }
+
+    const Key key{context.zano_height, context.mining_header_hash, parent_id};
+    const auto it = contexts_.find(key);
+    if (it != contexts_.end()) {
+        if (it->second.context.network_difficulty !=
+            context.network_difficulty) {
+            throw std::runtime_error("conflicting trusted P2P work context");
+        }
+
+        if (it->second.zano_parent_hash.has_value() &&
+            *it->second.zano_parent_hash != zano_parent_hash) {
+            throw std::runtime_error(
+                "conflicting trusted P2P Zano parent provenance");
+        }
+
+        it->second.zano_parent_hash = zano_parent_hash;
+        return;
+    }
+
+    contexts_.emplace(
+        key,
+        Entry{context, zano_parent_hash});
 }
 
 const ShareWorkContext* P2pTrustedWorkRegistry::find(
@@ -62,7 +97,93 @@ const ShareWorkContext* P2pTrustedWorkRegistry::find(
     const ShareId& parent_id) const noexcept {
     const auto it = contexts_.find(
         Key{zano_height, mining_header_hash, parent_id});
-    return it == contexts_.end() ? nullptr : &it->second;
+    return it == contexts_.end() ? nullptr : &it->second.context;
+}
+
+std::size_t P2pTrustedWorkRegistry::erase_zano_height(
+    std::uint64_t zano_height) {
+    std::size_t erased = 0;
+
+    for (auto it = contexts_.begin(); it != contexts_.end();) {
+        if (std::get<0>(it->first) != zano_height) {
+            ++it;
+            continue;
+        }
+
+        it = contexts_.erase(it);
+        ++erased;
+    }
+
+    return erased;
+}
+
+std::size_t P2pTrustedWorkRegistry::erase_zano_heights_above(
+    std::uint64_t maximum_zano_height) {
+    std::size_t erased = 0;
+
+    for (auto it = contexts_.begin(); it != contexts_.end();) {
+        if (std::get<0>(it->first) <= maximum_zano_height) {
+            ++it;
+            continue;
+        }
+
+        it = contexts_.erase(it);
+        ++erased;
+    }
+
+    return erased;
+}
+
+std::size_t P2pTrustedWorkRegistry::erase_zano_parent_mismatch(
+    std::uint64_t zano_height,
+    const Hash256& canonical_parent_hash) {
+    std::size_t erased = 0;
+
+    for (auto it = contexts_.begin(); it != contexts_.end();) {
+        if (std::get<0>(it->first) != zano_height ||
+            !it->second.zano_parent_hash.has_value() ||
+            *it->second.zano_parent_hash == canonical_parent_hash) {
+            ++it;
+            continue;
+        }
+
+        it = contexts_.erase(it);
+        ++erased;
+    }
+
+    return erased;
+}
+
+std::vector<std::uint64_t>
+P2pTrustedWorkRegistry::provenance_zano_heights() const {
+    std::vector<std::uint64_t> heights;
+
+    for (const auto& [key, entry] : contexts_) {
+        if (!entry.zano_parent_hash.has_value()) {
+            continue;
+        }
+
+        const std::uint64_t height = std::get<0>(key);
+        if (heights.empty() || heights.back() != height) {
+            heights.push_back(height);
+        }
+    }
+
+    return heights;
+}
+
+const Hash256* P2pTrustedWorkRegistry::find_zano_parent_hash(
+    std::uint64_t zano_height,
+    const Hash256& mining_header_hash,
+    const ShareId& parent_id) const noexcept {
+    const auto it = contexts_.find(
+        Key{zano_height, mining_header_hash, parent_id});
+    if (it == contexts_.end() ||
+        !it->second.zano_parent_hash.has_value()) {
+        return nullptr;
+    }
+
+    return &*it->second.zano_parent_hash;
 }
 
 std::size_t P2pTrustedWorkRegistry::size() const noexcept {

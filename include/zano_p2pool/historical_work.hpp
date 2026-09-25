@@ -3,6 +3,7 @@
 #include "zano_p2pool/p2p_mining_context.hpp"
 #include "zano_p2pool/rpc_client.hpp"
 #include <functional>
+#include <optional>
 #include "zano_p2pool/mining_work_archive.hpp"
 
 namespace zano_p2pool {
@@ -36,17 +37,23 @@ enum class HistoricalAnchorStatus {
     LocalObservationMissing,
     LocalObservationConflict,
     LocalObservationMismatch,
+    CanonicalPowContextUnavailable,
+    CanonicalPowContextMismatch,
 };
 struct HistoricalAnchorResult {
     HistoricalAnchorStatus status{HistoricalAnchorStatus::LocalObservationMissing};
     Hash256 mining_header_hash{};
     std::size_t matching_observations{};
 };
-// Matching local observations is not historical consensus recomputation. This
-// diagnostic has no authority to insert trusted work or admit shares.
+// Locally archived observations remain the preferred authority. If none
+// match, historical_pow_lookup may independently reconstruct the historical
+// PoW context from the operator's own canonical Zano daemon. This audit still
+// has no authority to insert trusted work or admit shares.
 [[nodiscard]] HistoricalAnchorResult audit_historical_local_anchor(
     const P2pMiningContextProposal& proposal,
     std::span<const P2pMiningAnchor> local_observations,
-    const std::function<RpcCanonicalHeader(std::uint64_t)>& lookup);
+    const std::function<RpcCanonicalHeader(std::uint64_t)>& lookup,
+    const std::function<std::optional<RpcHistoricalPowContext>(
+        std::uint64_t)>& historical_pow_lookup = {});
 [[nodiscard]] const char* historical_anchor_status_name(HistoricalAnchorStatus status) noexcept;
 }
