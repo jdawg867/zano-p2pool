@@ -100,91 +100,142 @@ public:
     // SidechainId before any replacement is attempted.
     void rewrite(const std::vector<Share>& shares) {
         std::lock_guard lock(mutex_);
+        rewrite_unlocked(shares);
+    }
 
-        if (std::filesystem::exists(path_)) {
-            if (std::filesystem::file_size(path_) < kShareStoreHeaderSize) {
-                throw std::runtime_error(
-                    "existing share store header is truncated");
-            }
-
-            std::ifstream existing(path_, std::ios::binary);
-            if (!existing) {
-                throw std::runtime_error(
-                    "failed to open existing share store");
-            }
-            verify_header(existing);
+    // Atomically remove only the explicitly named ShareIds from the current
+    // durable log. This operation is serialized with append() by the same
+    // ShareStore mutex, so unrelated records already appended before the erase
+    // are retained and later appends proceed against the installed result.
+    //
+    // Returns the number of durable records actually removed. Unknown IDs are
+    // ignored. Corrupt, duplicate, or truncated durable input fails closed.
+    [[nodiscard]] std::size_t erase_records(
+        std::span<const ShareId> ids) {
+        if (ids.empty()) {
+            return 0;
         }
 
-        const std::filesystem::path parent = path_.parent_path();
-        if (!parent.empty()) {
-            std::filesystem::create_directories(parent);
+        std::lock_guard lock(mutex_);
+
+        if (!std::filesystem::exists(path_)) {
+            return 0;
         }
 
-        const std::filesystem::path temporary =
-            path_.string() + ".rewrite.tmp";
+        const std::uintmax_t file_size =
+            std::filesystem::file_size(path_);
 
-        try {
-            std::ofstream out(
-                temporary,
-                std::ios::binary | std::ios::trunc);
-
-            if (!out) {
-                throw std::runtime_error(
-                    "failed to create share store rewrite");
-            }
-
-            write_bytes(out, kShareStoreMagic);
-            write_bytes(out, expected_sidechain_id_);
-
-            std::set<ShareId> seen;
-
-            for (const Share& share : shares) {
-                const std::vector<std::uint8_t> payload =
-                    serialize_share(share);
-
-                if (payload.size() != kShareV1SerializedSize &&
-                    payload.size() != kShareV2SerializedSize) {
-                    throw std::logic_error(
-                        "unexpected serialized share size");
-                }
-
-                const ShareId id = share_id(share);
-                if (!seen.insert(id).second) {
-                    throw std::invalid_argument(
-                        "share store rewrite contains duplicate record");
-                }
-
-                write_u32_be(
-                    out,
-                    static_cast<std::uint32_t>(payload.size()));
-                write_bytes(out, payload);
-                write_bytes(out, id);
-            }
-
-            out.flush();
-            if (!out) {
-                throw std::runtime_error(
-                    "failed to write share store rewrite");
-            }
-
-            out.close();
-            if (!out) {
-                throw std::runtime_error(
-                    "failed to close share store rewrite");
-            }
-
-            std::error_code ec;
-            std::filesystem::rename(temporary, path_, ec);
-            if (ec) {
-                throw std::runtime_error(
-                    "failed to install share store rewrite: " +
-                    ec.message());
-            }
-        } catch (...) {
-            std::error_code ignored;
-            std::filesystem::remove(temporary, ignored);
-            throw;
+        if (file_size < kShareStoreHeaderSize) {
+            throw std::runtime_error(
+                "share store header is truncated");
         }
+
+        std::ifstream in(path_, std::ios::binary);
+        if (!in) {
+            throw std::runtime_error(
+                "failed to open share store for record erase");
+        }
+
+        verify_header(in);
+
+        const std::set<ShareId> erase_ids(
+            ids.begin(),
+            ids.end());
+
+        std::set<ShareId> seen;
+        std::vector<Share> retained;
+        std::size_t removed = 0;
+
+        while (true) {
+            std::array<std::uint8_t, 4> length_bytes{};
+
+            in.read(
+                reinterpret_cast<char*>(
+                    length_bytes.data()),
+                static_cast<std::streamsize>(
+                    length_bytes.size()));
+
+            const std::streamsize length_read =
+                in.gcount();
+
+            if (length_read == 0 && in.eof()) {
+                break;
+            }
+
+            if (length_read !=
+                static_cast<std::streamsize>(
+                    length_bytes.size())) {
+                throw std::runtime_error(
+                    "share store final record is truncated");
+            }
+
+            const std::uint32_t length =
+                read_u32_be(length_bytes);
+
+            if (length != kShareV1SerializedSize &&
+                length != kShareV2SerializedSize) {
+                throw std::runtime_error(
+                    "share store record has invalid length");
+            }
+
+            std::vector<std::uint8_t> payload(length);
+
+            in.read(
+                reinterpret_cast<char*>(
+                    payload.data()),
+                static_cast<std::streamsize>(
+                    payload.size()));
+
+            if (in.gcount() !=
+                static_cast<std::streamsize>(
+                    payload.size())) {
+                throw std::runtime_error(
+                    "share store final record is truncated");
+            }
+
+            ShareId stored_id{};
+
+            in.read(
+                reinterpret_cast<char*>(
+                    stored_id.data()),
+                static_cast<std::streamsize>(
+                    stored_id.size()));
+
+            if (in.gcount() !=
+                static_cast<std::streamsize>(
+                    stored_id.size())) {
+                throw std::runtime_error(
+                    "share store final record is truncated");
+            }
+
+            const Share share =
+                deserialize_share(payload);
+
+            if (share_id(share) != stored_id) {
+                throw std::runtime_error(
+                    "share store record hash mismatch");
+            }
+
+            if (!seen.insert(stored_id).second) {
+                throw std::runtime_error(
+                    "share store contains duplicate record");
+            }
+
+            if (erase_ids.contains(stored_id)) {
+                ++removed;
+            } else {
+                retained.push_back(share);
+            }
+        }
+
+        // Close the source descriptor before replacing the pathname.
+        in.close();
+
+        if (removed != 0) {
+            rewrite_unlocked(retained);
+        }
+
+        return removed;
     }
 
     [[nodiscard]] ShareStoreLoadResult load_into(
@@ -280,6 +331,93 @@ public:
     }
 
 private:
+    void rewrite_unlocked(const std::vector<Share>& shares) {
+        if (std::filesystem::exists(path_)) {
+            if (std::filesystem::file_size(path_) < kShareStoreHeaderSize) {
+                throw std::runtime_error(
+                    "existing share store header is truncated");
+            }
+
+            std::ifstream existing(path_, std::ios::binary);
+            if (!existing) {
+                throw std::runtime_error(
+                    "failed to open existing share store");
+            }
+            verify_header(existing);
+        }
+
+        const std::filesystem::path parent = path_.parent_path();
+        if (!parent.empty()) {
+            std::filesystem::create_directories(parent);
+        }
+
+        const std::filesystem::path temporary =
+            path_.string() + ".rewrite.tmp";
+
+        try {
+            std::ofstream out(
+                temporary,
+                std::ios::binary | std::ios::trunc);
+
+            if (!out) {
+                throw std::runtime_error(
+                    "failed to create share store rewrite");
+            }
+
+            write_bytes(out, kShareStoreMagic);
+            write_bytes(out, expected_sidechain_id_);
+
+            std::set<ShareId> seen;
+
+            for (const Share& share : shares) {
+                const std::vector<std::uint8_t> payload =
+                    serialize_share(share);
+
+                if (payload.size() != kShareV1SerializedSize &&
+                    payload.size() != kShareV2SerializedSize) {
+                    throw std::logic_error(
+                        "unexpected serialized share size");
+                }
+
+                const ShareId id = share_id(share);
+                if (!seen.insert(id).second) {
+                    throw std::invalid_argument(
+                        "share store rewrite contains duplicate record");
+                }
+
+                write_u32_be(
+                    out,
+                    static_cast<std::uint32_t>(payload.size()));
+                write_bytes(out, payload);
+                write_bytes(out, id);
+            }
+
+            out.flush();
+            if (!out) {
+                throw std::runtime_error(
+                    "failed to write share store rewrite");
+            }
+
+            out.close();
+            if (!out) {
+                throw std::runtime_error(
+                    "failed to close share store rewrite");
+            }
+
+            std::error_code ec;
+            std::filesystem::rename(temporary, path_, ec);
+            if (ec) {
+                throw std::runtime_error(
+                    "failed to install share store rewrite: " +
+                    ec.message());
+            }
+        } catch (...) {
+            std::error_code ignored;
+            std::filesystem::remove(temporary, ignored);
+            throw;
+        }
+    }
+
     static void write_u32_be(std::ostream& out, std::uint32_t value) {
         const std::array<std::uint8_t, 4> bytes{
             static_cast<std::uint8_t>(value >> 24),

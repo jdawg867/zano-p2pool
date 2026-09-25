@@ -495,5 +495,149 @@ int main() {
     }
     remove_store(rewrite_path);
 
+
+    // Exact-ID durable erase regression. Only explicitly named records are
+    // removed from the current durable log. Unrelated connected history,
+    // unresolved orphan evidence, and records appended on either side of the
+    // erase operation must survive.
+    const std::filesystem::path erase_path =
+        temporary_store_path("erase-records");
+    remove_store(erase_path);
+    {
+        const Share keep_root =
+            make_store_share({}, 0, 10, 0x81);
+
+        const Share stale_root =
+            make_store_share({}, 0, 11, 0x82);
+
+        const Share stale_child =
+            make_store_share(
+                share_id(stale_root),
+                1,
+                12,
+                0x83);
+
+        ShareId missing_parent{};
+        missing_parent[0] = 0xed;
+
+        const Share surviving_orphan =
+            make_store_share(
+                missing_parent,
+                1,
+                13,
+                0x84);
+
+        const Share appended_before_erase =
+            make_store_share(
+                share_id(keep_root),
+                1,
+                14,
+                0x85);
+
+        const Share appended_after_erase =
+            make_store_share(
+                share_id(appended_before_erase),
+                2,
+                15,
+                0x86);
+
+        const ShareId keep_root_id =
+            share_id(keep_root);
+
+        const ShareId stale_root_id =
+            share_id(stale_root);
+
+        const ShareId stale_child_id =
+            share_id(stale_child);
+
+        const ShareId surviving_orphan_id =
+            share_id(surviving_orphan);
+
+        const ShareId appended_before_id =
+            share_id(appended_before_erase);
+
+        const ShareId appended_after_id =
+            share_id(appended_after_erase);
+
+        ShareStore store(erase_path, testnet_id);
+
+        store.append(keep_root);
+        store.append(stale_root);
+        store.append(stale_child);
+        store.append(surviving_orphan);
+        store.append(appended_before_erase);
+
+        const std::uintmax_t before_erase_size =
+            std::filesystem::file_size(erase_path);
+
+        const std::vector<ShareId> stale_ids{
+            stale_root_id,
+            stale_child_id,
+        };
+
+        CHECK(store.erase_records(stale_ids) == 2);
+
+        const std::uintmax_t after_erase_size =
+            std::filesystem::file_size(erase_path);
+
+        CHECK(after_erase_size < before_erase_size);
+
+        ShareChain after_erase(testnet_params);
+        const ShareStoreLoadResult erased_load =
+            store.load_into(after_erase);
+
+        CHECK(erased_load.records_loaded == 3);
+        CHECK(erased_load.connected_shares == 2);
+        CHECK(erased_load.orphan_shares == 1);
+
+        CHECK(after_erase.find(keep_root_id) != nullptr);
+        CHECK(after_erase.find(appended_before_id) != nullptr);
+
+        CHECK(after_erase.find(stale_root_id) == nullptr);
+        CHECK(after_erase.find(stale_child_id) == nullptr);
+
+        CHECK(
+            after_erase.is_orphan(
+                surviving_orphan_id));
+
+        // Repeating the exact erase is idempotent. Because nothing is removed,
+        // the durable file is not rewritten.
+        const std::uintmax_t before_noop_size =
+            std::filesystem::file_size(erase_path);
+
+        CHECK(store.erase_records(stale_ids) == 0);
+
+        CHECK(
+            std::filesystem::file_size(erase_path) ==
+            before_noop_size);
+
+        // A later normal append must extend the filtered durable history.
+        store.append(appended_after_erase);
+
+        ShareChain final_chain(testnet_params);
+        const ShareStoreLoadResult final_load =
+            store.load_into(final_chain);
+
+        CHECK(final_load.records_loaded == 4);
+        CHECK(final_load.connected_shares == 3);
+        CHECK(final_load.orphan_shares == 1);
+
+        CHECK(final_chain.find(keep_root_id) != nullptr);
+        CHECK(final_chain.find(appended_before_id) != nullptr);
+        CHECK(final_chain.find(appended_after_id) != nullptr);
+
+        CHECK(final_chain.find(stale_root_id) == nullptr);
+        CHECK(final_chain.find(stale_child_id) == nullptr);
+
+        CHECK(
+            final_chain.is_orphan(
+                surviving_orphan_id));
+
+        // Empty input is also a no-op.
+        const std::vector<ShareId> no_ids;
+        CHECK(store.erase_records(no_ids) == 0);
+    }
+    remove_store(erase_path);
+
     return 0;
 }
