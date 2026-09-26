@@ -92,6 +92,12 @@ struct P2pHistoricalRetrySummary {
     std::size_t attempted{};
     std::size_t trusted{};
     std::size_t connected{};
+
+    // Exact unique shares whose admission became connected during this
+    // autonomous retry pass. Callers may durably append these records before
+    // persisting any related pruning or replay-validation progress.
+    std::vector<Share> admitted_shares;
+
     std::vector<ShareId> pruned_share_ids;
     std::size_t pruned_connected_shares{};
     std::size_t remaining{};

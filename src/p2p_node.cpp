@@ -335,6 +335,34 @@ P2pNodeProtocol::retry_historical_pow_unavailable(
             throw;
         }
 
+        // Autonomous retry re-enters the normal P2P handling path and can
+        // connect a share that was not previously present in structural
+        // history. Preserve the exact admission result so the outer runtime
+        // can append it to ShareStore before publishing later durable state.
+        const std::vector<Share> admitted =
+            p2p_node_unique_admitted_shares(
+                result,
+                envelope);
+
+        for (const Share& admitted_share : admitted) {
+            const ShareId admitted_id =
+                share_id(admitted_share);
+
+            const bool already_reported =
+                std::any_of(
+                    summary.admitted_shares.begin(),
+                    summary.admitted_shares.end(),
+                    [&admitted_id](const Share& existing) {
+                        return share_id(existing) ==
+                               admitted_id;
+                    });
+
+            if (!already_reported) {
+                summary.admitted_shares.push_back(
+                    admitted_share);
+            }
+        }
+
         if (!result.historical_trust_status.has_value() &&
             result.share_status !=
                 P2pShareReceiveStatus::UnknownWorkContext) {
