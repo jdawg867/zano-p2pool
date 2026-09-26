@@ -936,8 +936,10 @@ int main(int argc, char** argv) {
         // independent trust source. Restore only after the exact persisted
         // canonical checkpoint re-crosses stable LOCAL Zano RPC authority.
         //
-        // This startup checkpoint is read-only: no replay-validation snapshot
-        // is written here or anywhere in runtime yet.
+        // A refreshed cache may be written later in this single-threaded
+        // startup path, but only after restart recovery and any required
+        // ShareStore compaction have completed. Runtime cache writes remain
+        // deliberately disabled.
         std::unique_ptr<zano_p2pool::ReplayValidationStore>
             replay_validation_store;
 
@@ -1117,6 +1119,96 @@ int main(int argc, char** argv) {
                     << " pruned="
                     << restart_recovery_result->pruned_connected_shares
                     << '\n';
+            }
+
+            // Refresh the optimization cache only after restart recovery has
+            // completed and any authoritative ShareStore pruning has already
+            // been made durable. Obtain a fresh local template so a lengthy
+            // recovery does not bind newly validated state to an old startup
+            // checkpoint.
+            if (replay_validation_store &&
+                restart_recovery_result.has_value()) {
+                try {
+                    const zano_p2pool::BlockTemplate
+                        checkpoint_template =
+                            rpc.get_block_template(
+                                options.wallet,
+                                "zano-p2pool/0.1.0-dev");
+
+                    const zano_p2pool::Hash256
+                        expected_checkpoint_parent =
+                            parse_hash256(
+                                checkpoint_template.prev_hash);
+
+                    const auto persisted =
+                        zano_p2pool::
+                            persist_replayed_validation_cache(
+                                node_chain,
+                                sidechain_parameters,
+                                *replay_validation_store,
+                                checkpoint_template.height,
+                                expected_checkpoint_parent,
+                                [&rpc](std::uint64_t height) {
+                                    return rpc.get_canonical_header(
+                                        height);
+                                });
+
+                    switch (persisted.status) {
+                    case zano_p2pool::
+                        RestartReplayValidationPersistStatus::
+                            Saved:
+                        std::cout
+                            << "Replay validation cache refreshed: "
+                            << replay_validation_store->path()
+                            << " checkpoint-height="
+                            << persisted.checkpoint->zano_height
+                            << " checkpoint-hash="
+                            << zano_p2pool::hash_to_hex(
+                                   persisted.checkpoint->
+                                       block_hash)
+                            << " records="
+                            << persisted.records_saved
+                            << '\n';
+                        break;
+
+                    case zano_p2pool::
+                        RestartReplayValidationPersistStatus::
+                            CanonicalChanged:
+                        std::cerr
+                            << "Replay validation cache refresh skipped: "
+                               "canonical parent changed while "
+                               "checkpointing"
+                            << " checkpoint-height="
+                            << persisted.checkpoint->zano_height
+                            << " observed-hash="
+                            << zano_p2pool::hash_to_hex(
+                                   persisted.checkpoint->
+                                       block_hash)
+                            << '\n';
+                        break;
+
+                    case zano_p2pool::
+                        RestartReplayValidationPersistStatus::
+                            CheckpointTooOld:
+                        std::cerr
+                            << "Replay validation cache refresh skipped: "
+                               "checkpoint is behind validated work"
+                            << " checkpoint-height="
+                            << persisted.checkpoint->zano_height
+                            << " records="
+                            << persisted.records_exported
+                            << '\n';
+                        break;
+                    }
+                } catch (const std::exception& e) {
+                    // The validation sidecar is only an optimization. Failure
+                    // to refresh it must not downgrade the already durable
+                    // ShareStore or locally reconstructed trust state.
+                    std::cerr
+                        << "Replay validation cache refresh failed: "
+                        << e.what()
+                        << "; continuing without refreshed cache\n";
+                }
             }
         }
 

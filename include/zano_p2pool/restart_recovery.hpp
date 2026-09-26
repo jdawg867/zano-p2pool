@@ -48,6 +48,52 @@ restore_replayed_validation_cache(
     const ReplayValidationStore& store,
     const std::function<RpcCanonicalHeader(std::uint64_t)>& lookup);
 
+enum class RestartReplayValidationPersistStatus : std::uint8_t {
+    Saved,
+    CanonicalChanged,
+    CheckpointTooOld,
+};
+
+struct RestartReplayValidationPersistResult {
+    RestartReplayValidationPersistStatus status{
+        RestartReplayValidationPersistStatus::Saved};
+
+    std::optional<ReplayValidationCheckpoint> checkpoint;
+
+    std::size_t records_exported{0};
+    std::size_t records_saved{0};
+};
+
+// Persist currently validated replay state behind stable LOCAL canonical Zano
+// authority.
+//
+// checkpoint_work_height is the mining/template height whose parent block is
+// expected_parent_hash. The parent is independently read twice from the local
+// canonical-header source before any durable write.
+//
+// Stable disagreement with expected_parent_hash returns CanonicalChanged and
+// leaves the existing cache untouched.
+//
+// Every exported validated share must have a Zano work height no greater than
+// checkpoint_work_height. Otherwise CheckpointTooOld is returned without
+// replacing the cache. This prevents a checkpoint from claiming authority over
+// validation state that depends on later work.
+//
+// The caller must serialize ShareChain access when used concurrently. Startup
+// recovery is single-threaded and requires no external mutex.
+//
+// Store I/O failures and malformed/inconsistent validated state throw. The
+// caller may treat this cache as an optimization and continue fail-closed
+// without it.
+[[nodiscard]] RestartReplayValidationPersistResult
+persist_replayed_validation_cache(
+    const ShareChain& chain,
+    const SidechainParameters& params,
+    ReplayValidationStore& store,
+    std::uint64_t checkpoint_work_height,
+    const Hash256& expected_parent_hash,
+    const std::function<RpcCanonicalHeader(std::uint64_t)>& lookup);
+
 struct RestartRecoveryResult {
     std::size_t archive_records{0};
     std::size_t connected_considered{0};
