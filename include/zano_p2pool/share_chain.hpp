@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <map>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -82,6 +83,14 @@ struct RevalidateShareResult {
     ShareId id{};
 };
 
+// Exact validation state that may be exported to or restored from a separately
+// authenticated/authorized replay-validation snapshot. This structure carries
+// no trust by itself; callers must establish snapshot authority before restore.
+struct ReplayValidationRecord {
+    ShareId share_id{};
+    CandidateValidation validation{};
+};
+
 struct ConnectedShare {
     Share share{};
     ShareId id{};
@@ -121,6 +130,31 @@ public:
         const ShareWorkContext& trusted_context,
         std::uint64_t now,
         ProgPowZContextMode mode = ProgPowZContextMode::Light);
+
+    // Export exact cached validation state for every connected share whose
+    // complete ancestry is already locally validated. The returned records are
+    // deterministic parent-first order: share_height, then ShareId.
+    //
+    // This exports cache state only. Canonical Zano checkpoint authority is
+    // intentionally owned by the separate replay-validation store/runtime
+    // boundary.
+    [[nodiscard]] std::vector<ReplayValidationRecord>
+    replay_validation_snapshot() const;
+
+    // Restore validation state only after the caller has independently
+    // authorized the containing durable snapshot. Input order is irrelevant:
+    // records are resolved to exact connected ShareIds, fully preflighted, then
+    // applied parent-first without recomputing ProgPoWZ.
+    //
+    // The operation is fail-closed and mutation-atomic: an unknown ShareId,
+    // duplicate record, inconsistent CandidateValidation, missing/unvalidated
+    // parent, current sidechain-policy mismatch, or conflicting already-
+    // validated state throws before any record is changed.
+    //
+    // Returns the number of previously-unvalidated connected shares upgraded.
+    // Reapplying an identical snapshot is idempotent and returns zero.
+    [[nodiscard]] std::size_t restore_replay_validation(
+        std::span<const ReplayValidationRecord> records);
 
     [[nodiscard]] const ConnectedShare* find(const ShareId& id) const noexcept;
     [[nodiscard]] const Share* find_orphan_share(const ShareId& id) const noexcept;

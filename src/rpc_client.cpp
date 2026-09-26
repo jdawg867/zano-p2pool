@@ -311,6 +311,43 @@ Hash256 stable_canonical_parent_for_work_height(
     return first.hash;
 }
 
+bool stable_canonical_checkpoint_matches(
+    const ReplayValidationCheckpoint& checkpoint,
+    const std::function<RpcCanonicalHeader(std::uint64_t)>& lookup) {
+
+    if (checkpoint.block_hash == Hash256{}) {
+        throw std::invalid_argument(
+            "replay-validation checkpoint hash must be nonzero");
+    }
+
+    const RpcCanonicalHeader first =
+        lookup(checkpoint.zano_height);
+
+    const RpcCanonicalHeader second =
+        lookup(checkpoint.zano_height);
+
+    if (first.height != checkpoint.zano_height ||
+        second.height != checkpoint.zano_height) {
+        throw std::runtime_error(
+            "replay-validation checkpoint audit returned "
+            "the wrong Zano height");
+    }
+
+    if (first.hash == Hash256{} ||
+        second.hash == Hash256{}) {
+        throw std::runtime_error(
+            "replay-validation checkpoint audit returned "
+            "a zero canonical hash");
+    }
+
+    if (first.hash != second.hash) {
+        throw std::runtime_error(
+            "canonical Zano checkpoint changed during stable audit");
+    }
+
+    return first.hash == checkpoint.block_hash;
+}
+
 std::optional<RpcHistoricalPowContext>
 RpcClient::get_historical_pow_context(
     std::uint64_t height,

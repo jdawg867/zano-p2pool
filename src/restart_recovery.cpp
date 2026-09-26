@@ -27,6 +27,157 @@ RecoveryWorkKey work_key(
 
 }  // namespace
 
+RestartReplayValidationResult
+restore_replayed_validation_cache(
+    ShareChain& chain,
+    const SidechainParameters& params,
+    const ReplayValidationStore& store,
+    const std::function<RpcCanonicalHeader(std::uint64_t)>& lookup) {
+
+    RestartReplayValidationResult result;
+
+    if (!chain.matches_sidechain_parameters(params)) {
+        throw std::runtime_error(
+            "replay-validation cache sidechain parameter mismatch");
+    }
+
+    const std::optional<ReplayValidationSnapshot> snapshot =
+        store.load();
+
+    if (!snapshot.has_value()) {
+        result.status =
+            RestartReplayValidationStatus::Missing;
+        return result;
+    }
+
+    result.checkpoint = snapshot->checkpoint;
+    result.records_loaded = snapshot->records.size();
+
+    // The durable file is only a cache. Re-cross authority through stable
+    // LOCAL canonical Zano evidence before allowing any cached validation
+    // result to enter ShareChain.
+    if (!stable_canonical_checkpoint_matches(
+            snapshot->checkpoint,
+            lookup)) {
+        result.status =
+            RestartReplayValidationStatus::Stale;
+        return result;
+    }
+
+    result.records_restored =
+        chain.restore_replay_validation(
+            snapshot->records);
+
+    result.status =
+        RestartReplayValidationStatus::Restored;
+
+    return result;
+}
+
+RestartReplayValidationPersistResult
+persist_replayed_validation_cache(
+    const ShareChain& chain,
+    const SidechainParameters& params,
+    ReplayValidationStore& store,
+    std::uint64_t checkpoint_work_height,
+    const Hash256& expected_parent_hash,
+    const std::function<RpcCanonicalHeader(std::uint64_t)>& lookup) {
+
+    RestartReplayValidationPersistResult result;
+
+    if (!chain.matches_sidechain_parameters(params)) {
+        throw std::runtime_error(
+            "replay-validation persistence sidechain parameter mismatch");
+    }
+
+    if (checkpoint_work_height == 0) {
+        throw std::invalid_argument(
+            "replay-validation persistence requires nonzero "
+            "checkpoint work height");
+    }
+
+    if (expected_parent_hash == Hash256{}) {
+        throw std::invalid_argument(
+            "replay-validation persistence expected parent "
+            "hash must be nonzero");
+    }
+
+    // The template-provided parent is not accepted on its own. Re-read that
+    // exact canonical height twice from the LOCAL daemon before using it as a
+    // durable authority checkpoint.
+    const Hash256 stable_parent =
+        stable_canonical_parent_for_work_height(
+            checkpoint_work_height,
+            lookup);
+
+    if (stable_parent == Hash256{}) {
+        throw std::runtime_error(
+            "replay-validation persistence canonical "
+            "parent is zero");
+    }
+
+    result.checkpoint =
+        ReplayValidationCheckpoint{
+            checkpoint_work_height - 1,
+            stable_parent,
+        };
+
+    if (stable_parent != expected_parent_hash) {
+        result.status =
+            RestartReplayValidationPersistStatus::
+                CanonicalChanged;
+        return result;
+    }
+
+    ReplayValidationSnapshot snapshot;
+    snapshot.checkpoint = *result.checkpoint;
+    snapshot.records =
+        chain.replay_validation_snapshot();
+
+    result.records_exported =
+        snapshot.records.size();
+
+    // A checkpoint at H-1 commits the canonical parent of work/template H and
+    // all prior canonical history. Refuse to bind any validated share whose
+    // own work height lies beyond H.
+    for (const ReplayValidationRecord& record :
+         snapshot.records) {
+        const ConnectedShare* connected =
+            chain.find(record.share_id);
+
+        if (connected == nullptr) {
+            throw std::logic_error(
+                "replay-validation export record is no longer connected");
+        }
+
+        if (connected->share.zano_height == 0) {
+            throw std::logic_error(
+                "validated replay share has zero Zano work height");
+        }
+
+        if (connected->share.zano_height >
+            checkpoint_work_height) {
+            result.status =
+                RestartReplayValidationPersistStatus::
+                    CheckpointTooOld;
+            return result;
+        }
+    }
+
+    // save() performs same-directory atomic replacement. Saving an empty
+    // snapshot is intentional: it clears previously cached validated records
+    // after all validation authority has been removed.
+    store.save(snapshot);
+
+    result.records_saved =
+        snapshot.records.size();
+
+    result.status =
+        RestartReplayValidationPersistStatus::Saved;
+
+    return result;
+}
+
 RestartRecoveryResult recover_replayed_history(
     ShareChain& chain,
     const SidechainParameters& params,

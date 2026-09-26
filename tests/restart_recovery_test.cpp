@@ -282,6 +282,394 @@ int main() {
     CHECK(chain.find(child_id)->validated_ancestry);
     CHECK(!chain.find(missing_work_id)->validated_ancestry);
 
+    // Persist the exact validation state established above only after a fresh
+    // template parent re-crosses stable LOCAL canonical authority.
+    ReplayValidationStore validation_store(
+        temporary.path / "shares.dat.validation",
+        sidechain_id(params));
+
+    const std::uint64_t cache_work_height =
+        proposal.zano_height + 10;
+
+    Hash256 cache_parent_hash{};
+    cache_parent_hash[0] = 0xc1;
+    cache_parent_hash[31] = 0x7c;
+
+    std::size_t persist_lookup_calls = 0;
+
+    const RestartReplayValidationPersistResult persisted =
+        persist_replayed_validation_cache(
+            chain,
+            params,
+            validation_store,
+            cache_work_height,
+            cache_parent_hash,
+            [&](std::uint64_t height) {
+                ++persist_lookup_calls;
+                CHECK(height == cache_work_height - 1);
+                return RpcCanonicalHeader{
+                    height,
+                    cache_parent_hash,
+                };
+            });
+
+    CHECK(
+        persisted.status ==
+        RestartReplayValidationPersistStatus::Saved);
+    CHECK(persisted.checkpoint.has_value());
+    CHECK(
+        persisted.checkpoint->zano_height ==
+        cache_work_height - 1);
+    CHECK(
+        persisted.checkpoint->block_hash ==
+        cache_parent_hash);
+    CHECK(persisted.records_exported == 2);
+    CHECK(persisted.records_saved == 2);
+    CHECK(persist_lookup_calls == 2);
+
+    const ReplayValidationCheckpoint cache_checkpoint =
+        *persisted.checkpoint;
+
+    const auto saved_snapshot =
+        validation_store.load();
+
+    CHECK(saved_snapshot.has_value());
+    CHECK(
+        saved_snapshot->checkpoint.zano_height ==
+        cache_checkpoint.zano_height);
+    CHECK(
+        saved_snapshot->checkpoint.block_hash ==
+        cache_checkpoint.block_hash);
+    CHECK(saved_snapshot->records.size() == 2);
+
+    // A stable canonical mismatch is not a write authority. Preserve the
+    // previously valid sidecar byte-for-byte logically.
+    Hash256 replacement_parent =
+        cache_parent_hash;
+    replacement_parent[0] ^= 0xffU;
+
+    std::size_t changed_persist_calls = 0;
+
+    const RestartReplayValidationPersistResult
+        canonical_changed =
+            persist_replayed_validation_cache(
+                chain,
+                params,
+                validation_store,
+                cache_work_height,
+                cache_parent_hash,
+                [&](std::uint64_t height) {
+                    ++changed_persist_calls;
+                    return RpcCanonicalHeader{
+                        height,
+                        replacement_parent,
+                    };
+                });
+
+    CHECK(
+        canonical_changed.status ==
+        RestartReplayValidationPersistStatus::
+            CanonicalChanged);
+    CHECK(canonical_changed.checkpoint.has_value());
+    CHECK(canonical_changed.records_exported == 0);
+    CHECK(canonical_changed.records_saved == 0);
+    CHECK(changed_persist_calls == 2);
+
+    const auto after_changed =
+        validation_store.load();
+
+    CHECK(after_changed.has_value());
+    CHECK(
+        after_changed->checkpoint.zano_height ==
+        cache_checkpoint.zano_height);
+    CHECK(
+        after_changed->checkpoint.block_hash ==
+        cache_checkpoint.block_hash);
+    CHECK(after_changed->records.size() == 2);
+
+    // Even stable canonical evidence is insufficient when its height does not
+    // reach all validated share work. The shared proof fixture intentionally
+    // uses Zano height 1, so build an independent later-height validated root
+    // rather than trying to manufacture a nonzero checkpoint below height 1.
+    Share horizon_root = root;
+    horizon_root.zano_height =
+        cache_work_height + 1;
+
+    const ShareId horizon_root_id =
+        share_id(horizon_root);
+
+    ShareChain horizon_chain(params);
+
+    CHECK(
+        horizon_chain.add_share_unchecked(
+            horizon_root).disposition ==
+        ShareDisposition::Connected);
+
+    CHECK(chain.find(root_id) != nullptr);
+    CHECK(
+        chain.find(root_id)->
+            pow_validation.has_value());
+
+    const std::vector<ReplayValidationRecord>
+        horizon_records{
+            ReplayValidationRecord{
+                horizon_root_id,
+                *chain.find(root_id)->pow_validation,
+            },
+        };
+
+    CHECK(
+        horizon_chain.restore_replay_validation(
+            horizon_records) == 1);
+
+    CHECK(
+        horizon_chain.find(horizon_root_id) != nullptr);
+    CHECK(
+        horizon_chain.find(horizon_root_id)->
+            validated_ancestry);
+
+    const std::uint64_t old_work_height =
+        cache_work_height;
+
+    CHECK(
+        horizon_root.zano_height >
+        old_work_height);
+
+    Hash256 old_parent{};
+    old_parent[0] = 0x33;
+    old_parent[31] = 0x44;
+
+    std::size_t old_checkpoint_calls = 0;
+
+    const RestartReplayValidationPersistResult
+        checkpoint_too_old =
+            persist_replayed_validation_cache(
+                horizon_chain,
+                params,
+                validation_store,
+                old_work_height,
+                old_parent,
+                [&](std::uint64_t height) {
+                    ++old_checkpoint_calls;
+                    CHECK(height == old_work_height - 1);
+                    return RpcCanonicalHeader{
+                        height,
+                        old_parent,
+                    };
+                });
+
+    CHECK(
+        checkpoint_too_old.status ==
+        RestartReplayValidationPersistStatus::
+            CheckpointTooOld);
+    CHECK(checkpoint_too_old.checkpoint.has_value());
+    CHECK(checkpoint_too_old.records_exported == 1);
+    CHECK(checkpoint_too_old.records_saved == 0);
+    CHECK(old_checkpoint_calls == 2);
+
+    const auto after_old_checkpoint =
+        validation_store.load();
+
+    CHECK(after_old_checkpoint.has_value());
+    CHECK(
+        after_old_checkpoint->checkpoint.zano_height ==
+        cache_checkpoint.zano_height);
+    CHECK(
+        after_old_checkpoint->checkpoint.block_hash ==
+        cache_checkpoint.block_hash);
+    CHECK(after_old_checkpoint->records.size() == 2);
+
+    ShareChain cached_chain(params);
+    CHECK(cached_chain.add_share_unchecked(root).disposition ==
+          ShareDisposition::Connected);
+    CHECK(cached_chain.add_share_unchecked(child).disposition ==
+          ShareDisposition::Connected);
+    CHECK(cached_chain.add_share_unchecked(missing_work).disposition ==
+          ShareDisposition::Connected);
+
+    CHECK(!cached_chain.find(root_id)->validated_ancestry);
+    CHECK(!cached_chain.find(child_id)->validated_ancestry);
+    CHECK(!cached_chain.find(missing_work_id)->validated_ancestry);
+
+    std::size_t cache_lookup_calls = 0;
+    const RestartReplayValidationResult cached_restore =
+        restore_replayed_validation_cache(
+            cached_chain,
+            params,
+            validation_store,
+            [&](std::uint64_t height) {
+                ++cache_lookup_calls;
+                CHECK(height == cache_checkpoint.zano_height);
+                return RpcCanonicalHeader{
+                    height,
+                    cache_checkpoint.block_hash,
+                };
+            });
+
+    CHECK(
+        cached_restore.status ==
+        RestartReplayValidationStatus::Restored);
+    CHECK(cached_restore.checkpoint.has_value());
+    CHECK(
+        cached_restore.checkpoint->zano_height ==
+        cache_checkpoint.zano_height);
+    CHECK(
+        cached_restore.checkpoint->block_hash ==
+        cache_checkpoint.block_hash);
+    CHECK(cached_restore.records_loaded == 2);
+    CHECK(cached_restore.records_restored == 2);
+    CHECK(cache_lookup_calls == 2);
+
+    CHECK(cached_chain.find(root_id)->validated_ancestry);
+    CHECK(cached_chain.find(child_id)->validated_ancestry);
+    CHECK(!cached_chain.find(missing_work_id)->validated_ancestry);
+    CHECK(
+        cached_chain.find(root_id)->
+            pow_validation.has_value());
+    CHECK(
+        cached_chain.find(child_id)->
+            pow_validation.has_value());
+
+    // Existing restart recovery must now recognize the restored prefix and
+    // avoid repeating canonical/ProgPoWZ work for it.
+    std::size_t cached_recovery_lookup_calls = 0;
+    const RestartRecoveryResult cached_recovery =
+        recover_replayed_history(
+            cached_chain,
+            params,
+            archive,
+            [&](std::uint64_t height) {
+                ++cached_recovery_lookup_calls;
+                return RpcCanonicalHeader{
+                    height,
+                    proposal.prev_hash,
+                };
+            },
+            200,
+            ProgPowZContextMode::Light);
+
+    CHECK(cached_recovery.connected_considered == 3);
+    CHECK(cached_recovery.revalidated == 0);
+    CHECK(cached_recovery.already_validated == 2);
+    CHECK(cached_recovery.missing_local_work == 1);
+    CHECK(cached_recovery.parent_unvalidated == 0);
+    CHECK(cached_recovery.rejected == 0);
+    CHECK(cached_recovery.pruned_connected_shares == 0);
+    CHECK(cached_recovery_lookup_calls == 0);
+
+    // A stable canonical replacement makes the whole cache stale. No record
+    // may be restored from the superseded checkpoint.
+    ShareChain stale_cache_chain(params);
+    CHECK(stale_cache_chain.add_share_unchecked(root).disposition ==
+          ShareDisposition::Connected);
+    CHECK(stale_cache_chain.add_share_unchecked(child).disposition ==
+          ShareDisposition::Connected);
+    CHECK(stale_cache_chain.add_share_unchecked(missing_work).disposition ==
+          ShareDisposition::Connected);
+
+    Hash256 stale_hash = cache_checkpoint.block_hash;
+    stale_hash[0] ^= 0xffU;
+
+    std::size_t stale_lookup_calls = 0;
+    const RestartReplayValidationResult stale_restore =
+        restore_replayed_validation_cache(
+            stale_cache_chain,
+            params,
+            validation_store,
+            [&](std::uint64_t height) {
+                ++stale_lookup_calls;
+                return RpcCanonicalHeader{
+                    height,
+                    stale_hash,
+                };
+            });
+
+    CHECK(
+        stale_restore.status ==
+        RestartReplayValidationStatus::Stale);
+    CHECK(stale_restore.records_loaded == 2);
+    CHECK(stale_restore.records_restored == 0);
+    CHECK(stale_lookup_calls == 2);
+    CHECK(!stale_cache_chain.find(root_id)->validated_ancestry);
+    CHECK(!stale_cache_chain.find(child_id)->validated_ancestry);
+
+    // Canonical evidence changing during verification is ambiguous. Throw
+    // before ShareChain mutation so the caller can fall back to full recovery.
+    ShareChain unstable_cache_chain(params);
+    CHECK(unstable_cache_chain.add_share_unchecked(root).disposition ==
+          ShareDisposition::Connected);
+    CHECK(unstable_cache_chain.add_share_unchecked(child).disposition ==
+          ShareDisposition::Connected);
+
+    Hash256 changed_checkpoint_hash =
+        cache_checkpoint.block_hash;
+    changed_checkpoint_hash[1] ^= 0x55U;
+
+    std::size_t unstable_cache_calls = 0;
+    bool unstable_cache_threw = false;
+
+    try {
+        static_cast<void>(
+            restore_replayed_validation_cache(
+                unstable_cache_chain,
+                params,
+                validation_store,
+                [&](std::uint64_t height) {
+                    ++unstable_cache_calls;
+                    return RpcCanonicalHeader{
+                        height,
+                        unstable_cache_calls == 1
+                            ? cache_checkpoint.block_hash
+                            : changed_checkpoint_hash,
+                    };
+                }));
+    } catch (const std::runtime_error&) {
+        unstable_cache_threw = true;
+    }
+
+    CHECK(unstable_cache_threw);
+    CHECK(unstable_cache_calls == 2);
+    CHECK(
+        !unstable_cache_chain.find(root_id)->
+            validated_ancestry);
+    CHECK(
+        !unstable_cache_chain.find(child_id)->
+            validated_ancestry);
+
+    // Missing sidecar performs no RPC work and no mutation.
+    ReplayValidationStore missing_validation_store(
+        temporary.path / "missing.validation",
+        sidechain_id(params));
+
+    ShareChain missing_cache_chain(params);
+    CHECK(missing_cache_chain.add_share_unchecked(root).disposition ==
+          ShareDisposition::Connected);
+
+    std::size_t missing_cache_calls = 0;
+    const RestartReplayValidationResult missing_cache =
+        restore_replayed_validation_cache(
+            missing_cache_chain,
+            params,
+            missing_validation_store,
+            [&](std::uint64_t height) {
+                ++missing_cache_calls;
+                return RpcCanonicalHeader{
+                    height,
+                    cache_checkpoint.block_hash,
+                };
+            });
+
+    CHECK(
+        missing_cache.status ==
+        RestartReplayValidationStatus::Missing);
+    CHECK(!missing_cache.checkpoint.has_value());
+    CHECK(missing_cache.records_loaded == 0);
+    CHECK(missing_cache.records_restored == 0);
+    CHECK(missing_cache_calls == 0);
+    CHECK(
+        !missing_cache_chain.find(root_id)->
+            validated_ancestry);
+
     lookup_calls = 0;
     const RestartRecoveryResult second =
         recover_replayed_history(

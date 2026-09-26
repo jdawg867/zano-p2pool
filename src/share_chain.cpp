@@ -5,11 +5,50 @@
 #include "zano_p2pool/sidechain_params.hpp"
 
 #include <algorithm>
+#include <set>
 #include <stdexcept>
 #include <utility>
 #include <vector>
 
 namespace zano_p2pool {
+namespace {
+
+bool replay_validation_consistent(
+    const CandidateValidation& validation) noexcept {
+
+    if (!validation.meets_share_difficulty) {
+        return false;
+    }
+
+    switch (validation.classification) {
+    case CandidateClassification::Share:
+        return !validation.meets_network_difficulty;
+
+    case CandidateClassification::Block:
+        return validation.meets_network_difficulty;
+
+    case CandidateClassification::Invalid:
+        return false;
+    }
+
+    return false;
+}
+
+bool replay_validation_equal(
+    const CandidateValidation& left,
+    const CandidateValidation& right) noexcept {
+
+    return
+        left.pow.final_hash == right.pow.final_hash &&
+        left.pow.mix_hash == right.pow.mix_hash &&
+        left.meets_share_difficulty ==
+            right.meets_share_difficulty &&
+        left.meets_network_difficulty ==
+            right.meets_network_difficulty &&
+        left.classification == right.classification;
+}
+
+}  // namespace
 
 ChainWork share_work(const Difficulty128& difficulty) {
     if (difficulty128_is_zero(difficulty)) {
@@ -589,6 +628,285 @@ RevalidateShareResult ShareChain::revalidate_connected_share(
     connected.validated_ancestry = true;
     result.status = RevalidateShareStatus::Validated;
     return result;
+}
+
+std::vector<ReplayValidationRecord>
+ShareChain::replay_validation_snapshot() const {
+    if (!difficulty_policy_.has_value()) {
+        throw std::logic_error(
+            "replay-validation snapshot requires configured sidechain policy");
+    }
+
+    std::vector<const ConnectedShare*> validated;
+    validated.reserve(connected_.size());
+
+    for (const auto& [id, connected] : connected_) {
+        (void)id;
+
+        if (!connected.validated_ancestry) {
+            continue;
+        }
+
+        if (!connected.pow_validation.has_value() ||
+            !replay_validation_consistent(
+                *connected.pow_validation)) {
+            throw std::logic_error(
+                "validated replay share has inconsistent PoW cache");
+        }
+
+        if (share_id(connected.share) != connected.id) {
+            throw std::logic_error(
+                "connected replay-validation ShareId invariant failed");
+        }
+
+        if (!is_zero_share_id(connected.share.parent_id)) {
+            const auto parent_it =
+                connected_.find(connected.share.parent_id);
+
+            if (parent_it == connected_.end() ||
+                !parent_it->second.validated_ancestry) {
+                throw std::logic_error(
+                    "validated replay share has unvalidated parent");
+            }
+        }
+
+        validated.push_back(&connected);
+    }
+
+    std::sort(
+        validated.begin(),
+        validated.end(),
+        [](const ConnectedShare* left,
+           const ConnectedShare* right) {
+            if (left->share.share_height !=
+                right->share.share_height) {
+                return left->share.share_height <
+                    right->share.share_height;
+            }
+            return left->id < right->id;
+        });
+
+    std::vector<ReplayValidationRecord> snapshot;
+    snapshot.reserve(validated.size());
+
+    for (const ConnectedShare* connected : validated) {
+        snapshot.push_back(
+            ReplayValidationRecord{
+                connected->id,
+                *connected->pow_validation,
+            });
+    }
+
+    return snapshot;
+}
+
+std::size_t ShareChain::restore_replay_validation(
+    std::span<const ReplayValidationRecord> records) {
+
+    if (records.empty()) {
+        return 0;
+    }
+
+    if (!difficulty_policy_.has_value()) {
+        throw std::logic_error(
+            "replay-validation restore requires configured sidechain policy");
+    }
+
+    // Establish the existing validated-ancestry invariant before considering
+    // any durable record. A broken in-memory invariant must never be repaired
+    // by silently trusting persisted cache state.
+    std::set<ShareId> prospectively_validated;
+
+    for (const auto& [id, connected] : connected_) {
+        if (!connected.validated_ancestry) {
+            continue;
+        }
+
+        if (!connected.pow_validation.has_value() ||
+            !replay_validation_consistent(
+                *connected.pow_validation)) {
+            throw std::logic_error(
+                "existing validated replay share has inconsistent PoW cache");
+        }
+
+        if (share_id(connected.share) != id) {
+            throw std::logic_error(
+                "existing connected ShareId invariant failed");
+        }
+
+        prospectively_validated.insert(id);
+    }
+
+    for (const auto& [id, connected] : connected_) {
+        (void)id;
+
+        if (!connected.validated_ancestry ||
+            is_zero_share_id(connected.share.parent_id)) {
+            continue;
+        }
+
+        const auto parent_it =
+            connected_.find(connected.share.parent_id);
+
+        if (parent_it == connected_.end() ||
+            !parent_it->second.validated_ancestry) {
+            throw std::logic_error(
+                "existing validated ancestry has invalid parent state");
+        }
+    }
+
+    std::set<ShareId> seen;
+    std::vector<const ReplayValidationRecord*> ordered;
+    ordered.reserve(records.size());
+
+    // First pass resolves every persisted identity without mutation.
+    for (const ReplayValidationRecord& record : records) {
+        if (is_zero_share_id(record.share_id)) {
+            throw std::runtime_error(
+                "replay-validation restore contains zero ShareId");
+        }
+
+        if (!seen.insert(record.share_id).second) {
+            throw std::runtime_error(
+                "replay-validation restore contains duplicate ShareId");
+        }
+
+        if (!replay_validation_consistent(
+                record.validation)) {
+            throw std::runtime_error(
+                "replay-validation restore contains inconsistent PoW state");
+        }
+
+        const auto it = connected_.find(record.share_id);
+        if (it == connected_.end()) {
+            throw std::runtime_error(
+                "replay-validation restore ShareId is not connected");
+        }
+
+        if (share_id(it->second.share) != record.share_id) {
+            throw std::logic_error(
+                "replay-validation restore ShareId invariant failed");
+        }
+
+        ordered.push_back(&record);
+    }
+
+    // Store serialization is ShareId ordered, so derive the only ordering that
+    // matters for ancestry restoration from the actual connected shares.
+    std::sort(
+        ordered.begin(),
+        ordered.end(),
+        [this](
+            const ReplayValidationRecord* left,
+            const ReplayValidationRecord* right) {
+            const ConnectedShare& left_connected =
+                connected_.at(left->share_id);
+            const ConnectedShare& right_connected =
+                connected_.at(right->share_id);
+
+            if (left_connected.share.share_height !=
+                right_connected.share.share_height) {
+                return left_connected.share.share_height <
+                    right_connected.share.share_height;
+            }
+
+            return left->share_id < right->share_id;
+        });
+
+    // Complete every structural/policy/ancestry check before mutation.
+    for (const ReplayValidationRecord* record : ordered) {
+        const ConnectedShare& connected =
+            connected_.at(record->share_id);
+
+        if (connected.validated_ancestry) {
+            if (!connected.pow_validation.has_value() ||
+                !replay_validation_equal(
+                    *connected.pow_validation,
+                    record->validation)) {
+                throw std::runtime_error(
+                    "replay-validation restore conflicts with "
+                    "already-validated state");
+            }
+
+            prospectively_validated.insert(record->share_id);
+            continue;
+        }
+
+        const Share& share = connected.share;
+
+        ShareRejectReason reason =
+            structural_reject_reason(share);
+
+        if (reason != ShareRejectReason::None) {
+            throw std::runtime_error(
+                std::string(
+                    "replay-validation restore structural rejection: ") +
+                share_reject_reason_name(reason));
+        }
+
+        if (!is_zero_share_id(share.parent_id)) {
+            const auto parent_it =
+                connected_.find(share.parent_id);
+
+            if (parent_it == connected_.end()) {
+                throw std::runtime_error(
+                    "replay-validation restore parent is not connected");
+            }
+
+            if (!prospectively_validated.contains(
+                    share.parent_id)) {
+                throw std::runtime_error(
+                    "replay-validation restore parent is not validated");
+            }
+
+            if (parent_it->second.share.share_height == UINT64_MAX ||
+                share.share_height !=
+                    parent_it->second.share.share_height + 1) {
+                throw std::runtime_error(
+                    "replay-validation restore parent height mismatch");
+            }
+
+            reason = parent_timestamp_reject_reason(
+                share,
+                parent_it->second.share);
+
+            if (reason != ShareRejectReason::None) {
+                throw std::runtime_error(
+                    std::string(
+                        "replay-validation restore parent rejection: ") +
+                    share_reject_reason_name(reason));
+            }
+        }
+
+        reason = expected_difficulty_reject_reason(share);
+        if (reason != ShareRejectReason::None) {
+            throw std::runtime_error(
+                std::string(
+                    "replay-validation restore difficulty rejection: ") +
+                share_reject_reason_name(reason));
+        }
+
+        prospectively_validated.insert(record->share_id);
+    }
+
+    // No check below this point can fail. Apply the fully preflighted records
+    // parent-first so the in-memory state never transiently violates ancestry.
+    std::size_t restored = 0;
+
+    for (const ReplayValidationRecord* record : ordered) {
+        ConnectedShare& connected =
+            connected_.at(record->share_id);
+
+        if (connected.validated_ancestry) {
+            continue;
+        }
+
+        connected.pow_validation = record->validation;
+        connected.validated_ancestry = true;
+        ++restored;
+    }
+
+    return restored;
 }
 
 const ConnectedShare* ShareChain::find(const ShareId& id) const noexcept {
