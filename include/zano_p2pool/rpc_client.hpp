@@ -11,6 +11,7 @@
 
 #include "zano_p2pool/block_template.hpp"
 #include "zano_p2pool/crypto_hash.hpp"
+#include "zano_p2pool/replay_validation_store.hpp"
 #include "zano_p2pool/share.hpp"
 
 namespace zano_p2pool {
@@ -45,6 +46,20 @@ struct RpcCanonicalHeader {
 
 [[nodiscard]] Hash256 stable_canonical_parent_for_work_height(
     std::uint64_t zano_height,
+    const std::function<RpcCanonicalHeader(std::uint64_t)>& lookup);
+
+// Independently verify that a durable replay-validation checkpoint still
+// names the exact same block in the operator's local canonical Zano chain.
+//
+// The same height is read twice. A stable exact match returns true. A stable
+// but different canonical hash returns false, meaning the durable snapshot is
+// stale and must not be restored. Wrong-height, zero-hash, or changing local
+// canonical evidence throws and therefore fails closed.
+//
+// This function does not establish authority from peer data and does not
+// restore any ShareChain state.
+[[nodiscard]] bool stable_canonical_checkpoint_matches(
+    const ReplayValidationCheckpoint& checkpoint,
     const std::function<RpcCanonicalHeader(std::uint64_t)>& lookup);
 
 // Independently reconstructed historical PoW-template authority from the

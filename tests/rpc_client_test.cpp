@@ -251,6 +251,160 @@ int main() {
 
     using namespace zano_p2pool;
 
+    // Replay-validation checkpoint authority is accepted only when two
+    // independent reads of the exact checkpoint height return the same local
+    // canonical block hash.
+    ReplayValidationCheckpoint checkpoint;
+    checkpoint.zano_height = 12345;
+    checkpoint.block_hash[0] = 0x42;
+    checkpoint.block_hash[31] = 0x24;
+
+    {
+        std::size_t calls = 0;
+
+        const bool matched =
+            stable_canonical_checkpoint_matches(
+                checkpoint,
+                [&](std::uint64_t height) {
+                    ++calls;
+                    CHECK(height == checkpoint.zano_height);
+                    return RpcCanonicalHeader{
+                        height,
+                        checkpoint.block_hash,
+                    };
+                });
+
+        CHECK(matched);
+        CHECK(calls == 2);
+    }
+
+    // A stable different canonical hash means the durable validation snapshot
+    // belongs to superseded Zano history. This is a normal stale-cache result,
+    // not authority to restore.
+    {
+        Hash256 replacement_hash =
+            checkpoint.block_hash;
+        replacement_hash[0] ^= 0xffU;
+
+        std::size_t calls = 0;
+
+        const bool matched =
+            stable_canonical_checkpoint_matches(
+                checkpoint,
+                [&](std::uint64_t height) {
+                    ++calls;
+                    return RpcCanonicalHeader{
+                        height,
+                        replacement_hash,
+                    };
+                });
+
+        CHECK(!matched);
+        CHECK(calls == 2);
+    }
+
+    // Canonical evidence changing between the two reads is ambiguous and must
+    // fail closed rather than being treated as an ordinary stale snapshot.
+    {
+        Hash256 changed_hash =
+            checkpoint.block_hash;
+        changed_hash[1] = 0x99;
+
+        std::size_t calls = 0;
+        bool failed = false;
+
+        try {
+            static_cast<void>(
+                stable_canonical_checkpoint_matches(
+                    checkpoint,
+                    [&](std::uint64_t height) {
+                        ++calls;
+                        return RpcCanonicalHeader{
+                            height,
+                            calls == 1
+                                ? checkpoint.block_hash
+                                : changed_hash,
+                        };
+                    }));
+        } catch (const std::runtime_error&) {
+            failed = true;
+        }
+
+        CHECK(failed);
+        CHECK(calls == 2);
+    }
+
+    // A callback cannot authorize a snapshot by returning evidence for a
+    // different height.
+    {
+        bool failed = false;
+
+        try {
+            static_cast<void>(
+                stable_canonical_checkpoint_matches(
+                    checkpoint,
+                    [&](std::uint64_t height) {
+                        return RpcCanonicalHeader{
+                            height + 1,
+                            checkpoint.block_hash,
+                        };
+                    }));
+        } catch (const std::runtime_error&) {
+            failed = true;
+        }
+
+        CHECK(failed);
+    }
+
+    // Zero canonical evidence is never accepted, even though the production
+    // RpcClient parser already rejects it before reaching this primitive.
+    {
+        bool failed = false;
+
+        try {
+            static_cast<void>(
+                stable_canonical_checkpoint_matches(
+                    checkpoint,
+                    [](std::uint64_t height) {
+                        return RpcCanonicalHeader{
+                            height,
+                            Hash256{},
+                        };
+                    }));
+        } catch (const std::runtime_error&) {
+            failed = true;
+        }
+
+        CHECK(failed);
+    }
+
+    // Likewise a malformed durable checkpoint cannot cross this boundary.
+    {
+        ReplayValidationCheckpoint zero_checkpoint =
+            checkpoint;
+        zero_checkpoint.block_hash = {};
+
+        bool failed = false;
+
+        try {
+            static_cast<void>(
+                stable_canonical_checkpoint_matches(
+                    zero_checkpoint,
+                    [](std::uint64_t height) {
+                        Hash256 hash{};
+                        hash[0] = 1;
+                        return RpcCanonicalHeader{
+                            height,
+                            hash,
+                        };
+                    }));
+        } catch (const std::invalid_argument&) {
+            failed = true;
+        }
+
+        CHECK(failed);
+    }
+
     CHECK(submit_with_response(
               R"({"jsonrpc":"2.0","id":0,"result":{"status":"OK"}})") ==
           RpcBlockSubmissionResult::Accepted);
