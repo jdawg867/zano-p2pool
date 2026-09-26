@@ -2164,11 +2164,22 @@ int main(int argc, char** argv) {
                                         zano_p2pool::
                                             ProgPowZContextMode::Light);
 
+                            // Autonomous historical retry can admit a share
+                            // that was previously absent from structural
+                            // history. Make those exact admissions durable
+                            // before applying any stale-ID pruning or making
+                            // replay-validation progress eligible to persist.
+                            for (const auto& admitted :
+                                 historical_retry.admitted_shares) {
+                                persist_share(admitted);
+                            }
+
                             persist_pruned_shares(
                                 historical_retry.pruned_share_ids,
                                 "historical-pow-retry");
 
-                            if (historical_retry.connected != 0 ||
+                            if (!historical_retry.admitted_shares.empty() ||
+                                historical_retry.connected != 0 ||
                                 historical_retry.
                                     pruned_connected_shares != 0) {
                                 replay_validation_cache_dirty.store(
