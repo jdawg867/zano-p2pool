@@ -193,6 +193,7 @@ struct RuntimeCaseResult {
     std::size_t connected_share_count{};
     bool candidate_present{false};
     bool candidate_validated_ancestry{false};
+    ShareId candidate_id{};
     int lookup_calls{};
     int historical_pow_lookup_calls{};
     int work_requests{};
@@ -533,6 +534,7 @@ struct RuntimeCaseResult {
             CHECK(still_unavailable.attempted == 1);
             CHECK(still_unavailable.trusted == 0);
             CHECK(still_unavailable.connected == 0);
+            CHECK(still_unavailable.admitted_shares.empty());
             CHECK(still_unavailable.remaining == 1);
 
             // The local daemon can now reconstruct the historical PoW
@@ -607,6 +609,7 @@ struct RuntimeCaseResult {
         historical_pow_lookup_calls.load();
     result.work_requests = work_requests.load();
     result.autonomous_retry = autonomous_retry;
+    result.candidate_id = share_id(candidate);
 
     {
         std::lock_guard lock(receiver_state_mutex);
@@ -1375,6 +1378,21 @@ int main() {
     CHECK(historical_oracle_recovers.autonomous_retry.attempted == 1);
     CHECK(historical_oracle_recovers.autonomous_retry.trusted == 1);
     CHECK(historical_oracle_recovers.autonomous_retry.connected == 1);
+
+    // This candidate was absent from structural history before the autonomous
+    // retry. The summary must therefore carry the exact newly admitted share
+    // so the runtime can make that admission durable before later state.
+    CHECK(
+        historical_oracle_recovers.
+            autonomous_retry.
+                admitted_shares.size() == 1);
+    CHECK(
+        share_id(
+            historical_oracle_recovers.
+                autonomous_retry.
+                    admitted_shares.front()) ==
+        historical_oracle_recovers.candidate_id);
+
     CHECK(
         historical_oracle_recovers.
             autonomous_retry.
