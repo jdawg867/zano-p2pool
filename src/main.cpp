@@ -904,6 +904,13 @@ int main(int argc, char** argv) {
         std::atomic<std::uint64_t>
             historical_pow_retry_remaining{0};
 
+        // Runtime consensus paths only mark this flag after their ShareStore
+        // persistence work has completed. The main template-refresh thread
+        // performs the actual validation-cache checkpoint under
+        // node_state_mutex so no concurrent ShareChain mutation can cross the
+        // checkpoint/save boundary.
+        std::atomic<bool> replay_validation_cache_dirty{false};
+
         std::unique_ptr<zano_p2pool::ShareStore> share_store;
         if (!options.no_share_store) {
             const std::filesystem::path store_path =
@@ -938,8 +945,8 @@ int main(int argc, char** argv) {
         //
         // A refreshed cache may be written later in this single-threaded
         // startup path, but only after restart recovery and any required
-        // ShareStore compaction have completed. Runtime cache writes remain
-        // deliberately disabled.
+        // ShareStore compaction have completed. Runtime refreshes are
+        // separately serialized through the main refresh path below.
         std::unique_ptr<zano_p2pool::ReplayValidationStore>
             replay_validation_store;
 
@@ -1311,6 +1318,168 @@ int main(int argc, char** argv) {
                 }
             };
 
+        // Persist validation state only from the main refresh thread. The
+        // reconciled_template is the exact daemon template whose canonical
+        // transition has already been processed by that refresh pass.
+        //
+        // Re-read getblocktemplate while holding node_state_mutex and require
+        // its height/parent to still match. If the daemon advanced or reorged
+        // after the refresh began, skip the write and let the next refresh
+        // reconcile that transition first. This prevents old in-memory
+        // validation state from ever being rebound to a newer canonical
+        // checkpoint.
+        const auto persist_runtime_replay_validation =
+            [&](const zano_p2pool::BlockTemplate& reconciled_template,
+                std::string_view source) noexcept -> bool {
+
+                if (!replay_validation_store || !share_store) {
+                    return true;
+                }
+
+                if (g_persistence_failed.load(
+                        std::memory_order_acquire)) {
+                    return false;
+                }
+
+                try {
+                    // Freezes every ShareChain validation/prune/admission
+                    // mutation through checkpoint verification and atomic
+                    // sidecar replacement.
+                    std::lock_guard state_lock(
+                        node_state_mutex);
+
+                    const zano_p2pool::BlockTemplate
+                        checkpoint_template =
+                            rpc.get_block_template(
+                                options.wallet,
+                                "zano-p2pool/0.1.0-dev");
+
+                    const zano_p2pool::Hash256
+                        reconciled_parent =
+                            parse_hash256(
+                                reconciled_template.prev_hash);
+
+                    const zano_p2pool::Hash256
+                        checkpoint_parent =
+                            parse_hash256(
+                                checkpoint_template.prev_hash);
+
+                    if (checkpoint_template.height !=
+                            reconciled_template.height ||
+                        checkpoint_parent !=
+                            reconciled_parent) {
+
+                        std::cerr
+                            << "Replay validation runtime refresh "
+                               "deferred: source="
+                            << source
+                            << " reason=daemon-template-changed"
+                            << " reconciled-height="
+                            << reconciled_template.height
+                            << " observed-height="
+                            << checkpoint_template.height
+                            << '\n';
+
+                        return false;
+                    }
+
+                    const auto persisted =
+                        zano_p2pool::
+                            persist_replayed_validation_cache(
+                                node_chain,
+                                sidechain_parameters,
+                                *replay_validation_store,
+                                checkpoint_template.height,
+                                checkpoint_parent,
+                                [&rpc](std::uint64_t height) {
+                                    return rpc.get_canonical_header(
+                                        height);
+                                });
+
+                    switch (persisted.status) {
+                    case zano_p2pool::
+                        RestartReplayValidationPersistStatus::
+                            Saved:
+                        std::cout
+                            << "Replay validation runtime cache "
+                               "refreshed: source="
+                            << source
+                            << " checkpoint-height="
+                            << persisted.checkpoint->zano_height
+                            << " records="
+                            << persisted.records_saved
+                            << '\n';
+                        return true;
+
+                    case zano_p2pool::
+                        RestartReplayValidationPersistStatus::
+                            CanonicalChanged:
+                        std::cerr
+                            << "Replay validation runtime refresh "
+                               "deferred: source="
+                            << source
+                            << " reason=canonical-parent-changed"
+                            << '\n';
+                        return false;
+
+                    case zano_p2pool::
+                        RestartReplayValidationPersistStatus::
+                            CheckpointTooOld:
+                        std::cerr
+                            << "Replay validation runtime refresh "
+                               "deferred: source="
+                            << source
+                            << " reason=checkpoint-too-old"
+                            << " records="
+                            << persisted.records_exported
+                            << '\n';
+                        return false;
+                    }
+                } catch (const std::exception& e) {
+                    // The sidecar remains only an optimization. ShareStore and
+                    // MiningWorkArchive durability retain their existing fatal
+                    // semantics independently.
+                    std::cerr
+                        << "Replay validation runtime refresh "
+                           "failed: source="
+                        << source
+                        << " error=" << e.what()
+                        << '\n';
+                    return false;
+                } catch (...) {
+                    std::cerr
+                        << "Replay validation runtime refresh "
+                           "failed with unknown error: source="
+                        << source
+                        << '\n';
+                    return false;
+                }
+
+                return false;
+            };
+
+        const auto flush_runtime_replay_validation =
+            [&](const zano_p2pool::BlockTemplate& reconciled_template,
+                std::string_view source) noexcept {
+
+                if (!replay_validation_cache_dirty.exchange(
+                        false,
+                        std::memory_order_acq_rel)) {
+                    return;
+                }
+
+                if (!persist_runtime_replay_validation(
+                        reconciled_template,
+                        source)) {
+                    // Keep retry intent. A concurrent callback may also set
+                    // this flag while persistence is in progress; store(true)
+                    // preserves either case.
+                    replay_validation_cache_dirty.store(
+                        true,
+                        std::memory_order_release);
+                }
+            };
+
         const bool initial_canonical_pplns =
             apply_canonical_pplns_template(
                 live,
@@ -1545,6 +1714,17 @@ int main(int argc, char** argv) {
                             result.historical_pruned_share_ids,
                             "p2p-message");
 
+                        // Validation sidecar persistence follows ShareStore
+                        // admission persistence and exact stale-ID filtering.
+                        // The callback never writes the sidecar itself.
+                        if (!admitted_shares.empty() ||
+                            result.historical_share_connected ||
+                            result.historical_pruned_connected_shares != 0) {
+                            replay_validation_cache_dirty.store(
+                                true,
+                                std::memory_order_release);
+                        }
+
                         if (!admitted_shares.empty()) {
                             p2p_admitted_shares_total.fetch_add(
                                 admitted_shares.size(),
@@ -1753,6 +1933,13 @@ int main(int argc, char** argv) {
                             std::memory_order_relaxed);
                     }
                     persist_share(share);
+
+                    // Stratum submission has already crossed consensus under
+                    // node_state_mutex, and its ShareStore append above occurs
+                    // before validation-sidecar refresh is requested.
+                    replay_validation_cache_dirty.store(
+                        true,
+                        std::memory_order_release);
 
                     // The accepted share changed the local payout history. Until
                     // the main refresh installs the rebuilt plan, peer contexts
@@ -1981,6 +2168,14 @@ int main(int argc, char** argv) {
                                 historical_retry.pruned_share_ids,
                                 "historical-pow-retry");
 
+                            if (historical_retry.connected != 0 ||
+                                historical_retry.
+                                    pruned_connected_shares != 0) {
+                                replay_validation_cache_dirty.store(
+                                    true,
+                                    std::memory_order_release);
+                            }
+
                             historical_pow_retry_attempts_total.fetch_add(
                                 historical_retry.attempted,
                                 std::memory_order_relaxed);
@@ -2054,6 +2249,14 @@ int main(int argc, char** argv) {
                             persist_pruned_shares(
                                 replay_recovery.pruned_share_ids,
                                 "replay-recovery");
+
+                            if (replay_recovery.connected != 0 ||
+                                replay_recovery.
+                                    pruned_connected_shares != 0) {
+                                replay_validation_cache_dirty.store(
+                                    true,
+                                    std::memory_order_release);
+                            }
 
                             replay_recovery_requires_rebuild =
                                 replay_recovery.connected != 0 ||
@@ -2147,6 +2350,9 @@ int main(int argc, char** argv) {
 
                     if (!historical_retry_requires_rebuild &&
                         !replay_recovery_requires_rebuild) {
+                        flush_runtime_replay_validation(
+                            next.block,
+                            "idle-refresh");
                         continue;
                     }
                 }
@@ -2286,6 +2492,14 @@ int main(int argc, char** argv) {
                         << " pruned-connected=" << pruned
                         << " revoked-work=" << revoked
                         << '\n';
+
+                    // A canonical transition can invalidate cached validation
+                    // ancestry even when trusted-work revocation is the only
+                    // immediately visible change. Force a post-reconciliation
+                    // sidecar checkpoint attempt.
+                    replay_validation_cache_dirty.store(
+                        true,
+                        std::memory_order_release);
 
                     // No payout expectation derived from the displaced branch
                     // may remain authoritative. Install only the raw daemon
@@ -2447,6 +2661,16 @@ int main(int argc, char** argv) {
                         p2p_runtime->broadcast(*local);
                     }
                 }
+
+                // All canonical reconciliation, autonomous replay recovery,
+                // ShareStore stale-ID persistence, payout rebuilding, and new
+                // work installation for this template have completed. Flush
+                // only now so the sidecar cannot lead those durable/state
+                // transitions.
+                flush_runtime_replay_validation(
+                    next.block,
+                    "template-refresh");
+
                 live = std::move(next);
             } catch (const std::exception& e) {
                 template_refresh_failures_total.fetch_add(
