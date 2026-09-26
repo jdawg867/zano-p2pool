@@ -20,6 +20,7 @@ pkg_check_modules(CURL REQUIRED IMPORTED_TARGET libcurl)
 pkg_check_modules(JSONC REQUIRED IMPORTED_TARGET json-c)
 
 add_library(zano_p2pool_core
+    src/replay_validation_store.cpp
     src/restart_recovery.cpp
     src/restart_revalidation.cpp
     src/historical_trust.cpp
@@ -218,6 +219,9 @@ if(ZANO_P2POOL_BUILD_TESTS)
     add_executable(restart_revalidation_test tests/restart_revalidation_test.cpp)
     target_link_libraries(restart_revalidation_test PRIVATE zano_p2pool_core)
     add_test(NAME restart_revalidation_test COMMAND restart_revalidation_test)
+    add_executable(replay_validation_store_test tests/replay_validation_store_test.cpp)
+    target_link_libraries(replay_validation_store_test PRIVATE zano_p2pool_core)
+    add_test(NAME replay_validation_store_test COMMAND replay_validation_store_test)
     add_executable(historical_trust_test tests/historical_trust_test.cpp)
     target_link_libraries(historical_trust_test PRIVATE zano_p2pool_core)
     add_test(NAME historical_trust_test COMMAND historical_trust_test)
