@@ -282,6 +282,218 @@ int main() {
     CHECK(chain.find(child_id)->validated_ancestry);
     CHECK(!chain.find(missing_work_id)->validated_ancestry);
 
+    // Persist the exact validation state established above behind a canonical
+    // checkpoint. A fresh structural replay may reuse it only after that exact
+    // checkpoint re-crosses stable LOCAL canonical-header authority.
+    ReplayValidationCheckpoint cache_checkpoint;
+    cache_checkpoint.zano_height = 777;
+    cache_checkpoint.block_hash[0] = 0xc1;
+    cache_checkpoint.block_hash[31] = 0x7c;
+
+    ReplayValidationStore validation_store(
+        temporary.path / "shares.dat.validation",
+        sidechain_id(params));
+
+    ReplayValidationSnapshot validation_snapshot;
+    validation_snapshot.checkpoint = cache_checkpoint;
+    validation_snapshot.records =
+        chain.replay_validation_snapshot();
+
+    CHECK(validation_snapshot.records.size() == 2);
+
+    validation_store.save(validation_snapshot);
+
+    ShareChain cached_chain(params);
+    CHECK(cached_chain.add_share_unchecked(root).disposition ==
+          ShareDisposition::Connected);
+    CHECK(cached_chain.add_share_unchecked(child).disposition ==
+          ShareDisposition::Connected);
+    CHECK(cached_chain.add_share_unchecked(missing_work).disposition ==
+          ShareDisposition::Connected);
+
+    CHECK(!cached_chain.find(root_id)->validated_ancestry);
+    CHECK(!cached_chain.find(child_id)->validated_ancestry);
+    CHECK(!cached_chain.find(missing_work_id)->validated_ancestry);
+
+    std::size_t cache_lookup_calls = 0;
+    const RestartReplayValidationResult cached_restore =
+        restore_replayed_validation_cache(
+            cached_chain,
+            params,
+            validation_store,
+            [&](std::uint64_t height) {
+                ++cache_lookup_calls;
+                CHECK(height == cache_checkpoint.zano_height);
+                return RpcCanonicalHeader{
+                    height,
+                    cache_checkpoint.block_hash,
+                };
+            });
+
+    CHECK(
+        cached_restore.status ==
+        RestartReplayValidationStatus::Restored);
+    CHECK(cached_restore.checkpoint.has_value());
+    CHECK(
+        cached_restore.checkpoint->zano_height ==
+        cache_checkpoint.zano_height);
+    CHECK(
+        cached_restore.checkpoint->block_hash ==
+        cache_checkpoint.block_hash);
+    CHECK(cached_restore.records_loaded == 2);
+    CHECK(cached_restore.records_restored == 2);
+    CHECK(cache_lookup_calls == 2);
+
+    CHECK(cached_chain.find(root_id)->validated_ancestry);
+    CHECK(cached_chain.find(child_id)->validated_ancestry);
+    CHECK(!cached_chain.find(missing_work_id)->validated_ancestry);
+    CHECK(
+        cached_chain.find(root_id)->
+            pow_validation.has_value());
+    CHECK(
+        cached_chain.find(child_id)->
+            pow_validation.has_value());
+
+    // Existing restart recovery must now recognize the restored prefix and
+    // avoid repeating canonical/ProgPoWZ work for it.
+    std::size_t cached_recovery_lookup_calls = 0;
+    const RestartRecoveryResult cached_recovery =
+        recover_replayed_history(
+            cached_chain,
+            params,
+            archive,
+            [&](std::uint64_t height) {
+                ++cached_recovery_lookup_calls;
+                return RpcCanonicalHeader{
+                    height,
+                    proposal.prev_hash,
+                };
+            },
+            200,
+            ProgPowZContextMode::Light);
+
+    CHECK(cached_recovery.connected_considered == 3);
+    CHECK(cached_recovery.revalidated == 0);
+    CHECK(cached_recovery.already_validated == 2);
+    CHECK(cached_recovery.missing_local_work == 1);
+    CHECK(cached_recovery.parent_unvalidated == 0);
+    CHECK(cached_recovery.rejected == 0);
+    CHECK(cached_recovery.pruned_connected_shares == 0);
+    CHECK(cached_recovery_lookup_calls == 0);
+
+    // A stable canonical replacement makes the whole cache stale. No record
+    // may be restored from the superseded checkpoint.
+    ShareChain stale_cache_chain(params);
+    CHECK(stale_cache_chain.add_share_unchecked(root).disposition ==
+          ShareDisposition::Connected);
+    CHECK(stale_cache_chain.add_share_unchecked(child).disposition ==
+          ShareDisposition::Connected);
+    CHECK(stale_cache_chain.add_share_unchecked(missing_work).disposition ==
+          ShareDisposition::Connected);
+
+    Hash256 stale_hash = cache_checkpoint.block_hash;
+    stale_hash[0] ^= 0xffU;
+
+    std::size_t stale_lookup_calls = 0;
+    const RestartReplayValidationResult stale_restore =
+        restore_replayed_validation_cache(
+            stale_cache_chain,
+            params,
+            validation_store,
+            [&](std::uint64_t height) {
+                ++stale_lookup_calls;
+                return RpcCanonicalHeader{
+                    height,
+                    stale_hash,
+                };
+            });
+
+    CHECK(
+        stale_restore.status ==
+        RestartReplayValidationStatus::Stale);
+    CHECK(stale_restore.records_loaded == 2);
+    CHECK(stale_restore.records_restored == 0);
+    CHECK(stale_lookup_calls == 2);
+    CHECK(!stale_cache_chain.find(root_id)->validated_ancestry);
+    CHECK(!stale_cache_chain.find(child_id)->validated_ancestry);
+
+    // Canonical evidence changing during verification is ambiguous. Throw
+    // before ShareChain mutation so the caller can fall back to full recovery.
+    ShareChain unstable_cache_chain(params);
+    CHECK(unstable_cache_chain.add_share_unchecked(root).disposition ==
+          ShareDisposition::Connected);
+    CHECK(unstable_cache_chain.add_share_unchecked(child).disposition ==
+          ShareDisposition::Connected);
+
+    Hash256 changed_checkpoint_hash =
+        cache_checkpoint.block_hash;
+    changed_checkpoint_hash[1] ^= 0x55U;
+
+    std::size_t unstable_cache_calls = 0;
+    bool unstable_cache_threw = false;
+
+    try {
+        static_cast<void>(
+            restore_replayed_validation_cache(
+                unstable_cache_chain,
+                params,
+                validation_store,
+                [&](std::uint64_t height) {
+                    ++unstable_cache_calls;
+                    return RpcCanonicalHeader{
+                        height,
+                        unstable_cache_calls == 1
+                            ? cache_checkpoint.block_hash
+                            : changed_checkpoint_hash,
+                    };
+                }));
+    } catch (const std::runtime_error&) {
+        unstable_cache_threw = true;
+    }
+
+    CHECK(unstable_cache_threw);
+    CHECK(unstable_cache_calls == 2);
+    CHECK(
+        !unstable_cache_chain.find(root_id)->
+            validated_ancestry);
+    CHECK(
+        !unstable_cache_chain.find(child_id)->
+            validated_ancestry);
+
+    // Missing sidecar performs no RPC work and no mutation.
+    ReplayValidationStore missing_validation_store(
+        temporary.path / "missing.validation",
+        sidechain_id(params));
+
+    ShareChain missing_cache_chain(params);
+    CHECK(missing_cache_chain.add_share_unchecked(root).disposition ==
+          ShareDisposition::Connected);
+
+    std::size_t missing_cache_calls = 0;
+    const RestartReplayValidationResult missing_cache =
+        restore_replayed_validation_cache(
+            missing_cache_chain,
+            params,
+            missing_validation_store,
+            [&](std::uint64_t height) {
+                ++missing_cache_calls;
+                return RpcCanonicalHeader{
+                    height,
+                    cache_checkpoint.block_hash,
+                };
+            });
+
+    CHECK(
+        missing_cache.status ==
+        RestartReplayValidationStatus::Missing);
+    CHECK(!missing_cache.checkpoint.has_value());
+    CHECK(missing_cache.records_loaded == 0);
+    CHECK(missing_cache.records_restored == 0);
+    CHECK(missing_cache_calls == 0);
+    CHECK(
+        !missing_cache_chain.find(root_id)->
+            validated_ancestry);
+
     lookup_calls = 0;
     const RestartRecoveryResult second =
         recover_replayed_history(

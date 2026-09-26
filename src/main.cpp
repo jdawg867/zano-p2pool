@@ -5,6 +5,7 @@
 #include "zano_p2pool/historical_work.hpp"
 #include "zano_p2pool/mining_header.hpp"
 #include "zano_p2pool/mining_work_archive.hpp"
+#include "zano_p2pool/replay_validation_store.hpp"
 #include "zano_p2pool/restart_recovery.hpp"
 #include "zano_p2pool/p2p_mining_context.hpp"
 #include "zano_p2pool/p2p_node.hpp"
@@ -929,6 +930,91 @@ int main(int argc, char** argv) {
             std::cout << '\n';
         } else {
             std::cout << "\nShare store:     disabled\n";
+        }
+
+        // Durable replay-validation state is an optimization cache, never an
+        // independent trust source. Restore only after the exact persisted
+        // canonical checkpoint re-crosses stable LOCAL Zano RPC authority.
+        //
+        // This startup checkpoint is read-only: no replay-validation snapshot
+        // is written here or anywhere in runtime yet.
+        std::unique_ptr<zano_p2pool::ReplayValidationStore>
+            replay_validation_store;
+
+        if (share_store) {
+            replay_validation_store =
+                std::make_unique<
+                    zano_p2pool::ReplayValidationStore>(
+                    share_store->path().string() +
+                        ".validation",
+                    zano_p2pool::sidechain_id(
+                        sidechain_parameters));
+
+            try {
+                const auto cached =
+                    zano_p2pool::
+                        restore_replayed_validation_cache(
+                            node_chain,
+                            sidechain_parameters,
+                            *replay_validation_store,
+                            [&rpc](std::uint64_t height) {
+                                return rpc.get_canonical_header(
+                                    height);
+                            });
+
+                switch (cached.status) {
+                case zano_p2pool::
+                    RestartReplayValidationStatus::Missing:
+                    std::cout
+                        << "Replay validation cache: "
+                        << replay_validation_store->path()
+                        << " status=missing\n";
+                    break;
+
+                case zano_p2pool::
+                    RestartReplayValidationStatus::Stale:
+                    std::cout
+                        << "Replay validation cache: "
+                        << replay_validation_store->path()
+                        << " status=stale"
+                        << " checkpoint-height="
+                        << cached.checkpoint->zano_height
+                        << " checkpoint-hash="
+                        << zano_p2pool::hash_to_hex(
+                               cached.checkpoint->block_hash)
+                        << " records="
+                        << cached.records_loaded
+                        << "\n";
+                    break;
+
+                case zano_p2pool::
+                    RestartReplayValidationStatus::Restored:
+                    std::cout
+                        << "Replay validation cache: "
+                        << replay_validation_store->path()
+                        << " status=restored"
+                        << " checkpoint-height="
+                        << cached.checkpoint->zano_height
+                        << " checkpoint-hash="
+                        << zano_p2pool::hash_to_hex(
+                               cached.checkpoint->block_hash)
+                        << " records="
+                        << cached.records_loaded
+                        << " restored="
+                        << cached.records_restored
+                        << "\n";
+                    break;
+                }
+            } catch (const std::exception& e) {
+                // Cache failure removes only the optimization. ShareStore
+                // history remains structurally replayed but untrusted and the
+                // existing restart recovery below will perform the full local
+                // archive/canonical-history trust crossing.
+                std::cerr
+                    << "Replay validation cache unusable: "
+                    << e.what()
+                    << "; full restart recovery required\n";
+            }
         }
 
         // Preserve exact locally issued work before publishing it to miners.

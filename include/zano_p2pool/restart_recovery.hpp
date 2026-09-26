@@ -1,6 +1,7 @@
 #pragma once
 
 #include "zano_p2pool/mining_work_archive.hpp"
+#include "zano_p2pool/replay_validation_store.hpp"
 #include "zano_p2pool/restart_revalidation.hpp"
 #include "zano_p2pool/share_chain.hpp"
 #include "zano_p2pool/sidechain_params.hpp"
@@ -8,8 +9,44 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <optional>
 
 namespace zano_p2pool {
+
+enum class RestartReplayValidationStatus : std::uint8_t {
+    Missing,
+    Restored,
+    Stale,
+};
+
+struct RestartReplayValidationResult {
+    RestartReplayValidationStatus status{
+        RestartReplayValidationStatus::Missing};
+
+    std::optional<ReplayValidationCheckpoint> checkpoint;
+
+    std::size_t records_loaded{0};
+    std::size_t records_restored{0};
+};
+
+// Attempt to reuse a durable validation snapshot before expensive historical
+// replay recovery.
+//
+// The store itself is never authority. If present, its canonical Zano
+// checkpoint must first match two stable reads from the caller-supplied LOCAL
+// canonical-header source. Only then may ShareChain restore the exact cached
+// validation records.
+//
+// Missing cache returns Missing. A stable canonical hash mismatch returns Stale
+// without mutation. Malformed storage, unstable/wrong-height canonical
+// evidence, parameter mismatch, or invalid ShareChain restore state throws.
+// ShareChain restoration itself is preflighted and mutation-atomic.
+[[nodiscard]] RestartReplayValidationResult
+restore_replayed_validation_cache(
+    ShareChain& chain,
+    const SidechainParameters& params,
+    const ReplayValidationStore& store,
+    const std::function<RpcCanonicalHeader(std::uint64_t)>& lookup);
 
 struct RestartRecoveryResult {
     std::size_t archive_records{0};

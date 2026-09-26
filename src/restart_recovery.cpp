@@ -27,6 +27,53 @@ RecoveryWorkKey work_key(
 
 }  // namespace
 
+RestartReplayValidationResult
+restore_replayed_validation_cache(
+    ShareChain& chain,
+    const SidechainParameters& params,
+    const ReplayValidationStore& store,
+    const std::function<RpcCanonicalHeader(std::uint64_t)>& lookup) {
+
+    RestartReplayValidationResult result;
+
+    if (!chain.matches_sidechain_parameters(params)) {
+        throw std::runtime_error(
+            "replay-validation cache sidechain parameter mismatch");
+    }
+
+    const std::optional<ReplayValidationSnapshot> snapshot =
+        store.load();
+
+    if (!snapshot.has_value()) {
+        result.status =
+            RestartReplayValidationStatus::Missing;
+        return result;
+    }
+
+    result.checkpoint = snapshot->checkpoint;
+    result.records_loaded = snapshot->records.size();
+
+    // The durable file is only a cache. Re-cross authority through stable
+    // LOCAL canonical Zano evidence before allowing any cached validation
+    // result to enter ShareChain.
+    if (!stable_canonical_checkpoint_matches(
+            snapshot->checkpoint,
+            lookup)) {
+        result.status =
+            RestartReplayValidationStatus::Stale;
+        return result;
+    }
+
+    result.records_restored =
+        chain.restore_replay_validation(
+            snapshot->records);
+
+    result.status =
+        RestartReplayValidationStatus::Restored;
+
+    return result;
+}
+
 RestartRecoveryResult recover_replayed_history(
     ShareChain& chain,
     const SidechainParameters& params,
