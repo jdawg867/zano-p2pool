@@ -80,6 +80,42 @@ zano_p2pool::ShareWorkContext context_for(const zano_p2pool::Share& share) {
     };
 }
 
+zano_p2pool::CandidateValidation synthetic_validation(
+    std::uint8_t tag,
+    bool block = false) {
+
+    using namespace zano_p2pool;
+
+    CandidateValidation validation;
+    validation.pow.final_hash[0] = tag;
+    validation.pow.final_hash[31] =
+        static_cast<std::uint8_t>(tag ^ 0x55U);
+    validation.pow.mix_hash[0] =
+        static_cast<std::uint8_t>(tag ^ 0xaaU);
+    validation.pow.mix_hash[31] =
+        static_cast<std::uint8_t>(tag + 1U);
+    validation.meets_share_difficulty = true;
+    validation.meets_network_difficulty = block;
+    validation.classification = block
+        ? CandidateClassification::Block
+        : CandidateClassification::Share;
+    return validation;
+}
+
+bool rejects_restore(
+    zano_p2pool::ShareChain& chain,
+    const std::vector<zano_p2pool::ReplayValidationRecord>& records) {
+
+    try {
+        static_cast<void>(
+            chain.restore_replay_validation(records));
+    } catch (const std::exception&) {
+        return true;
+    }
+
+    return false;
+}
+
 }  // namespace
 
 int main() {
@@ -604,6 +640,271 @@ int main() {
               RevalidateShareStatus::ParentUnvalidated)) ==
           "parent-unvalidated");
 #endif
+
+    // Durable replay-validation restoration deliberately does not rerun
+    // ProgPoWZ. Snapshot authority is established outside ShareChain; this
+    // primitive enforces exact connected identity, current sidechain policy,
+    // full preflight atomicity, and parent-first validated ancestry.
+    SidechainParameters replay_params =
+        canonical_sidechain_parameters(
+            SidechainParentNetwork::Testnet);
+    replay_params.minimum_share_difficulty = 10;
+    replay_params.target_share_seconds = 10;
+    replay_params.difficulty_window_shares = 20;
+
+    const Difficulty128 replay_network =
+        difficulty128_from_decimal("1000");
+
+    Share replay_root = make_v2_share("10", 240);
+    replay_root.network_difficulty = replay_network;
+
+    Share replay_child =
+        make_v2_child(replay_root, "10", 241);
+    replay_child.network_difficulty = replay_network;
+
+    Share replay_unvalidated =
+        make_v2_child(replay_child, "10", 242);
+    replay_unvalidated.network_difficulty = replay_network;
+
+    const ShareId replay_root_id = share_id(replay_root);
+    const ShareId replay_child_id = share_id(replay_child);
+    const ShareId replay_unvalidated_id =
+        share_id(replay_unvalidated);
+
+    const CandidateValidation replay_root_validation =
+        synthetic_validation(0x31);
+    const CandidateValidation replay_child_validation =
+        synthetic_validation(0x32, true);
+
+    ShareChain replay_source(replay_params);
+
+    CHECK(
+        replay_source.add_share_unchecked(replay_root).disposition ==
+        ShareDisposition::Connected);
+    CHECK(
+        replay_source.add_share_unchecked(replay_child).disposition ==
+        ShareDisposition::Connected);
+    CHECK(
+        replay_source.add_share_unchecked(
+            replay_unvalidated).disposition ==
+        ShareDisposition::Connected);
+
+    // Reverse durable order deliberately. Restore must derive parent-first
+    // order from the exact connected shares rather than trusting file order.
+    std::vector<ReplayValidationRecord> reverse_records{
+        ReplayValidationRecord{
+            replay_child_id,
+            replay_child_validation,
+        },
+        ReplayValidationRecord{
+            replay_root_id,
+            replay_root_validation,
+        },
+    };
+
+    CHECK(
+        replay_source.restore_replay_validation(
+            reverse_records) == 2);
+
+    CHECK(
+        replay_source.find(replay_root_id)->
+            validated_ancestry);
+    CHECK(
+        replay_source.find(replay_child_id)->
+            validated_ancestry);
+    CHECK(
+        !replay_source.find(replay_unvalidated_id)->
+            validated_ancestry);
+
+    const auto exported =
+        replay_source.replay_validation_snapshot();
+
+    CHECK(exported.size() == 2);
+    CHECK(exported[0].share_id == replay_root_id);
+    CHECK(exported[1].share_id == replay_child_id);
+    CHECK(
+        exported[0].validation.pow.final_hash ==
+        replay_root_validation.pow.final_hash);
+    CHECK(
+        exported[1].validation.pow.mix_hash ==
+        replay_child_validation.pow.mix_hash);
+    CHECK(
+        exported[1].validation.classification ==
+        CandidateClassification::Block);
+
+    // A fresh replayed chain can restore the exact exported cache without
+    // invoking the PoW backend.
+    ShareChain replay_target(replay_params);
+
+    CHECK(
+        replay_target.add_share_unchecked(replay_root).disposition ==
+        ShareDisposition::Connected);
+    CHECK(
+        replay_target.add_share_unchecked(replay_child).disposition ==
+        ShareDisposition::Connected);
+    CHECK(
+        replay_target.add_share_unchecked(
+            replay_unvalidated).disposition ==
+        ShareDisposition::Connected);
+
+    std::vector<ReplayValidationRecord> store_order = exported;
+    std::reverse(store_order.begin(), store_order.end());
+
+    CHECK(
+        replay_target.restore_replay_validation(
+            store_order) == 2);
+
+    CHECK(
+        replay_target.find(replay_root_id)->
+            pow_validation.has_value());
+    CHECK(
+        replay_target.find(replay_child_id)->
+            pow_validation.has_value());
+    CHECK(
+        replay_target.find(replay_root_id)->
+            pow_validation->pow.final_hash ==
+        replay_root_validation.pow.final_hash);
+    CHECK(
+        replay_target.find(replay_child_id)->
+            pow_validation->classification ==
+        CandidateClassification::Block);
+    CHECK(
+        replay_target.find(replay_root_id)->
+            validated_ancestry);
+    CHECK(
+        replay_target.find(replay_child_id)->
+            validated_ancestry);
+    CHECK(
+        !replay_target.find(replay_unvalidated_id)->
+            validated_ancestry);
+
+    // Reapplying the exact state is idempotent.
+    CHECK(
+        replay_target.restore_replay_validation(
+            store_order) == 0);
+
+    // Unknown durable identity rejects before mutating any valid record.
+    ShareChain unknown_target(replay_params);
+    CHECK(
+        unknown_target.add_share_unchecked(replay_root).disposition ==
+        ShareDisposition::Connected);
+    CHECK(
+        unknown_target.add_share_unchecked(replay_child).disposition ==
+        ShareDisposition::Connected);
+
+    ShareId unknown_id{};
+    unknown_id[0] = 0xfe;
+    unknown_id[31] = 0xed;
+
+    std::vector<ReplayValidationRecord> unknown_records{
+        exported[0],
+        ReplayValidationRecord{
+            unknown_id,
+            synthetic_validation(0x44),
+        },
+    };
+
+    CHECK(rejects_restore(
+        unknown_target,
+        unknown_records));
+    CHECK(
+        !unknown_target.find(replay_root_id)->
+            validated_ancestry);
+    CHECK(
+        !unknown_target.find(replay_child_id)->
+            validated_ancestry);
+
+    // A child cannot acquire validated ancestry from a snapshot that omits its
+    // currently-unvalidated parent.
+    ShareChain missing_parent_target(replay_params);
+    CHECK(
+        missing_parent_target.add_share_unchecked(
+            replay_root).disposition ==
+        ShareDisposition::Connected);
+    CHECK(
+        missing_parent_target.add_share_unchecked(
+            replay_child).disposition ==
+        ShareDisposition::Connected);
+
+    std::vector<ReplayValidationRecord> child_only{
+        exported[1],
+    };
+
+    CHECK(rejects_restore(
+        missing_parent_target,
+        child_only));
+    CHECK(
+        !missing_parent_target.find(replay_root_id)->
+            validated_ancestry);
+    CHECK(
+        !missing_parent_target.find(replay_child_id)->
+            validated_ancestry);
+
+    // Duplicate durable identities reject atomically.
+    ShareChain duplicate_target(replay_params);
+    CHECK(
+        duplicate_target.add_share_unchecked(
+            replay_root).disposition ==
+        ShareDisposition::Connected);
+
+    std::vector<ReplayValidationRecord> duplicate_records{
+        exported[0],
+        exported[0],
+    };
+
+    CHECK(rejects_restore(
+        duplicate_target,
+        duplicate_records));
+    CHECK(
+        !duplicate_target.find(replay_root_id)->
+            validated_ancestry);
+
+    // Invalid cached classification cannot cross the restore boundary.
+    ShareChain invalid_cache_target(replay_params);
+    CHECK(
+        invalid_cache_target.add_share_unchecked(
+            replay_root).disposition ==
+        ShareDisposition::Connected);
+
+    ReplayValidationRecord invalid_cache = exported[0];
+    invalid_cache.validation.meets_share_difficulty = false;
+
+    CHECK(rejects_restore(
+        invalid_cache_target,
+        std::vector<ReplayValidationRecord>{
+            invalid_cache,
+        }));
+    CHECK(
+        !invalid_cache_target.find(replay_root_id)->
+            validated_ancestry);
+
+    // An already-restored share must match byte-for-byte logical validation
+    // state; conflicting cached validation fails without replacing it.
+    ReplayValidationRecord conflict = exported[0];
+    conflict.validation.pow.final_hash[0] ^= 0xffU;
+
+    CHECK(rejects_restore(
+        replay_target,
+        std::vector<ReplayValidationRecord>{
+            conflict,
+        }));
+    CHECK(
+        replay_target.find(replay_root_id)->
+            pow_validation->pow.final_hash ==
+        replay_root_validation.pow.final_hash);
+
+    // Durable validation state has no meaning on an unconfigured synthetic
+    // ShareChain.
+    ShareChain unconfigured_replay;
+    CHECK(
+        unconfigured_replay.add_share_unchecked(
+            replay_root).disposition ==
+        ShareDisposition::Connected);
+    CHECK(rejects_restore(
+        unconfigured_replay,
+        std::vector<ReplayValidationRecord>{
+            exported[0],
+        }));
 
     CHECK(std::string(share_disposition_name(ShareDisposition::Connected)) ==
           "connected");

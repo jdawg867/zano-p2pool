@@ -23,11 +23,6 @@ struct ReplayValidationCheckpoint {
     Hash256 block_hash{};
 };
 
-struct ReplayValidationRecord {
-    ShareId share_id{};
-    CandidateValidation validation{};
-};
-
 struct ReplayValidationSnapshot {
     ReplayValidationCheckpoint checkpoint{};
     std::vector<ReplayValidationRecord> records;
