@@ -174,6 +174,7 @@ int main() {
     server.start();
     CHECK(server.running());
     CHECK(server.bound_port() != 0);
+    const std::uint16_t initial_stratum_port = server.bound_port();
 
     const int client = connect_loopback(server.bound_port());
 
@@ -289,6 +290,23 @@ int main() {
     server.stop();
     CHECK(!server.running());
     CHECK(server.bound_port() == 0);
+
+    // Rebind the exact same port immediately after a real miner connection
+    // was closed and the original server completed stop().
+    {
+        StratumServerConfig rebound_config = config;
+        rebound_config.port = initial_stratum_port;
+
+        StratumTcpServer rebound_server(rebound_config);
+        rebound_server.start();
+
+        CHECK(rebound_server.running());
+        CHECK(rebound_server.bound_port() == initial_stratum_port);
+
+        rebound_server.stop();
+        CHECK(!rebound_server.running());
+        CHECK(rebound_server.bound_port() == 0);
+    }
 
     // The connection cap is enforced before a session or worker thread is
     // allocated for the excess client.
