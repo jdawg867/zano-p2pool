@@ -262,7 +262,22 @@ int main() {
     CHECK(prune_chain.best_tip() != nullptr);
     CHECK(prune_chain.best_tip()->id == prune_left_tip_id);
 
-    CHECK(prune_chain.prune_connected_subtree(prune_left_id) == 2);
+    const std::vector<ShareId> removed_left =
+        prune_chain.prune_connected_subtree_ids(prune_left_id);
+
+    CHECK(removed_left.size() == 2);
+    CHECK(std::is_sorted(removed_left.begin(), removed_left.end()));
+    CHECK(
+        std::find(
+            removed_left.begin(),
+            removed_left.end(),
+            prune_left_id) != removed_left.end());
+    CHECK(
+        std::find(
+            removed_left.begin(),
+            removed_left.end(),
+            prune_left_tip_id) != removed_left.end());
+
     CHECK(prune_chain.connected_size() == 3);
     CHECK(prune_chain.find(prune_left_id) == nullptr);
     CHECK(prune_chain.find(prune_left_tip_id) == nullptr);
@@ -274,6 +289,9 @@ int main() {
 
     ShareId unknown_prune_id{};
     unknown_prune_id[0] = 0xff;
+    CHECK(
+        prune_chain.prune_connected_subtree_ids(
+            unknown_prune_id).empty());
     CHECK(prune_chain.prune_connected_subtree(unknown_prune_id) == 0);
     CHECK(prune_chain.connected_size() == 3);
     CHECK(prune_chain.best_tip() != nullptr);

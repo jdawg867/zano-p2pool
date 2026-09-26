@@ -40,6 +40,7 @@
 #include <mutex>
 #include <optional>
 #include <random>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -953,8 +954,11 @@ int main(int argc, char** argv) {
         // work. Partial recovery is allowed: every share that cannot
         // independently complete the crossing remains validated_ancestry=false.
         if (mining_work_archive && node_chain.connected_size() != 0) {
+            std::optional<zano_p2pool::RestartRecoveryResult>
+                restart_recovery_result;
+
             try {
-                const zano_p2pool::RestartRecoveryResult restart_recovery =
+                restart_recovery_result =
                     zano_p2pool::recover_replayed_history(
                         node_chain,
                         sidechain_parameters,
@@ -967,22 +971,23 @@ int main(int argc, char** argv) {
 
                 std::cout
                     << "Restart history recovery: archive="
-                    << restart_recovery.archive_records
+                    << restart_recovery_result->archive_records
                     << " connected="
-                    << restart_recovery.connected_considered
+                    << restart_recovery_result->connected_considered
                     << " revalidated="
-                    << restart_recovery.revalidated
+                    << restart_recovery_result->revalidated
                     << " already="
-                    << restart_recovery.already_validated
+                    << restart_recovery_result->already_validated
                     << " missing-work="
-                    << restart_recovery.missing_local_work
+                    << restart_recovery_result->missing_local_work
                     << " parent-unvalidated="
-                    << restart_recovery.parent_unvalidated
+                    << restart_recovery_result->parent_unvalidated
                     << " rejected="
-                    << restart_recovery.rejected
+                    << restart_recovery_result->rejected
                     << " pruned="
-                    << restart_recovery.pruned_connected_shares
+                    << restart_recovery_result->pruned_connected_shares
                     << '\n';
+
             } catch (const std::exception& e) {
                 // Recovery is an upgrade of replayed history, not permission to
                 // trust it. A transient RPC or recovery failure therefore
@@ -993,6 +998,39 @@ int main(int argc, char** argv) {
                     << "Restart history recovery incomplete: "
                     << e.what()
                     << "; unrevalidated replay history remains untrusted\n";
+            }
+
+            // Durable compaction is deliberately outside the recovery try/catch.
+            // RPC/trust reconstruction may remain retryable, but once recovery
+            // has actually pruned stale ancestry, failure to persist that exact
+            // surviving topology is a persistence failure and must stop startup.
+            if (share_store &&
+                restart_recovery_result.has_value() &&
+                restart_recovery_result->pruned_connected_shares != 0) {
+                const std::vector<zano_p2pool::Share>
+                    surviving_shares =
+                        node_chain.persistence_snapshot();
+
+                try {
+                    share_store->rewrite(surviving_shares);
+                } catch (...) {
+                    g_persistence_failed.store(
+                        true,
+                        std::memory_order_release);
+
+                    std::cerr
+                        << "FATAL share-store compaction failed after "
+                           "restart pruning; stopping before runtime "
+                           "publication\n";
+                    throw;
+                }
+
+                std::cout
+                    << "Share store compacted after restart pruning: records="
+                    << surviving_shares.size()
+                    << " pruned="
+                    << restart_recovery_result->pruned_connected_shares
+                    << '\n';
             }
         }
 
@@ -1032,6 +1070,68 @@ int main(int argc, char** argv) {
                 request_template_refresh();
             }
         };
+
+        const auto persist_pruned_shares =
+            [&](std::span<const zano_p2pool::ShareId> ids,
+                std::string_view source) noexcept {
+                if (ids.empty() ||
+                    !share_store ||
+                    g_persistence_failed.load(
+                        std::memory_order_acquire)) {
+                    return;
+                }
+
+                try {
+                    const std::size_t removed =
+                        share_store->erase_records(ids);
+
+                    if (removed != ids.size()) {
+                        std::cerr
+                            << "FATAL share-store prune mismatch: source="
+                            << source
+                            << " expected=" << ids.size()
+                            << " removed=" << removed
+                            << "; shutting down to preserve durable "
+                               "consensus history\n";
+
+                        g_persistence_failed.store(
+                            true,
+                            std::memory_order_release);
+                        request_template_refresh();
+                        return;
+                    }
+
+                    std::cout
+                        << "Share store pruned stale replay records: source="
+                        << source
+                        << " records=" << removed
+                        << '\n';
+                } catch (const std::exception& e) {
+                    std::cerr
+                        << "FATAL share-store prune failed: source="
+                        << source
+                        << " error=" << e.what()
+                        << "; shutting down to preserve durable "
+                           "consensus history\n";
+
+                    g_persistence_failed.store(
+                        true,
+                        std::memory_order_release);
+                    request_template_refresh();
+                } catch (...) {
+                    std::cerr
+                        << "FATAL share-store prune failed with unknown "
+                           "error: source="
+                        << source
+                        << "; shutting down to preserve durable "
+                           "consensus history\n";
+
+                    g_persistence_failed.store(
+                        true,
+                        std::memory_order_release);
+                    request_template_refresh();
+                }
+            };
 
         const bool initial_canonical_pplns =
             apply_canonical_pplns_template(
@@ -1258,6 +1358,14 @@ int main(int argc, char** argv) {
                         for (const auto& admitted : admitted_shares) {
                             persist_share(admitted);
                         }
+
+                        // Admission persistence must precede stale-ID filtering.
+                        // ShareStore serializes both operations through its own
+                        // mutex, so a current durable log is never replaced by
+                        // an older whole-chain snapshot.
+                        persist_pruned_shares(
+                            result.historical_pruned_share_ids,
+                            "p2p-message");
 
                         if (!admitted_shares.empty()) {
                             p2p_admitted_shares_total.fetch_add(
@@ -1691,6 +1799,10 @@ int main(int argc, char** argv) {
                                         zano_p2pool::
                                             ProgPowZContextMode::Light);
 
+                            persist_pruned_shares(
+                                historical_retry.pruned_share_ids,
+                                "historical-pow-retry");
+
                             historical_pow_retry_attempts_total.fetch_add(
                                 historical_retry.attempted,
                                 std::memory_order_relaxed);
@@ -1705,10 +1817,14 @@ int main(int argc, char** argv) {
                                 std::memory_order_relaxed);
 
                             historical_retry_requires_rebuild =
-                                historical_retry.connected != 0;
+                                historical_retry.connected != 0 ||
+                                historical_retry.
+                                    pruned_connected_shares != 0;
 
                             if (historical_retry.attempted != 0 ||
-                                historical_retry.remaining != 0) {
+                                historical_retry.remaining != 0 ||
+                                historical_retry.
+                                    pruned_connected_shares != 0) {
                                 std::cerr
                                     << "Historical PoW retry: attempted="
                                     << historical_retry.attempted
@@ -1716,6 +1832,9 @@ int main(int argc, char** argv) {
                                     << historical_retry.trusted
                                     << " connected="
                                     << historical_retry.connected
+                                    << " pruned="
+                                    << historical_retry.
+                                           pruned_connected_shares
                                     << " remaining="
                                     << historical_retry.remaining
                                     << '\n';
@@ -1753,6 +1872,10 @@ int main(int argc, char** argv) {
                                         unix_time_seconds(),
                                         zano_p2pool::
                                             ProgPowZContextMode::Light);
+
+                            persist_pruned_shares(
+                                replay_recovery.pruned_share_ids,
+                                "replay-recovery");
 
                             replay_recovery_requires_rebuild =
                                 replay_recovery.connected != 0 ||

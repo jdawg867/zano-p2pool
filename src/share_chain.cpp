@@ -652,10 +652,47 @@ std::vector<ShareId> ShareChain::connected_share_ids() const {
     return ids;
 }
 
-std::size_t ShareChain::prune_connected_subtree(
+std::vector<Share> ShareChain::persistence_snapshot() const {
+    struct SnapshotRecord {
+        ShareId id{};
+        Share share{};
+    };
+
+    std::vector<SnapshotRecord> records;
+    records.reserve(connected_.size() + orphans_.size());
+
+    for (const auto& [id, connected] : connected_) {
+        records.push_back(SnapshotRecord{id, connected.share});
+    }
+
+    for (const auto& [id, orphan] : orphans_) {
+        records.push_back(SnapshotRecord{id, orphan.share});
+    }
+
+    std::sort(
+        records.begin(),
+        records.end(),
+        [](const SnapshotRecord& left, const SnapshotRecord& right) {
+            if (left.share.share_height != right.share.share_height) {
+                return left.share.share_height < right.share.share_height;
+            }
+            return left.id < right.id;
+        });
+
+    std::vector<Share> shares;
+    shares.reserve(records.size());
+
+    for (auto& record : records) {
+        shares.push_back(std::move(record.share));
+    }
+
+    return shares;
+}
+
+std::vector<ShareId> ShareChain::prune_connected_subtree_ids(
     const ShareId& root_id) {
     if (!connected_.contains(root_id)) {
-        return 0;
+        return {};
     }
 
     std::map<ShareId, std::vector<ShareId>> children;
@@ -699,7 +736,13 @@ std::size_t ShareChain::prune_connected_subtree(
         }
     }
 
-    return removed.size();
+    std::sort(removed.begin(), removed.end());
+    return removed;
+}
+
+std::size_t ShareChain::prune_connected_subtree(
+    const ShareId& root_id) {
+    return prune_connected_subtree_ids(root_id).size();
 }
 
 const char* share_disposition_name(ShareDisposition disposition) noexcept {
