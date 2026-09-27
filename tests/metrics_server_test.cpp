@@ -162,6 +162,7 @@ int main() {
     server.start();
     CHECK(server.running());
     CHECK(server.bound_port() != 0);
+    const std::uint16_t initial_metrics_port = server.bound_port();
 
     const std::string metrics = request(
         server.bound_port(),
@@ -205,6 +206,34 @@ int main() {
     server.stop();
     CHECK(!server.running());
     CHECK(server.bound_port() == 0);
+
+    // The exact metrics port must be immediately reusable after multiple HTTP
+    // connections and a clean stop, matching a service restart.
+    {
+        MetricsServerConfig rebound_config = config;
+        rebound_config.port = initial_metrics_port;
+
+        MetricsHttpServer rebound_server(
+            rebound_config,
+            [] {
+                return std::string{"zano_p2pool_up 1\n"};
+            });
+
+        rebound_server.start();
+
+        CHECK(rebound_server.running());
+        CHECK(rebound_server.bound_port() == initial_metrics_port);
+
+        const std::string rebound_health = request(
+            rebound_server.bound_port(),
+            "GET /healthz HTTP/1.0\r\n\r\n");
+
+        CHECK(rebound_health.find("HTTP/1.1 200 OK\r\n") == 0);
+
+        rebound_server.stop();
+        CHECK(!rebound_server.running());
+        CHECK(rebound_server.bound_port() == 0);
+    }
 
     MetricsServerConfig failure_config;
     failure_config.port = 0;

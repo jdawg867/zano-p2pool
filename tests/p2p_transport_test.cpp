@@ -138,6 +138,7 @@ int main() {
     listener.start();
     CHECK(listener.running());
     CHECK(listener.port() != 0);
+    const std::uint16_t initial_listener_port = listener.port();
     CHECK(listener.local_handshake().listen_port == listener.port());
     CHECK(listener.local_handshake().sidechain_id == server_initial.sidechain_id);
 
@@ -169,6 +170,21 @@ int main() {
     CHECK(!inbound.valid());
     listener.stop();
     CHECK(!listener.running());
+
+    // A clean shutdown after real connection traffic must make the exact
+    // listening port immediately reusable. This models process replacement
+    // during a systemd restart rather than choosing a fresh ephemeral port.
+    {
+        P2pTcpListener rebound_listener(
+            P2pEndpoint{"127.0.0.1", initial_listener_port},
+            make_handshake(P2pNetwork::Testnet, 0x11));
+
+        rebound_listener.start();
+        CHECK(rebound_listener.running());
+        CHECK(rebound_listener.port() == initial_listener_port);
+        rebound_listener.stop();
+        CHECK(!rebound_listener.running());
+    }
 
     // Wrong-network peers are rejected on the actual socket handshake path.
     {
