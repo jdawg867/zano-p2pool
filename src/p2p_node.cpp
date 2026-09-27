@@ -536,6 +536,142 @@ P2pNodeProtocol::advance_replay_recovery(
             candidate->parent_id;
 
         try {
+            // A structurally replayed share may have an exact work context
+            // that this node observed and archived locally even when the
+            // currently connected peer supplies a different miner transaction
+            // for that same Zano work key.
+            //
+            // Restart recovery already treats the local archive plus stable
+            // canonical Zano anchoring as sufficient authority to reconstruct
+            // the ShareWorkContext before rerunning the share's own consensus
+            // checks. Use that same authority here first. This does not weaken
+            // peer-only recovery: if no exact local record exists, or the local
+            // record cannot cross the stable anchor check, the existing peer
+            // historical-trust path below remains unchanged.
+            bool local_archive_revalidated = false;
+
+            if (work_retrieval_ != nullptr) {
+                const MiningWorkKey local_key{
+                    candidate->zano_height,
+                    candidate->mining_header_hash,
+                };
+
+                const std::optional<std::vector<std::uint8_t>>
+                    local_payload =
+                        work_retrieval_->read_local(local_key);
+
+                if (local_payload.has_value()) {
+                    const P2pMiningContextProposal local_proposal =
+                        deserialize_p2p_mining_context_payload(
+                            *local_payload);
+
+                    const Hash256 local_header =
+                        validate_p2p_mining_context_structure(
+                            local_proposal);
+
+                    const bool exact_local_context =
+                        candidate->zano_height ==
+                            local_proposal.zano_height &&
+                        candidate->mining_header_hash ==
+                            local_header &&
+                        candidate->network_difficulty ==
+                            local_proposal.network_difficulty;
+
+                    if (exact_local_context) {
+                        const std::vector<P2pMiningAnchor>
+                            local_observations =
+                                load_historical_observations_();
+
+                        const HistoricalAnchorResult
+                            initial_local_anchor =
+                                audit_historical_local_anchor(
+                                    local_proposal,
+                                    local_observations,
+                                    historical_parent_lookup_);
+
+                        if (initial_local_anchor.status ==
+                                HistoricalAnchorStatus::
+                                    AnchorMatchedUntrusted &&
+                            initial_local_anchor.
+                                    mining_header_hash ==
+                                local_header) {
+
+                            const HistoricalAnchorResult
+                                final_local_anchor =
+                                    audit_historical_local_anchor(
+                                        local_proposal,
+                                        local_observations,
+                                        historical_parent_lookup_);
+
+                            if (final_local_anchor.status ==
+                                    HistoricalAnchorStatus::
+                                        AnchorMatchedUntrusted &&
+                                final_local_anchor.
+                                        mining_header_hash ==
+                                    initial_local_anchor.
+                                        mining_header_hash) {
+
+                                const ShareWorkContext
+                                    local_trusted_context{
+                                        local_proposal.zano_height,
+                                        local_header,
+                                        local_proposal.
+                                            network_difficulty,
+                                    };
+
+                                std::lock_guard lock(
+                                    state_mutex_);
+
+                                const ConnectedShare* current =
+                                    chain_.find(candidate_id);
+
+                                if (current != nullptr &&
+                                    current->
+                                        validated_ancestry) {
+                                    local_archive_revalidated =
+                                        true;
+                                } else if (
+                                    current != nullptr) {
+
+                                    const RevalidateShareResult
+                                        revalidated =
+                                            chain_.
+                                                revalidate_connected_share(
+                                                    candidate_id,
+                                                    local_trusted_context,
+                                                    now,
+                                                    mode);
+
+                                    if (revalidated.status ==
+                                        RevalidateShareStatus::
+                                            Validated) {
+                                        ++summary.connected;
+                                        local_archive_revalidated =
+                                            true;
+                                    } else if (
+                                        revalidated.status ==
+                                        RevalidateShareStatus::
+                                            AlreadyValidated) {
+                                        local_archive_revalidated =
+                                            true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (local_archive_revalidated) {
+                // Preserve the existing replay-recovery summary contract:
+                // a frontier that independently crossed local canonical
+                // authority and share revalidation is trusted for replay
+                // purposes even though no peer proposal was promoted.
+                summary.historical_trust_status =
+                    HistoricalTrustStatus::Trusted;
+                break;
+            }
+
             const P2pEnvelope replay =
                 make_p2p_share_response_envelope(
                     candidate_id,
@@ -555,6 +691,12 @@ P2pNodeProtocol::advance_replay_recovery(
                 result.historical_anchor_status;
             summary.historical_payout_status =
                 result.historical_payout_status;
+            summary.historical_promotion_status =
+                result.historical_promotion_status;
+            summary.historical_proof_status =
+                result.historical_proof_status;
+            summary.historical_payout_policy_status =
+                result.historical_payout_policy_status;
             summary.pruned_share_ids.insert(
                 summary.pruned_share_ids.end(),
                 result.historical_pruned_share_ids.begin(),

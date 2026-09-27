@@ -198,6 +198,7 @@ struct RuntimeCaseResult {
     int historical_pow_lookup_calls{};
     int work_requests{};
     P2pHistoricalRetrySummary autonomous_retry{};
+    P2pReplayRecoverySummary periodic_recovery{};
 };
 
 [[nodiscard]] RuntimeCaseResult run_runtime_case(
@@ -208,7 +209,8 @@ struct RuntimeCaseResult {
     bool receiver_has_historical_pow_context = true,
     bool receiver_parent_matches = true,
     bool retry_after_pow_unavailable = false,
-    bool receiver_parent_payout_mismatch = false) {
+    bool receiver_parent_payout_mismatch = false,
+    bool periodic_recovery_after_result = false) {
     TemporaryDirectory temp("zano-historical-runtime");
     RuntimeFixture fixture = make_runtime_fixture();
 
@@ -556,6 +558,17 @@ struct RuntimeCaseResult {
         return completed.load() || failed.load();
     }));
 
+    P2pReplayRecoverySummary periodic_recovery;
+
+    if (periodic_recovery_after_result &&
+        !failed.load()) {
+        periodic_recovery =
+            receiver_node.advance_replay_recovery(
+                receiver_runtime,
+                203,
+                ProgPowZContextMode::Light);
+    }
+
     receiver_runtime.stop();
     provider_runtime.stop();
 
@@ -609,6 +622,7 @@ struct RuntimeCaseResult {
         historical_pow_lookup_calls.load();
     result.work_requests = work_requests.load();
     result.autonomous_retry = autonomous_retry;
+    result.periodic_recovery = periodic_recovery;
     result.candidate_id = share_id(candidate);
 
     {
@@ -1569,6 +1583,72 @@ int main() {
     CHECK(promotion_rejected.connected_share_count == 1);
     CHECK(!promotion_rejected.candidate_present);
     CHECK(!promotion_rejected.candidate_validated_ancestry);
+
+    // Multinode soak regression: a structurally replayed share can encounter a
+    // peer miner-tx promotion rejection even though this node owns an exact
+    // locally archived observation of the same Zano work. Periodic replay
+    // recovery must reuse that local authority exactly as restart recovery
+    // does, rather than retrying the peer proposal forever.
+    const RuntimeCaseResult
+        replay_promotion_rejected_recovers_from_local_archive =
+            run_runtime_case(
+                false,  // remote seed is intact
+                true,   // candidate already exists from structural replay
+                true,   // receiver owns exact local archived work
+                false,  // normal parent-bound share
+                true,   // historical PoW context is available
+                true,   // canonical Zano parent matches
+                false,  // no autonomous PoW retry
+                true,   // peer miner-tx payout conflicts with local history
+                true);  // run one periodic replay recovery pass
+
+    CHECK(
+        !replay_promotion_rejected_recovers_from_local_archive.
+            failed);
+
+    // The peer proposal still fails the unchanged final miner-tx trust gate.
+    CHECK(
+        replay_promotion_rejected_recovers_from_local_archive.
+            trust_status ==
+        HistoricalTrustStatus::PromotionRejected);
+
+    CHECK(
+        replay_promotion_rejected_recovers_from_local_archive.
+            promotion_status ==
+        std::optional<P2pMiningContextTrustStatus>{
+            P2pMiningContextTrustStatus::ProofsRejected});
+
+    CHECK(
+        replay_promotion_rejected_recovers_from_local_archive.
+            proof_status ==
+        std::optional<P2pMinerTxProofStatus>{
+            P2pMinerTxProofStatus::PayoutPolicyFailed});
+
+    CHECK(
+        replay_promotion_rejected_recovers_from_local_archive.
+            payout_policy_status ==
+        std::optional<P2pPayoutPolicyStatus>{
+            P2pPayoutPolicyStatus::DestinationMismatch});
+
+    // The periodic recovery pass must independently revalidate the existing
+    // share from exact local archived work and stable canonical Zano authority.
+    CHECK(
+        replay_promotion_rejected_recovers_from_local_archive.
+            periodic_recovery.historical_trust_status ==
+        std::optional<HistoricalTrustStatus>{
+            HistoricalTrustStatus::Trusted});
+
+    CHECK(
+        replay_promotion_rejected_recovers_from_local_archive.
+            periodic_recovery.remaining == 0);
+
+    CHECK(
+        replay_promotion_rejected_recovers_from_local_archive.
+            candidate_present);
+
+    CHECK(
+        replay_promotion_rejected_recovers_from_local_archive.
+            candidate_validated_ancestry);
 
     // With no matching local archive record, a fresh independent receiver can
     // now reconstruct the missing authority entirely from its own canonical
