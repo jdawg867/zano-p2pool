@@ -118,6 +118,12 @@ struct P2pReplayRecoverySummary {
     std::optional<HistoricalTrustStatus> historical_trust_status;
     std::optional<HistoricalAnchorStatus> historical_anchor_status;
     std::optional<HistoricalPayoutStatus> historical_payout_status;
+    std::optional<P2pMiningContextTrustStatus>
+        historical_promotion_status;
+    std::optional<P2pMinerTxProofStatus>
+        historical_proof_status;
+    std::optional<P2pPayoutPolicyStatus>
+        historical_payout_policy_status;
 };
 
 [[nodiscard]] std::uint32_t p2p_node_message_penalty(

@@ -2335,6 +2335,39 @@ int main(int argc, char** argv) {
                                                         historical_payout_status);
                                 }
 
+                                if (replay_recovery.
+                                        historical_promotion_status.
+                                            has_value()) {
+                                    std::cerr
+                                        << " promotion="
+                                        << zano_p2pool::
+                                               p2p_mining_context_trust_status_name(
+                                                   *replay_recovery.
+                                                        historical_promotion_status);
+                                }
+
+                                if (replay_recovery.
+                                        historical_proof_status.
+                                            has_value()) {
+                                    std::cerr
+                                        << " proof="
+                                        << zano_p2pool::
+                                               p2p_miner_tx_proof_status_name(
+                                                   *replay_recovery.
+                                                        historical_proof_status);
+                                }
+
+                                if (replay_recovery.
+                                        historical_payout_policy_status.
+                                            has_value()) {
+                                    std::cerr
+                                        << " payout-policy="
+                                        << zano_p2pool::
+                                               p2p_payout_policy_status_name(
+                                                   *replay_recovery.
+                                                        historical_payout_policy_status);
+                                }
+
                                 std::cerr << '\n';
                             }
                         } catch (const std::exception& e) {
