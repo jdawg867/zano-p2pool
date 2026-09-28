@@ -1428,12 +1428,95 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
         }
         case P2pMessageType::TipAnnounce: {
             std::lock_guard lock(state_mutex_);
-            const P2pTipHint hint = parse_p2p_tip_announce_envelope(envelope);
+            const P2pTipHint hint =
+                parse_p2p_tip_announce_envelope(envelope);
             const P2pTipSyncDecision decision =
                 plan_p2p_tip_sync(peer, hint, chain_);
-            result.status = P2pNodeMessageStatus::TipProcessed;
+
+            result.status =
+                P2pNodeMessageStatus::TipProcessed;
             result.tip_status = decision.status;
-            if (decision.requested_id.has_value()) {
+
+            // A fresh application-level heartbeat is also a liveness trigger
+            // for any parent-first historical recovery walk that this exact
+            // authenticated peer previously started. If the prior parent
+            // ShareRequest or response was lost while the TCP session stayed
+            // alive, restarting from the advertised tip merely recreates the
+            // same ParentMissing state forever.
+            //
+            // Prefer the unresolved parent at the back of the oldest active
+            // deferred walk. This changes only synchronization scheduling:
+            // the returned share still crosses the normal historical trust,
+            // payout, ancestry, and PoW checks before admission.
+            expire_historical_state(now);
+
+            const DeferredHistoricalCandidate*
+                deferred_frontier = nullptr;
+
+            if (work_retrieval_ &&
+                historical_trust_sources_ready_unlocked() &&
+                (peer.capabilities &
+                     kP2pCapabilityShareSync) != 0) {
+
+                for (const auto& [candidate_id, deferred] :
+                     deferred_historical_) {
+                    static_cast<void>(candidate_id);
+
+                    if (deferred.candidate_peer.node_id !=
+                        peer.node_id) {
+                        continue;
+                    }
+
+                    const ShareId& parent_id =
+                        deferred.share.parent_id;
+
+                    if (is_zero_share_id(parent_id)) {
+                        continue;
+                    }
+
+                    // If this exact parent is itself already deferred for the
+                    // same peer, the unresolved frontier is farther backward.
+                    const auto parent_deferred =
+                        deferred_historical_.find(parent_id);
+
+                    if (parent_deferred !=
+                            deferred_historical_.end() &&
+                        parent_deferred->second.
+                                candidate_peer.node_id ==
+                            peer.node_id) {
+                        continue;
+                    }
+
+                    // A validated parent is no longer an unresolved network
+                    // frontier. Normal descendant resumption handles it.
+                    const ConnectedShare* parent =
+                        chain_.find(parent_id);
+
+                    if (parent != nullptr &&
+                        parent->validated_ancestry) {
+                        continue;
+                    }
+
+                    if (deferred_frontier == nullptr ||
+                        deferred.last_progress <
+                            deferred_frontier->last_progress ||
+                        (deferred.last_progress ==
+                             deferred_frontier->last_progress &&
+                         deferred.share.share_height <
+                             deferred_frontier->
+                                 share.share_height)) {
+                        deferred_frontier = &deferred;
+                    }
+                }
+            }
+
+            if (deferred_frontier != nullptr) {
+                followup =
+                    make_p2p_share_request_envelope(
+                        deferred_frontier->
+                            share.parent_id);
+                followup_peer = peer.node_id;
+            } else if (decision.requested_id.has_value()) {
                 followup =
                     make_p2p_share_request_envelope(
                         *decision.requested_id);
