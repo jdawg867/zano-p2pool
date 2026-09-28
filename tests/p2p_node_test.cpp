@@ -86,6 +86,78 @@ bool wait_for(
 }  // namespace
 
 int main() {
+    // Regression: a long-lived peer relationship can outlive the transport
+    // handshake's best-share snapshot. A periodic synchronization heartbeat
+    // must therefore be rebuilt from the protocol's current sidechain tip.
+    {
+        ShareChain heartbeat_chain;
+        P2pTrustedWorkRegistry heartbeat_work;
+        std::mutex heartbeat_mutex;
+
+        P2pNodeProtocol heartbeat_protocol(
+            heartbeat_chain,
+            heartbeat_work,
+            heartbeat_mutex);
+
+        CHECK(
+            !heartbeat_protocol.
+                periodic_tip_announce().
+                has_value());
+
+        Share heartbeat_root = make_parent();
+
+        CHECK(
+            heartbeat_chain.add_share_unchecked(
+                heartbeat_root).disposition ==
+            ShareDisposition::Connected);
+
+        const auto root_announce =
+            heartbeat_protocol.periodic_tip_announce();
+
+        CHECK(root_announce.has_value());
+        CHECK(root_announce->type ==
+              P2pMessageType::TipAnnounce);
+
+        const P2pTipHint root_tip =
+            parse_p2p_tip_announce_envelope(
+                *root_announce);
+
+        CHECK(root_tip.share_id ==
+              share_id(heartbeat_root));
+        CHECK(root_tip.share_height ==
+              heartbeat_root.share_height);
+
+        // Simulate local sidechain advancement after the peer connection and
+        // original transport handshake have already existed for some time.
+        Share heartbeat_child =
+            make_child(heartbeat_root);
+
+        CHECK(
+            heartbeat_chain.add_share_unchecked(
+                heartbeat_child).disposition ==
+            ShareDisposition::Connected);
+
+        const auto child_announce =
+            heartbeat_protocol.periodic_tip_announce();
+
+        CHECK(child_announce.has_value());
+
+        const P2pTipHint child_tip =
+            parse_p2p_tip_announce_envelope(
+                *child_announce);
+
+        CHECK(child_tip.share_id ==
+              share_id(heartbeat_child));
+        CHECK(child_tip.share_height ==
+              heartbeat_child.share_height);
+
+        // The heartbeat must have advanced rather than retaining the previous
+        // tip that a long-lived transport handshake would still describe.
+        CHECK(child_tip.share_id != root_tip.share_id);
+        CHECK(child_tip.share_height >
+              root_tip.share_height);
+    }
+
     const Share parent = make_parent();
     const Share child = make_child(parent);
     const ShareId parent_id = share_id(parent);

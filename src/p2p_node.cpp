@@ -2373,6 +2373,20 @@ P2pTipHint P2pNodeProtocol::local_tip() const noexcept {
     return p2p_tip_hint_from_chain(chain_);
 }
 
+std::optional<P2pEnvelope>
+P2pNodeProtocol::periodic_tip_announce() const {
+    std::lock_guard lock(state_mutex_);
+
+    const P2pTipHint tip =
+        p2p_tip_hint_from_chain(chain_);
+
+    if (is_zero_share_id(tip.share_id)) {
+        return std::nullopt;
+    }
+
+    return make_p2p_tip_announce_envelope(tip);
+}
+
 bool P2pNodeProtocol::mining_context_trust_ready() const noexcept {
     std::lock_guard lock(state_mutex_);
     return local_mining_anchor_.has_value() &&
