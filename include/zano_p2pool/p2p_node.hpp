@@ -247,6 +247,14 @@ public:
 
     [[nodiscard]] std::size_t connected_share_count() const noexcept;
     [[nodiscard]] P2pTipHint local_tip() const noexcept;
+
+    // Build a fresh synchronization heartbeat from the current
+    // application-level sidechain tip. Unlike the transport handshake,
+    // this reflects chain advancement that occurred after connection.
+    // Empty chains have no tip to advertise.
+    [[nodiscard]] std::optional<P2pEnvelope>
+    periodic_tip_announce() const;
+
     [[nodiscard]] bool mining_context_trust_ready() const noexcept;
     [[nodiscard]] std::optional<P2pEnvelope>
     local_mining_context_envelope() const;

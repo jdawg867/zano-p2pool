@@ -2248,6 +2248,22 @@ int main(int argc, char** argv) {
                             return;
                         }
 
+                        // A long-lived peer can miss one or more live share/tip
+                        // announcements while the remote sidechain advances.
+                        // Re-advertise our current application-level tip on the
+                        // existing periodic recovery cadence so synchronization
+                        // can self-heal without requiring a reconnect or a new
+                        // locally mined share.
+                        //
+                        // TipAnnounce is only a synchronization hint. The peer
+                        // still retrieves and validates every missing share
+                        // through the normal historical trust path.
+                        if (const auto periodic_tip =
+                                p2p_protocol.periodic_tip_announce();
+                            periodic_tip.has_value()) {
+                            p2p_runtime->broadcast(*periodic_tip);
+                        }
+
                         try {
                             replay_recovery =
                                 p2p_protocol.
