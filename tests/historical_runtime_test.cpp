@@ -662,6 +662,13 @@ struct RecursiveParentSyncResult {
     P2pReplayRecoverySummary idle_recovery{};
     bool ancillary_frontier_present{false};
     P2pNodeMessageResult ancillary_result{};
+
+    // Long-lived resync regression: after an ancestry request is lost,
+    // a later TipAnnounce must resume the exact deferred missing-parent
+    // frontier rather than starting again from the advertised remote tip.
+    bool deferred_resync_request_seen{false};
+    bool deferred_resync_requested_parent{false};
+
     int lookup_calls{};
     int observation_loads{};
     int work_requests{};
@@ -676,7 +683,8 @@ run_recursive_parent_sync_case(
     bool add_unadvertised_fork = false,
     bool inject_idle_frontier = false,
     bool inject_idle_parent_mismatch = false,
-    bool inject_ancillary_parent_mismatch = false) {
+    bool inject_ancillary_parent_mismatch = false,
+    bool simulate_lost_deferred_parent_request = false) {
     TemporaryDirectory temp("zano-historical-parent-sync");
     RuntimeFixture fixture = make_runtime_fixture();
 
@@ -901,6 +909,12 @@ run_recursive_parent_sync_case(
     std::atomic<std::size_t> admitted_count{0};
     std::atomic<int> work_requests{0};
     std::atomic<int> share_requests{0};
+
+    std::atomic<bool> dropped_deferred_parent_request{false};
+    std::atomic<bool> deferred_resync_heartbeat_sent{false};
+    std::atomic<bool> deferred_resync_request_seen{false};
+    std::atomic<bool> deferred_resync_requested_parent{false};
+
     std::atomic<std::uint64_t> receiver_now{200};
 
     P2pRuntime* provider_runtime_ptr = nullptr;
@@ -921,6 +935,32 @@ run_recursive_parent_sync_case(
                     envelope.type ==
                     P2pMessageType::ShareRequest) {
                     ++share_requests;
+
+                    const ShareId requested_id =
+                        parse_p2p_share_request_envelope(
+                            envelope);
+
+                    // Reproduce the long-lived multinode failure: the first
+                    // parent-first follow-up is lost while the transport
+                    // connection itself remains healthy.
+                    if (simulate_lost_deferred_parent_request &&
+                        requested_id == parent_id &&
+                        !dropped_deferred_parent_request.exchange(
+                            true)) {
+                        return;
+                    }
+
+                    // Record only the first ShareRequest caused after the
+                    // later periodic tip heartbeat. Correct behavior resumes
+                    // the unresolved parent directly. The pre-fix behavior
+                    // starts over by requesting the advertised child tip.
+                    if (simulate_lost_deferred_parent_request &&
+                        deferred_resync_heartbeat_sent.load() &&
+                        !deferred_resync_request_seen.exchange(
+                            true)) {
+                        deferred_resync_requested_parent.store(
+                            requested_id == parent_id);
+                    }
                 }
                 if (provider_runtime_ptr != nullptr) {
                     static_cast<void>(
@@ -1028,6 +1068,43 @@ run_recursive_parent_sync_case(
         // can be validated against the already trusted base share.
         provider_runtime.broadcast(
             make_p2p_share_announce_envelope(child));
+    }
+
+    if (simulate_lost_deferred_parent_request) {
+        // Wait until the child has crossed historical anchoring, reached
+        // ParentMissing, and emitted the parent request that we intentionally
+        // dropped above.
+        CHECK(wait_for(
+            [&] {
+                return dropped_deferred_parent_request.load() ||
+                       failed.load();
+            },
+            5s));
+
+        CHECK(!failed.load());
+        CHECK(dropped_deferred_parent_request.load());
+
+        // The TCP session remains alive. A fresh periodic application-level
+        // tip heartbeat must re-drive the existing deferred ancestry walk.
+        const auto periodic_tip =
+            provider_node.periodic_tip_announce();
+
+        CHECK(periodic_tip.has_value());
+        CHECK(periodic_tip->type ==
+              P2pMessageType::TipAnnounce);
+
+        deferred_resync_heartbeat_sent.store(true);
+        provider_runtime.broadcast(*periodic_tip);
+
+        CHECK(wait_for(
+            [&] {
+                return deferred_resync_request_seen.load() ||
+                       failed.load();
+            },
+            5s));
+
+        CHECK(!failed.load());
+        CHECK(deferred_resync_request_seen.load());
     }
 
     CHECK(wait_for(
@@ -1231,6 +1308,10 @@ run_recursive_parent_sync_case(
     result.work_requests = work_requests.load();
     result.share_requests = share_requests.load();
     result.ancillary_result = ancillary_result;
+    result.deferred_resync_request_seen =
+        deferred_resync_request_seen.load();
+    result.deferred_resync_requested_parent =
+        deferred_resync_requested_parent.load();
 
     {
         std::lock_guard lock(receiver_state_mutex);
@@ -1739,6 +1820,31 @@ int main() {
     CHECK(recursive.share_requests == 2);
     CHECK(recursive.observation_loads == 5);
     CHECK(recursive.lookup_calls == 16);
+
+    // Long-lived tip-resync regression from the ab9a7b2 mining soak. The
+    // child reaches ParentMissing and emits ShareRequest(parent), but that one
+    // follow-up is intentionally lost while the authenticated TCP connection
+    // remains alive. A later periodic TipAnnounce must resume the unresolved
+    // deferred parent directly instead of restarting from the advertised
+    // child tip.
+    const RecursiveParentSyncResult deferred_resync =
+        run_recursive_parent_sync_case(
+            false,  // shares are arriving live, not restart replay
+            false,  // normal provider handshake
+            false,  // normal recovery clock
+            false,  // no unadvertised replay fork
+            false,  // no idle replay frontier
+            false,  // no canonical-parent mismatch
+            false,  // no ancillary mismatch
+            true);  // lose first deferred parent request
+
+    CHECK(!deferred_resync.failed);
+    CHECK(deferred_resync.completed);
+    CHECK(deferred_resync.deferred_resync_request_seen);
+
+    // The heartbeat must resume the unresolved parent-first recovery
+    // frontier rather than restarting from the advertised child tip.
+    CHECK(deferred_resync.deferred_resync_requested_parent);
 
     // Same ancestry, but every descendant was restored by unchecked durable
     // replay before P2P starts. The authenticated connection handshake alone
