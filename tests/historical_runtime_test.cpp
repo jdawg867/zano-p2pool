@@ -684,7 +684,8 @@ run_recursive_parent_sync_case(
     bool inject_idle_frontier = false,
     bool inject_idle_parent_mismatch = false,
     bool inject_ancillary_parent_mismatch = false,
-    bool simulate_lost_deferred_parent_request = false) {
+    bool simulate_lost_deferred_parent_request = false,
+    bool simulate_competing_deferred_roots = false) {
     TemporaryDirectory temp("zano-historical-parent-sync");
     RuntimeFixture fixture = make_runtime_fixture();
 
@@ -728,6 +729,22 @@ run_recursive_parent_sync_case(
     child.timestamp = 103;
     child.nonce = 11;
     const ShareId child_id = share_id(child);
+
+    Share competing_parent = fixture.candidate;
+    competing_parent.parent_id = base_id;
+    competing_parent.share_height = 1;
+    competing_parent.timestamp = 301;
+    competing_parent.nonce = 31;
+    const ShareId competing_parent_id =
+        share_id(competing_parent);
+
+    Share competing_child = fixture.candidate;
+    competing_child.parent_id = competing_parent_id;
+    competing_child.share_height = 2;
+    competing_child.timestamp = 302;
+    competing_child.nonce = 32;
+    const ShareId competing_child_id =
+        share_id(competing_child);
 
     std::vector<Share> descendants{
         grandparent,
@@ -782,6 +799,15 @@ run_recursive_parent_sync_case(
     for (const Share& descendant : descendants) {
         CHECK(provider_chain.add_share_unchecked(
                   descendant).disposition ==
+              ShareDisposition::Connected);
+    }
+
+    if (simulate_competing_deferred_roots) {
+        CHECK(provider_chain.add_share_unchecked(
+                  competing_parent).disposition ==
+              ShareDisposition::Connected);
+        CHECK(provider_chain.add_share_unchecked(
+                  competing_child).disposition ==
               ShareDisposition::Connected);
     }
 
@@ -915,6 +941,21 @@ run_recursive_parent_sync_case(
     std::atomic<bool> deferred_resync_request_seen{false};
     std::atomic<bool> deferred_resync_requested_parent{false};
 
+    // Sustained-mining regression from the PR46 soak:
+    //
+    //   root A makes real backward progress,
+    //   which refreshes root A's last_progress;
+    //   root B remains older and unresolved.
+    //
+    // PR46 then switches to root B on the next heartbeat because it
+    // globally prefers the oldest last_progress. Correct behavior is
+    // sticky: continue root A until it reaches a validated boundary.
+    std::atomic<int> competing_parent_requests{0};
+    std::atomic<bool> dropped_active_grandparent_request{false};
+    std::atomic<bool> sticky_probe_active{false};
+    std::atomic<bool> sticky_probe_seen{false};
+    std::atomic<bool> sticky_probe_requested_active_root{false};
+
     std::atomic<std::uint64_t> receiver_now{200};
 
     P2pRuntime* provider_runtime_ptr = nullptr;
@@ -939,6 +980,45 @@ run_recursive_parent_sync_case(
                     const ShareId requested_id =
                         parse_p2p_share_request_envelope(
                             envelope);
+
+                    if (simulate_competing_deferred_roots) {
+                        // The final probe records the first ShareRequest
+                        // emitted by the next heartbeat and deliberately
+                        // withholds the response. PR47 requires this to remain
+                        // on root A's unresolved grandparent.
+                        if (sticky_probe_active.load() &&
+                            !sticky_probe_seen.exchange(true)) {
+                            sticky_probe_requested_active_root.store(
+                                requested_id == grandparent_id);
+                            return;
+                        }
+
+                        // Root A: lose its first parent request so it becomes
+                        // an active deferred recovery walk.
+                        if (requested_id == parent_id &&
+                            !dropped_deferred_parent_request.exchange(
+                                true)) {
+                            return;
+                        }
+
+                        // Root B: keep its unresolved parent outstanding.
+                        // It intentionally remains older than root A after
+                        // root A later makes real progress.
+                        if (requested_id == competing_parent_id) {
+                            ++competing_parent_requests;
+                            return;
+                        }
+
+                        // Once heartbeat #1 successfully retrieves A's parent,
+                        // that parent exposes A's grandparent frontier and
+                        // refreshes A's recovery-session progress. Drop this
+                        // request so the root remains active for heartbeat #2.
+                        if (requested_id == grandparent_id &&
+                            !dropped_active_grandparent_request.exchange(
+                                true)) {
+                            return;
+                        }
+                    }
 
                     // Reproduce the long-lived multinode failure: the first
                     // parent-first follow-up is lost while the transport
@@ -1068,6 +1148,92 @@ run_recursive_parent_sync_case(
         // can be validated against the already trusted base share.
         provider_runtime.broadcast(
             make_p2p_share_announce_envelope(child));
+    }
+
+    if (simulate_competing_deferred_roots) {
+        // Ensure root A is established first. With the advancing recovery
+        // clock it therefore begins older than root B.
+        CHECK(wait_for(
+            [&] {
+                return dropped_deferred_parent_request.load() ||
+                       failed.load();
+            },
+            5s));
+
+        CHECK(!failed.load());
+        CHECK(dropped_deferred_parent_request.load());
+
+        // Introduce a second unresolved root while A is already deferred.
+        provider_runtime.broadcast(
+            make_p2p_share_announce_envelope(
+                competing_child));
+
+        CHECK(wait_for(
+            [&] {
+                return competing_parent_requests.load() >= 1 ||
+                       failed.load();
+            },
+            5s));
+
+        CHECK(!failed.load());
+        CHECK(competing_parent_requests.load() >= 1);
+
+        // Heartbeat #1 should choose the older root A. Its parent response is
+        // allowed through, making real backward progress and exposing the
+        // grandparent. That progress refreshes root A's last_progress.
+        const auto first_progress_tip =
+            provider_node.periodic_tip_announce();
+
+        CHECK(first_progress_tip.has_value());
+        CHECK(first_progress_tip->type ==
+              P2pMessageType::TipAnnounce);
+
+        provider_runtime.broadcast(*first_progress_tip);
+
+        CHECK(wait_for(
+            [&] {
+                return dropped_active_grandparent_request.load() ||
+                       failed.load();
+            },
+            5s));
+
+        CHECK(!failed.load());
+        CHECK(dropped_active_grandparent_request.load());
+
+        // Heartbeat #2 reproduces the sustained-mining failure. PR46 globally
+        // prefers root B because B now has the older last_progress timestamp.
+        // The fixed scheduler must remain sticky to root A instead.
+        sticky_probe_active.store(true);
+
+        const auto sticky_tip =
+            provider_node.periodic_tip_announce();
+
+        CHECK(sticky_tip.has_value());
+        CHECK(sticky_tip->type ==
+              P2pMessageType::TipAnnounce);
+
+        provider_runtime.broadcast(*sticky_tip);
+
+        CHECK(wait_for(
+            [&] {
+                return sticky_probe_seen.load() ||
+                       failed.load();
+            },
+            5s));
+
+        CHECK(!failed.load());
+        CHECK(sticky_probe_seen.load());
+
+        // RED ON PR46:
+        //
+        // Current scheduling switches to competing_parent_id here.
+        // PR47 must keep requesting grandparent_id from the recovery root
+        // that already demonstrated forward progress.
+        CHECK(sticky_probe_requested_active_root.load());
+
+        // This regression is about scheduler selection, not completing the
+        // full ancestry after the probe response is intentionally withheld.
+        completed.store(true);
     }
 
     if (simulate_lost_deferred_parent_request) {
@@ -1845,6 +2011,26 @@ int main() {
     // The heartbeat must resume the unresolved parent-first recovery
     // frontier rather than restarting from the advertised child tip.
     CHECK(deferred_resync.deferred_resync_requested_parent);
+
+    // Sustained-mining liveness regression from the PR46 testnet soak.
+    // Two independent deferred ancestry roots exist for the same peer.
+    // Root A then makes real backward progress, refreshing its inactivity
+    // timestamp. A later heartbeat must remain sticky to root A rather than
+    // preempting it merely because root B now has an older last_progress.
+    const RecursiveParentSyncResult sticky_deferred =
+        run_recursive_parent_sync_case(
+            false,  // live shares, not replay
+            false,  // normal handshake
+            true,   // advance clock so root ages are deterministic
+            false,  // no replay fork
+            false,  // no idle replay frontier
+            false,  // no idle parent mismatch
+            false,  // no ancillary mismatch
+            false,  // not the PR46 lost-request-only case
+            true);  // competing deferred roots
+
+    CHECK(!sticky_deferred.failed);
+    CHECK(sticky_deferred.completed);
 
     // Same ancestry, but every descendant was restored by unchecked durable
     // replay before P2P starts. The authenticated connection handshake alone

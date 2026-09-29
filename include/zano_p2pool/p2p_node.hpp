@@ -366,6 +366,14 @@ private:
         historical_evidence_;
     std::map<ShareId, DeferredHistoricalCandidate>
         deferred_historical_;
+
+    // Once a heartbeat selects a deferred ancestry-recovery root for a peer,
+    // keep that root sticky while it continues to exist. Fresh deferred roots
+    // must not preempt a walk merely because real progress refreshed the
+    // active root's last_progress timestamp.
+    std::map<NodeId, ShareId>
+        active_deferred_recovery_root_;
+
     std::map<ShareId, RetryableHistoricalCandidate>
         retryable_historical_;
 

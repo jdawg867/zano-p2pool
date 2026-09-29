@@ -54,6 +54,36 @@ void P2pNodeProtocol::expire_historical_state(std::uint64_t now) {
         }
     }
 
+    // A sticky scheduler selection is valid only while at least one
+    // deferred candidate from that exact peer/recovery root remains live.
+    // Completion, rejection, pruning, or inactivity expiry therefore releases
+    // the root automatically and allows the next heartbeat to select another.
+    for (auto it = active_deferred_recovery_root_.begin();
+         it != active_deferred_recovery_root_.end();) {
+        const NodeId peer_id = it->first;
+        const ShareId recovery_root = it->second;
+
+        const bool still_live =
+            std::any_of(
+                deferred_historical_.begin(),
+                deferred_historical_.end(),
+                [&](const auto& item) {
+                    const DeferredHistoricalCandidate& deferred =
+                        item.second;
+
+                    return deferred.candidate_peer.node_id ==
+                               peer_id &&
+                           deferred.recovery_root ==
+                               recovery_root;
+                });
+
+        if (!still_live) {
+            it = active_deferred_recovery_root_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
     for (auto it = retryable_historical_.begin();
          it != retryable_historical_.end();) {
         if (now < it->second.started ||
@@ -1458,24 +1488,19 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
                 (peer.capabilities &
                      kP2pCapabilityShareSync) != 0) {
 
-                for (const auto& [candidate_id, deferred] :
-                     deferred_historical_) {
-                    static_cast<void>(candidate_id);
-
-                    if (deferred.candidate_peer.node_id !=
-                        peer.node_id) {
-                        continue;
-                    }
-
+                const auto is_unresolved_frontier =
+                    [&](const DeferredHistoricalCandidate&
+                            deferred) {
                     const ShareId& parent_id =
                         deferred.share.parent_id;
 
                     if (is_zero_share_id(parent_id)) {
-                        continue;
+                        return false;
                     }
 
                     // If this exact parent is itself already deferred for the
-                    // same peer, the unresolved frontier is farther backward.
+                    // same peer, the unresolved network frontier is farther
+                    // backward in this recovery walk.
                     const auto parent_deferred =
                         deferred_historical_.find(parent_id);
 
@@ -1484,7 +1509,7 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
                         parent_deferred->second.
                                 candidate_peer.node_id ==
                             peer.node_id) {
-                        continue;
+                        return false;
                     }
 
                     // A validated parent is no longer an unresolved network
@@ -1494,18 +1519,97 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
 
                     if (parent != nullptr &&
                         parent->validated_ancestry) {
-                        continue;
+                        return false;
                     }
 
-                    if (deferred_frontier == nullptr ||
-                        deferred.last_progress <
-                            deferred_frontier->last_progress ||
-                        (deferred.last_progress ==
-                             deferred_frontier->last_progress &&
-                         deferred.share.share_height <
-                             deferred_frontier->
-                                 share.share_height)) {
-                        deferred_frontier = &deferred;
+                    return true;
+                };
+
+                const auto select_frontier_for_root =
+                    [&](const ShareId& recovery_root)
+                        -> const DeferredHistoricalCandidate* {
+                    const DeferredHistoricalCandidate*
+                        selected = nullptr;
+
+                    for (const auto& [candidate_id, deferred] :
+                         deferred_historical_) {
+                        static_cast<void>(candidate_id);
+
+                        if (deferred.candidate_peer.node_id !=
+                                peer.node_id ||
+                            deferred.recovery_root !=
+                                recovery_root ||
+                            !is_unresolved_frontier(deferred)) {
+                            continue;
+                        }
+
+                        // A recovery root normally has one deepest unresolved
+                        // network frontier. If merged ancestry exposes more
+                        // than one, prefer the lower share height; std::map
+                        // iteration supplies deterministic ShareId tie order.
+                        if (selected == nullptr ||
+                            deferred.share.share_height <
+                                selected->share.share_height) {
+                            selected = &deferred;
+                        }
+                    }
+
+                    return selected;
+                };
+
+                // First preserve an already selected recovery session. Real
+                // progress intentionally refreshes its last_progress value;
+                // that must not make some unrelated older root preempt it.
+                const auto active =
+                    active_deferred_recovery_root_.find(
+                        peer.node_id);
+
+                if (active !=
+                    active_deferred_recovery_root_.end()) {
+                    deferred_frontier =
+                        select_frontier_for_root(
+                            active->second);
+
+                    if (deferred_frontier == nullptr) {
+                        active_deferred_recovery_root_.erase(
+                            active);
+                    }
+                }
+
+                // No sticky root remains. Select the oldest eligible recovery
+                // session using the PR46 ordering, then pin that root until it
+                // completes, rejects, prunes, or expires.
+                if (deferred_frontier == nullptr) {
+                    for (const auto& [candidate_id, deferred] :
+                         deferred_historical_) {
+                        static_cast<void>(candidate_id);
+
+                        if (deferred.candidate_peer.node_id !=
+                                peer.node_id ||
+                            !is_unresolved_frontier(deferred)) {
+                            continue;
+                        }
+
+                        if (deferred_frontier == nullptr ||
+                            deferred.last_progress <
+                                deferred_frontier->
+                                    last_progress ||
+                            (deferred.last_progress ==
+                                 deferred_frontier->
+                                     last_progress &&
+                             deferred.share.share_height <
+                                 deferred_frontier->
+                                     share.share_height)) {
+                            deferred_frontier = &deferred;
+                        }
+                    }
+
+                    if (deferred_frontier != nullptr) {
+                        active_deferred_recovery_root_.
+                            insert_or_assign(
+                                peer.node_id,
+                                deferred_frontier->
+                                    recovery_root);
                     }
                 }
             }
