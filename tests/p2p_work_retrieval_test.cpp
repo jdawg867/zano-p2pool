@@ -129,6 +129,30 @@ int main() {
     const auto peer=make_handshake(10);
     const MiningWorkKey key{proposal.zano_height,derive_mining_header_work(proposal.block_template_blob).header_hash};
 
+    const auto provider_observations =
+        provider.local_observations(
+            proposal.zano_height,
+            proposal.prev_hash);
+
+    CHECK(provider_observations.size() == 1);
+    CHECK(provider_observations.front().zano_height ==
+          proposal.zano_height);
+    CHECK(provider_observations.front().prev_hash ==
+          proposal.prev_hash);
+    CHECK(provider_observations.front().network_difficulty ==
+          proposal.network_difficulty);
+    CHECK(provider_observations.front().seed ==
+          proposal.seed);
+    CHECK(provider_observations.front().block_reward_without_fee ==
+          proposal.block_reward_without_fee);
+
+    auto absent_parent = proposal.prev_hash;
+    absent_parent[0] ^= 0x01U;
+
+    CHECK(provider.local_observations(
+              proposal.zano_height,
+              absent_parent).empty());
+
     // Restart-built local evidence must be retrievable only by its exact
     // height/header key. Reading it does not copy anything into a peer cache or
     // grant trusted-work authority.

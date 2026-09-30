@@ -175,6 +175,31 @@ std::vector<Hash256> MiningWorkArchive::list_ids(
 }
 
 std::size_t MiningWorkArchive::verify_all() const {
-    return list_ids().size();
+    // Integrity verification is a full lifetime-archive operation, not a
+    // bounded query. Validate one record at a time so archive growth does not
+    // turn a healthy store into an invalid one merely because it crossed an
+    // arbitrary record-count ceiling.
+    std::size_t count = 0;
+
+    for (const auto& entry :
+         std::filesystem::directory_iterator(directory_)) {
+
+        if (entry.path().filename().string().starts_with(".tmp-")) {
+            continue;
+        }
+
+        if (entry.path().extension() != ".work") {
+            throw std::runtime_error(
+                "unexpected file in mining-work archive");
+        }
+
+        const Hash256 id =
+            id_from_filename(entry.path());
+
+        static_cast<void>(read(id));
+        ++count;
+    }
+
+    return count;
 }
 } // namespace zano_p2pool

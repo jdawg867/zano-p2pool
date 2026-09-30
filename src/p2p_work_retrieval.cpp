@@ -31,8 +31,32 @@ MiningWorkRequest decode_request(std::span<const std::uint8_t> p) {
     check_request(r); return r;
 }
 MiningWorkKey checked_key(const P2pMiningContextProposal& proposal) {
-    return {proposal.zano_height, derive_mining_header_work(proposal.block_template_blob).header_hash};
+    return {
+        proposal.zano_height,
+        derive_mining_header_work(
+            proposal.block_template_blob).header_hash
+    };
 }
+
+P2pMiningAnchor checked_local_anchor(
+    const P2pMiningContextProposal& proposal) {
+
+    // Local historical observations must meet the same structural checks as
+    // the former disk-scan path before they can be offered to historical
+    // audit. This still grants no trusted-work authority.
+    static_cast<void>(
+        validate_p2p_mining_context_structure(
+            proposal));
+
+    return {
+        proposal.zano_height,
+        proposal.prev_hash,
+        proposal.network_difficulty,
+        proposal.seed,
+        proposal.block_reward_without_fee,
+    };
+}
+
 void check_response(const MiningWorkResponse& r) {
     check_request(r.request);
     if (r.total_size==0) { require(r.chunk.empty(),"not-found work response contains data"); return; }
@@ -74,15 +98,62 @@ P2pWorkRetrieval::P2pWorkRetrieval(MiningWorkArchive& archive): archive_(archive
         if (entry.path().extension()!=".work") continue;
         const auto name=hex_to_bytes(entry.path().stem().string());
         Hash256 id{}; std::copy(name.begin(),name.end(),id.begin());
-        const auto proposal=deserialize_p2p_mining_context_payload(archive_.read(id));
-        local_.try_emplace(checked_key(proposal),id);
+        const auto proposal=
+            deserialize_p2p_mining_context_payload(
+                archive_.read(id));
+
+        const auto key=checked_key(proposal);
+        const auto anchor=checked_local_anchor(proposal);
+
+        local_.try_emplace(key,id);
+        local_observations_[
+            {anchor.zano_height, anchor.prev_hash}]
+            .try_emplace(id,anchor);
     }
 }
-void P2pWorkRetrieval::remember_local(const P2pMiningContextProposal& proposal) {
+
+void P2pWorkRetrieval::remember_local(
+    const P2pMiningContextProposal& proposal) {
+
     const auto id=p2p_mining_context_id(proposal);
     const auto key=checked_key(proposal);
-    std::lock_guard lock(mutex_); local_.try_emplace(key,id);
+    const auto anchor=checked_local_anchor(proposal);
+
+    std::lock_guard lock(mutex_);
+    local_.try_emplace(key,id);
+    local_observations_[
+        {anchor.zano_height, anchor.prev_hash}]
+        .try_emplace(id,anchor);
 }
+
+std::vector<P2pMiningAnchor>
+P2pWorkRetrieval::local_observations(
+    std::uint64_t zano_height,
+    const Hash256& prev_hash) const {
+
+    std::lock_guard lock(mutex_);
+
+    const auto it =
+        local_observations_.find(
+            {zano_height, prev_hash});
+
+    if (it == local_observations_.end()) {
+        return {};
+    }
+
+    std::vector<P2pMiningAnchor> observations;
+    observations.reserve(
+        it->second.size());
+
+    for (const auto& [id, anchor] :
+         it->second) {
+        static_cast<void>(id);
+        observations.push_back(anchor);
+    }
+
+    return observations;
+}
+
 std::optional<std::vector<std::uint8_t>>
 P2pWorkRetrieval::read_local(const MiningWorkKey& key) {
     std::optional<Hash256> id;

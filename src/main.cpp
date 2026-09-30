@@ -1510,9 +1510,12 @@ int main(int argc, char** argv) {
         if (mining_work_archive && work_retrieval) {
             p2p_protocol.set_historical_trust_sources(
                 sidechain_parameters,
-                [archive = mining_work_archive.get()] {
-                    return zano_p2pool::load_local_mining_anchors(
-                        *archive);
+                [retrieval = work_retrieval.get()](
+                    const zano_p2pool::P2pMiningContextProposal&
+                        proposal) {
+                    return retrieval->local_observations(
+                        proposal.zano_height,
+                        proposal.prev_hash);
                 },
                 [&rpc](std::uint64_t height) {
                     return rpc.get_canonical_header(height);

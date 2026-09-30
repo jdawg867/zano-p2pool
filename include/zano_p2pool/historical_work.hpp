@@ -3,6 +3,7 @@
 #include "zano_p2pool/p2p_mining_context.hpp"
 #include "zano_p2pool/rpc_client.hpp"
 #include <functional>
+#include <limits>
 #include <optional>
 #include "zano_p2pool/mining_work_archive.hpp"
 
@@ -27,7 +28,9 @@ struct HistoricalParentResult {
 // checksums establish integrity, not provenance; peer records are not evidence
 // of locally observed difficulty or reward.
 [[nodiscard]] std::vector<P2pMiningAnchor> load_local_mining_anchors(
-    const MiningWorkArchive& archive, std::size_t max_records = 10000);
+    const MiningWorkArchive& archive,
+    std::size_t max_records =
+        std::numeric_limits<std::size_t>::max());
 
 enum class HistoricalAnchorStatus {
     AnchorMatchedUntrusted,

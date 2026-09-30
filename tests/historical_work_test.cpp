@@ -1,11 +1,14 @@
 #include "zano_p2pool/historical_work.hpp"
 #include "zano_p2pool/mining_header.hpp"
+#include "zano_p2pool/p2p_work_retrieval.hpp"
 #include "hf6_test_suffix.hpp"
 #include "zano_p2pool/progpowz.hpp"
 #include <filesystem>
 #include <unistd.h>
 #include "test_check.hpp"
 #include <algorithm>
+#include <array>
+#include <fstream>
 #include <functional>
 
 namespace {
@@ -71,6 +74,75 @@ using namespace zano_p2pool;
     proposal.miner_tx_tgc_json =
         R"json({"tx_key":"00112233445566778899aabbccddeeff","tx_pub_key_p":"1122","tx_outs_attr":0})json";
     return proposal;
+}
+
+void append_u32_be(
+    std::vector<std::uint8_t>& out,
+    std::uint32_t value) {
+
+    out.push_back(
+        static_cast<std::uint8_t>(value >> 24));
+    out.push_back(
+        static_cast<std::uint8_t>(value >> 16));
+    out.push_back(
+        static_cast<std::uint8_t>(value >> 8));
+    out.push_back(
+        static_cast<std::uint8_t>(value));
+}
+
+void write_valid_archive_record(
+    const std::filesystem::path& directory,
+    const Hash256& sidechain,
+    std::span<const std::uint8_t> payload) {
+
+    static constexpr std::array<std::uint8_t, 8> magic{
+        'Z','P','2','W','O','R','K','1'
+    };
+
+    const auto id = cn_fast_hash(payload);
+
+    std::vector<std::uint8_t> record(
+        magic.begin(),
+        magic.end());
+
+    record.insert(
+        record.end(),
+        sidechain.begin(),
+        sidechain.end());
+
+    append_u32_be(
+        record,
+        static_cast<std::uint32_t>(
+            payload.size()));
+
+    record.insert(
+        record.end(),
+        payload.begin(),
+        payload.end());
+
+    const auto checksum =
+        cn_fast_hash(record);
+
+    record.insert(
+        record.end(),
+        checksum.begin(),
+        checksum.end());
+
+    std::ofstream out(
+        directory /
+            (hash_to_hex(id) + ".work"),
+        std::ios::binary |
+            std::ios::trunc);
+
+    if (!out.write(
+            reinterpret_cast<const char*>(
+                record.data()),
+            static_cast<std::streamsize>(
+                record.size()))) {
+
+        throw std::runtime_error(
+            "failed to write test archive record");
+    }
 }
 
 } // namespace
@@ -298,5 +370,99 @@ int main() {
     CHECK(throws_runtime_error([&] { static_cast<void>(load_local_mining_anchors(archive, 0)); }));
     MiningWorkArchive other_chain(pattern, other);
     CHECK(throws_runtime_error([&] { static_cast<void>(load_local_mining_anchors(other_chain)); }));
+
+    // Regression: local historical observations must remain usable when the
+    // node's legitimate lifetime mining-work archive grows beyond 10,000
+    // records. Production reached this exact threshold during sustained
+    // mining and every historical recovery attempt then failed before it
+    // could perform the normal trust crossing.
+    std::string growth_pattern =
+        (std::filesystem::temp_directory_path() /
+         "zano-anchor-growth-XXXXXX").string();
+
+    CHECK(
+        mkdtemp(growth_pattern.data()) !=
+        nullptr);
+
+    Cleanup growth_cleanup{
+        growth_pattern
+    };
+
+    MiningWorkArchive growth_archive(
+        growth_pattern,
+        sidechain);
+
+    constexpr std::size_t
+        kGrowthRecords = 10'001;
+
+    auto growth_proposal = proposal;
+
+    for (std::uint64_t i = 0;
+         i < kGrowthRecords;
+         ++i) {
+
+        // txs_fee is serialized evidence but is not part of the structural
+        // block-header binding checked by validate_p2p_mining_context_structure.
+        // Varying it gives each otherwise-valid local proposal a unique
+        // content ID without weakening structural validation.
+        growth_proposal.txs_fee = i;
+
+        const auto payload =
+            serialize_p2p_mining_context_payload(
+                growth_proposal);
+
+        write_valid_archive_record(
+            growth_archive.path(),
+            sidechain,
+            payload);
+    }
+
+    CHECK(
+        growth_archive.verify_all() ==
+        kGrowthRecords);
+
+    CHECK(
+        load_local_mining_anchors(
+            growth_archive).size() ==
+        kGrowthRecords);
+
+    // The real restart-built runtime index must also survive the old 10k
+    // boundary and retain every distinct locally archived observation.
+    P2pWorkRetrieval growth_retrieval(
+        growth_archive);
+
+    CHECK(
+        growth_retrieval.
+            local_observations(
+                growth_proposal.zano_height,
+                growth_proposal.prev_hash).
+            size() ==
+        kGrowthRecords);
+
+    // Re-registering an already durable proposal must not fabricate an
+    // additional local observation.
+    growth_retrieval.remember_local(
+        growth_proposal);
+
+    CHECK(
+        growth_retrieval.
+            local_observations(
+                growth_proposal.zano_height,
+                growth_proposal.prev_hash).
+            size() ==
+        kGrowthRecords);
+
+    auto absent_parent =
+        growth_proposal.prev_hash;
+    absent_parent[0] ^=
+        static_cast<std::uint8_t>(0x01);
+
+    CHECK(
+        growth_retrieval.
+            local_observations(
+                growth_proposal.zano_height,
+                absent_parent).
+            empty());
+
     // No ShareChain or trusted-work registry is available to this API.
 }

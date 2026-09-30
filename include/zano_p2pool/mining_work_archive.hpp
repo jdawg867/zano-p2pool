@@ -3,6 +3,7 @@
 #include "zano_p2pool/crypto_hash.hpp"
 
 #include <filesystem>
+#include <limits>
 #include <span>
 #include <vector>
 
@@ -23,7 +24,8 @@ public:
     // Interrupted unpublished .tmp-* files are ignored. Any other unexpected
     // directory entry fails closed.
     [[nodiscard]] std::vector<Hash256> list_ids(
-        std::size_t max_records = 10000) const;
+        std::size_t max_records =
+            std::numeric_limits<std::size_t>::max()) const;
     // Checks complete records one at a time (bounded memory). Interrupted
     // unpublished .tmp-* files are ignored, never treated as evidence.
     [[nodiscard]] std::size_t verify_all() const;
