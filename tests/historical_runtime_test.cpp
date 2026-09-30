@@ -323,9 +323,11 @@ struct RuntimeCaseResult {
 
     receiver_node.set_historical_trust_sources(
         fixture.params,
-        [&receiver_archive] {
-            return load_local_mining_anchors(
-                receiver_archive);
+        [&receiver_retrieval](
+            const P2pMiningContextProposal& proposal) {
+            return receiver_retrieval.local_observations(
+                proposal.zano_height,
+                proposal.prev_hash);
         },
         [&fixture, &lookup_calls, receiver_parent_matches](
             std::uint64_t height) {
@@ -881,10 +883,12 @@ run_recursive_parent_sync_case(
 
     receiver_node.set_historical_trust_sources(
         fixture.params,
-        [&receiver_archive, &observation_loads] {
+        [&receiver_retrieval, &observation_loads](
+            const P2pMiningContextProposal& proposal) {
             ++observation_loads;
-            return load_local_mining_anchors(
-                receiver_archive);
+            return receiver_retrieval.local_observations(
+                proposal.zano_height,
+                proposal.prev_hash);
         },
         [&fixture,
          &lookup_calls,

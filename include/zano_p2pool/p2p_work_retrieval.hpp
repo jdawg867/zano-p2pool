@@ -4,6 +4,7 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <vector>
 
 namespace zano_p2pool {
 using MiningWorkKey = std::pair<std::uint64_t, Hash256>;
@@ -27,13 +28,23 @@ struct MiningWorkReceiveResult {
 };
 
 // This object has no access to ShareChain or P2pTrustedWorkRegistry. Receipt
-// cannot admit shares or transfer the sender's trust. All state is bounded
-// except the local archive index (one small entry per archived work key).
+// cannot admit shares or transfer the sender's trust. Network-facing state
+// is bounded. Local archive indices grow only with this node's own durable
+// mining-work records.
 class P2pWorkRetrieval {
 public:
     explicit P2pWorkRetrieval(MiningWorkArchive& archive);
     // Call only after the local proposal has been durably archived.
     void remember_local(const P2pMiningContextProposal& proposal);
+
+    // Snapshot independently local observations reconstructed from this
+    // node's own durable archive. Archive provenance does not itself grant
+    // trusted-work authority; historical audit still performs the complete
+    // canonical-parent/PoW trust crossing.
+    [[nodiscard]] std::vector<P2pMiningAnchor>
+    local_observations(
+        std::uint64_t zano_height,
+        const Hash256& prev_hash) const;
 
     // Return exact immutable evidence already present in this node's own
     // archive. Archive presence grants no trust; callers must still perform
@@ -48,6 +59,9 @@ public:
         const P2pHandshake& peer, const P2pEnvelope& response, std::uint64_t now);
     [[nodiscard]] std::optional<std::vector<std::uint8_t>> take_untrusted(const MiningWorkKey& key);
 private:
+    using LocalObservationKey =
+        std::pair<std::uint64_t, Hash256>;
+
     struct Pending {
         std::uint64_t started;
         std::uint32_t total{0};
@@ -56,8 +70,12 @@ private:
     };
     void expire(std::uint64_t now);
     MiningWorkArchive& archive_;
-    std::mutex mutex_;
+    mutable std::mutex mutex_;
     std::map<MiningWorkKey, Hash256> local_;
+    std::map<
+        LocalObservationKey,
+        std::map<Hash256, P2pMiningAnchor>>
+        local_observations_;
     std::map<std::pair<NodeId, MiningWorkKey>, Pending> pending_;
     std::map<MiningWorkKey, std::vector<std::uint8_t>> received_;
 };

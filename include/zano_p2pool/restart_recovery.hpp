@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <optional>
 
 namespace zano_p2pool {
@@ -128,6 +129,7 @@ struct RestartRecoveryResult {
     const std::function<RpcCanonicalHeader(std::uint64_t)>& lookup,
     std::uint64_t now,
     ProgPowZContextMode mode = ProgPowZContextMode::Light,
-    std::size_t max_archive_records = 10000);
+    std::size_t max_archive_records =
+        std::numeric_limits<std::size_t>::max());
 
 }  // namespace zano_p2pool

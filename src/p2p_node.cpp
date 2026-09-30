@@ -610,7 +610,8 @@ P2pNodeProtocol::advance_replay_recovery(
                     if (exact_local_context) {
                         const std::vector<P2pMiningAnchor>
                             local_observations =
-                                load_historical_observations_();
+                                load_historical_observations_(
+                                    local_proposal);
 
                         const HistoricalAnchorResult
                             initial_local_anchor =
@@ -872,7 +873,8 @@ P2pNodeMessageResult P2pNodeProtocol::handle(
             result.historical_payout_policy_status.reset();
 
             const std::vector<P2pMiningAnchor> observations =
-                load_historical_observations_();
+                load_historical_observations_(
+                    evidence.proposal);
             const HistoricalTrustResult trust =
                 promote_historical_mining_context(
                     trusted_work_,
@@ -2113,7 +2115,9 @@ std::uint32_t p2p_node_message_penalty(
 
 void P2pNodeProtocol::set_historical_trust_sources(
     const SidechainParameters& params,
-    std::function<std::vector<P2pMiningAnchor>()> load_local_observations,
+    std::function<std::vector<P2pMiningAnchor>(
+        const P2pMiningContextProposal&)>
+        load_local_observations,
     std::function<RpcCanonicalHeader(std::uint64_t)> lookup,
     std::function<std::optional<RpcHistoricalPowContext>(
         std::uint64_t)> historical_pow_lookup) {

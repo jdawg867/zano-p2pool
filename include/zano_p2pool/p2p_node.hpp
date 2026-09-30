@@ -184,7 +184,9 @@ public:
     void set_work_retrieval(P2pWorkRetrieval* retrieval) noexcept { work_retrieval_ = retrieval; }
     void set_historical_trust_sources(
         const SidechainParameters& params,
-        std::function<std::vector<P2pMiningAnchor>()> load_local_observations,
+        std::function<std::vector<P2pMiningAnchor>(
+            const P2pMiningContextProposal&)>
+            load_local_observations,
         std::function<RpcCanonicalHeader(std::uint64_t)> lookup,
         std::function<std::optional<RpcHistoricalPowContext>(
             std::uint64_t)> historical_pow_lookup);
@@ -353,7 +355,8 @@ private:
     std::optional<ShareId> expected_payout_parent_id_;
 
     std::optional<SidechainParameters> historical_params_;
-    std::function<std::vector<P2pMiningAnchor>()>
+    std::function<std::vector<P2pMiningAnchor>(
+        const P2pMiningContextProposal&)>
         load_historical_observations_;
     std::function<RpcCanonicalHeader(std::uint64_t)>
         historical_parent_lookup_;
