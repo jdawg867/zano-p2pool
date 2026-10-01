@@ -62,17 +62,19 @@ Do not expose the daemon RPC or metrics endpoint publicly. To accept remote
 miners or peers, change only the corresponding bind address and allow only the
 required TCP port through the host and provider firewalls.
 
-There are currently no default seed nodes. To connect to a temporary test peer,
-create a systemd override that reproduces `ExecStart` from the installed unit
-and appends one or more `--p2p-peer HOST:PORT` arguments:
+Testnet includes built-in P2P seed endpoints at
+`45.77.77.93:37888` and `68.232.175.242:37888`. A testnet node with P2P
+enabled uses these defaults automatically. Mainnet intentionally has no built-in
+seeds until dedicated mainnet seed infrastructure is deployed and validated.
 
-```bash
-sudo systemctl edit zano-p2pool
-```
+Operators can still add one or more explicit `--p2p-peer HOST:PORT` entries.
+Explicit peers are combined with the built-in seeds and duplicate endpoints are
+removed. Use `--no-seed-nodes` when only explicitly configured peers should be
+used.
 
-Systemd requires `ExecStart=` to be cleared before replacing it in an override.
-Run `systemctl cat zano-p2pool` afterward to review the effective command. Do
-not add a test endpoint to the distributed unit or environment template.
+Persistent command-line changes under systemd should be made with
+`systemctl edit zano-p2pool`. Clear the existing `ExecStart=` before replacing
+it, then inspect the result with `systemctl cat zano-p2pool`.
 
 ## 4. Start and verify
 

@@ -145,8 +145,9 @@ The seventh milestone hardens the node for persistent multi-node operation:
 - packaged Linux systemd/operator assets;
 - release-archive installation smoke testing.
 
-The built-in seed framework is complete, but permanent public seed
-infrastructure remains intentionally deferred until mainnet readiness.
+The built-in seed framework now includes two validated public testnet
+seed endpoints. Mainnet defaults remain intentionally empty until dedicated
+mainnet seed infrastructure is deployed and validated.
 
 Core Milestone 0.7 hardening is merged to `main`; operator/release readiness
 continues on testnet.
@@ -304,10 +305,16 @@ temporarily unavailable. RPC retries use bounded exponential backoff from 1 to
 30 seconds by default. Override the bounds with
 `--rpc-reconnect-initial-seconds` and `--rpc-reconnect-max-seconds`.
 
-No default seed nodes are currently active. Connect test nodes explicitly with
-one or more `--p2p-peer HOST:PORT` entries; duplicate endpoints are removed.
-The built-in seed framework remains available for permanent mainnet
-infrastructure, and `--no-seed-nodes` can disable those defaults when added.
+Testnet includes two built-in P2P seed endpoints:
+
+- `45.77.77.93:37888`
+- `68.232.175.242:37888`
+
+A testnet node with P2P enabled uses these defaults automatically. Explicit
+`--p2p-peer HOST:PORT` entries are combined with the default seeds and duplicate
+endpoints are removed. `--no-seed-nodes` disables the built-in defaults when an
+operator wants explicit peer control. Mainnet currently has no built-in seed
+endpoints.
 
 ## Current Zano network defaults
 

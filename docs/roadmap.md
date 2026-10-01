@@ -259,7 +259,7 @@ exact-Zano Release suite passed 33/33 in 3.76 seconds, and branch CI #409 passed
 ## Phase 7 — public network hardening
 
 - [x] mainnet-compatible sidechain parameters
-- [x] seed-node bootstrap framework (no active defaults)
+- [x] seed-node bootstrap framework and active public testnet seeds; mainnet defaults intentionally empty
 - [x] observability/metrics
 - [x] rate limits
 - [x] persistence recovery
