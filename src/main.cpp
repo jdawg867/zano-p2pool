@@ -320,6 +320,7 @@ std::uint64_t unix_time_seconds() noexcept {
 
 void print_usage(const char* program) {
     std::cout
+        << "zano-p2pool v" ZANO_P2POOL_VERSION "\n"
         << "Usage: " << program
         << " --wallet ZANO_ADDRESS"
         << " [--network testnet|mainnet]"
@@ -812,7 +813,7 @@ int main(int argc, char** argv) {
     try {
         const auto options = parse_args(argc, argv);
 
-        std::cout << "zano-p2pool v0.1.0-dev\n";
+        std::cout << "zano-p2pool v" ZANO_P2POOL_VERSION "\n";
         std::cout << "Network: " << network_name(options.network) << '\n';
         std::cout << "RPC: " << options.rpc_url << '\n';
         std::cout << "ProgPoWZ backend: "
