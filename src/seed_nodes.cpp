@@ -26,7 +26,18 @@ void append_unique(
 
 }  // namespace
 
-std::vector<P2pEndpoint> default_p2p_seed_nodes(P2pNetwork) {
+std::vector<P2pEndpoint> default_p2p_seed_nodes(P2pNetwork network) {
+    switch (network) {
+    case P2pNetwork::Testnet:
+        return {
+            {"45.77.77.93", 37888},
+            {"68.232.175.242", 37888},
+        };
+
+    case P2pNetwork::Mainnet:
+        return {};
+    }
+
     return {};
 }
 
@@ -34,18 +45,21 @@ std::vector<P2pEndpoint> p2p_bootstrap_nodes(
     P2pNetwork network,
     const std::vector<P2pEndpoint>& explicit_peers,
     bool include_default_seeds) {
+    const auto seeds = include_default_seeds
+        ? default_p2p_seed_nodes(network)
+        : std::vector<P2pEndpoint>{};
+
     std::vector<P2pEndpoint> result;
-    result.reserve(
-        explicit_peers.size() + (include_default_seeds ? 1U : 0U));
+    result.reserve(explicit_peers.size() + seeds.size());
 
     for (const auto& peer : explicit_peers) {
         append_unique(result, peer);
     }
-    if (include_default_seeds) {
-        for (const auto& seed : default_p2p_seed_nodes(network)) {
-            append_unique(result, seed);
-        }
+
+    for (const auto& seed : seeds) {
+        append_unique(result, seed);
     }
+
     return result;
 }
 
