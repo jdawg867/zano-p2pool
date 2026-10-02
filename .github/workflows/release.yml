@@ -74,10 +74,24 @@ jobs:
 
           echo "BOOST_ROOT=${BOOST_PREFIX}" >> "$GITHUB_ENV"
 
+      - name: Resolve build version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            ZANO_P2POOL_VERSION="${GITHUB_REF_NAME#v}"
+          else
+            ZANO_P2POOL_VERSION="0.1.0-dev"
+          fi
+
+          echo "ZANO_P2POOL_VERSION=${ZANO_P2POOL_VERSION}" >> "$GITHUB_ENV"
+
       - name: Configure exact-Zano Release build
         run: |
           cmake -S . -B build-zano \
             -DCMAKE_BUILD_TYPE=Release \
+            -DZANO_P2POOL_VERSION="${ZANO_P2POOL_VERSION}" \
             -DZANO_P2POOL_ZANO_SOURCE_DIR="$GITHUB_WORKSPACE/zano-src" \
             -DBOOST_ROOT="$BOOST_ROOT" \
             -DBoost_NO_SYSTEM_PATHS=ON \
@@ -151,7 +165,8 @@ jobs:
 
           file "${ROOT}/bin/zano-p2pool"
           file "${ROOT}/bin/zano-p2pool-header"
-          "${ROOT}/bin/zano-p2pool" --help >/dev/null
+          VERSION_OUTPUT="$("${ROOT}/bin/zano-p2pool" --help)"
+          grep -Fq "zano-p2pool v${ZANO_P2POOL_VERSION}" <<<"${VERSION_OUTPUT}"
 
           tar -C dist -czf "dist/${PACKAGE}.tar.gz" "${PACKAGE}"
           (
@@ -202,7 +217,14 @@ jobs:
           if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
             gh release upload "${GITHUB_REF_NAME}" dist/* --clobber
           else
+            RELEASE_FLAGS=()
+
+            if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
+              RELEASE_FLAGS+=(--prerelease)
+            fi
+
             gh release create "${GITHUB_REF_NAME}" \
+              "${RELEASE_FLAGS[@]}" \
               dist/* \
               --verify-tag \
               --generate-notes \

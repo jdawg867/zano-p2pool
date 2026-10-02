@@ -76,8 +76,21 @@ grep -qx 'ZANO_P2POOL_STRATUM_BIND=127.0.0.1' "$env_file"
 grep -qx 'ZANO_P2POOL_P2P_BIND=127.0.0.1' "$env_file"
 grep -qx 'ZANO_P2POOL_METRICS_BIND=127.0.0.1' "$env_file"
 grep -q 'REPLACE_WITH_A_STANDARD_TESTNET_ZANO_ADDRESS' "$env_file"
-if grep -Eq '([0-9]{1,3}\.){3}[0-9]{1,3}:37888' "$root/share/doc/zano-p2pool/README.md"; then
-  echo "Packaged README contains a hard-coded IPv4 seed endpoint" >&2
+readarray -t documented_seed_endpoints < <(
+  grep -Eo '([0-9]{1,3}\.){3}[0-9]{1,3}:37888' \
+    "$root/share/doc/zano-p2pool/README.md" |
+    sort -u || true
+)
+
+expected_seed_endpoints=(
+  "45.77.77.93:37888"
+  "68.232.175.242:37888"
+)
+
+if [[ "${documented_seed_endpoints[*]-}" != "${expected_seed_endpoints[*]}" ]]; then
+  echo "Packaged README seed endpoint set does not match approved testnet defaults" >&2
+  printf 'Expected: %s\n' "${expected_seed_endpoints[*]}" >&2
+  printf 'Actual:   %s\n' "${documented_seed_endpoints[*]-}" >&2
   exit 1
 fi
 

@@ -11,6 +11,13 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(ZANO_P2POOL_BUILD_TESTS "Build zano-p2pool tests" ON)
+
+set(
+    ZANO_P2POOL_VERSION
+    "${PROJECT_VERSION}-dev"
+    CACHE STRING
+    "Version string reported by the zano-p2pool executable"
+)
 set(ZANO_P2POOL_ZANO_SOURCE_DIR "" CACHE PATH
     "Path to a Zano source tree used to enable exact ProgPoWZ/Zano crypto support")
 
@@ -204,6 +211,11 @@ endif()
 
 add_executable(zano-p2pool src/main.cpp)
 target_link_libraries(zano-p2pool PRIVATE zano_p2pool_core)
+target_compile_definitions(
+    zano-p2pool
+    PRIVATE
+        ZANO_P2POOL_VERSION="${ZANO_P2POOL_VERSION}"
+)
 
 add_executable(zano-p2pool-header src/header_check.cpp)
 target_link_libraries(zano-p2pool-header PRIVATE zano_p2pool_core)
