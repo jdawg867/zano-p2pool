@@ -9,10 +9,10 @@ int main() {
 
     CHECK(testnet_seeds.size() == 2);
 
-    CHECK(testnet_seeds[0].host == "45.77.77.93");
+    CHECK(testnet_seeds[0].host == "zano-pool.ddns.net");
     CHECK(testnet_seeds[0].port == 37888);
 
-    CHECK(testnet_seeds[1].host == "68.232.175.242");
+    CHECK(testnet_seeds[1].host == "zano-pool2.ddns.net");
     CHECK(testnet_seeds[1].port == 37888);
 
     CHECK(
@@ -25,9 +25,9 @@ int main() {
             {});
 
     CHECK(defaults_only.size() == 2);
-    CHECK(defaults_only[0].host == "45.77.77.93");
+    CHECK(defaults_only[0].host == "zano-pool.ddns.net");
     CHECK(defaults_only[0].port == 37888);
-    CHECK(defaults_only[1].host == "68.232.175.242");
+    CHECK(defaults_only[1].host == "zano-pool2.ddns.net");
     CHECK(defaults_only[1].port == 37888);
 
     const P2pEndpoint manual{
@@ -49,10 +49,10 @@ int main() {
     CHECK(combined[0].host == "seed.example");
     CHECK(combined[0].port == 40000);
 
-    CHECK(combined[1].host == "45.77.77.93");
+    CHECK(combined[1].host == "zano-pool.ddns.net");
     CHECK(combined[1].port == 37888);
 
-    CHECK(combined[2].host == "68.232.175.242");
+    CHECK(combined[2].host == "zano-pool2.ddns.net");
     CHECK(combined[2].port == 37888);
 
     const auto disabled =

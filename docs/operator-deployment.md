@@ -63,7 +63,7 @@ miners or peers, change only the corresponding bind address and allow only the
 required TCP port through the host and provider firewalls.
 
 Testnet includes built-in P2P seed endpoints at
-`45.77.77.93:37888` and `68.232.175.242:37888`. A testnet node with P2P
+`zano-pool.ddns.net:37888` and `zano-pool2.ddns.net:37888`. A testnet node with P2P
 enabled uses these defaults automatically. Mainnet intentionally has no built-in
 seeds until dedicated mainnet seed infrastructure is deployed and validated.
 

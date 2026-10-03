@@ -30,8 +30,8 @@ std::vector<P2pEndpoint> default_p2p_seed_nodes(P2pNetwork network) {
     switch (network) {
     case P2pNetwork::Testnet:
         return {
-            {"45.77.77.93", 37888},
-            {"68.232.175.242", 37888},
+            {"zano-pool.ddns.net", 37888},
+            {"zano-pool2.ddns.net", 37888},
         };
 
     case P2pNetwork::Mainnet:
