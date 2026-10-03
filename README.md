@@ -307,8 +307,8 @@ temporarily unavailable. RPC retries use bounded exponential backoff from 1 to
 
 Testnet includes two built-in P2P seed endpoints:
 
-- `45.77.77.93:37888`
-- `68.232.175.242:37888`
+- `zano-pool.ddns.net:37888`
+- `zano-pool2.ddns.net:37888`
 
 A testnet node with P2P enabled uses these defaults automatically. Explicit
 `--p2p-peer HOST:PORT` entries are combined with the default seeds and duplicate
