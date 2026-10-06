@@ -100,9 +100,8 @@ surface.
 
 - [x] durable share stores are bound to the canonical sidechain ID
 - [x] production testnet backup/restore and restart recovery have been exercised
-- [ ] add a regression proving a testnet store cannot be opened as a mainnet
-      store and vice versa; implementation added on the audit branch and pending
-      exact-Zano validation
+- [x] add a regression proving a testnet store cannot be opened as a mainnet
+      store and vice versa; exact-Zano validation passes in both directions
 - [ ] define mainnet backup cadence, retention, restore drill, and rollback
       ownership before public operation
 
@@ -192,7 +191,9 @@ network/sidechain separation.
 No address-decoder code change is required solely to distinguish classic
 mainnet and testnet standard addresses at this revision. Deterministic
 runtime-network regression coverage and the explicit long-lived-mainnet
-activation guard are now implemented and validated. The next local regression
-pins the durable ShareStore boundary to the canonical testnet/mainnet
-SidechainIds in both directions. After that passes, the next external gate is a
+activation guard are implemented and validated. The durable ShareStore boundary
+is now also pinned to the canonical testnet/mainnet SidechainIds in both
+directions: testnet stores are rejected by mainnet readers and mainnet stores are
+rejected by testnet readers without mutating the original store. The exact-Zano
+suite passes 48/48 with this regression enabled. The next external gate is a
 non-mining compatibility check against a synchronized mainnet daemon.
