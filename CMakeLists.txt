@@ -57,6 +57,7 @@ add_library(zano_p2pool_core
     src/pow_target.cpp
     src/progpowz.cpp
     src/rpc_client.cpp
+    src/runtime_network.cpp
     src/seed_nodes.cpp
     src/share.cpp
     src/share_chain.cpp
@@ -274,6 +275,10 @@ if(ZANO_P2POOL_BUILD_TESTS)
     add_executable(seed_nodes_test tests/seed_nodes_test.cpp)
     target_link_libraries(seed_nodes_test PRIVATE zano_p2pool_core)
     add_test(NAME seed_nodes_test COMMAND seed_nodes_test)
+
+    add_executable(runtime_network_test tests/runtime_network_test.cpp)
+    target_link_libraries(runtime_network_test PRIVATE zano_p2pool_core)
+    add_test(NAME runtime_network_test COMMAND runtime_network_test)
 
     add_executable(testnet_fixture_test tests/testnet_fixture_test.cpp)
     target_link_libraries(testnet_fixture_test PRIVATE zano_p2pool_core)
