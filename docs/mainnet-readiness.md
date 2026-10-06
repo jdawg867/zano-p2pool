@@ -51,9 +51,9 @@ surface.
 - [x] default share-store paths are network-separated
 - [x] runtime maps the selected network into P2P and sidechain parent-network
       identity
-- [ ] add or pin regression coverage proving mainnet runtime configuration
-      selects the expected RPC, P2P network, sidechain ID, and persistence
-      namespace without contacting a live daemon
+- [x] add regression coverage proving mainnet runtime configuration selects
+      the expected RPC, P2P network, sidechain ID, and persistence namespace
+      without contacting a live daemon
 
 ### 2. Mainnet sidechain identity and consensus profile
 
@@ -101,7 +101,8 @@ surface.
 - [x] durable share stores are bound to the canonical sidechain ID
 - [x] production testnet backup/restore and restart recovery have been exercised
 - [ ] add a regression proving a testnet store cannot be opened as a mainnet
-      store and vice versa, if not already covered explicitly
+      store and vice versa; implementation added on the audit branch and pending
+      exact-Zano validation
 - [ ] define mainnet backup cadence, retention, restore drill, and rollback
       ownership before public operation
 
@@ -148,9 +149,11 @@ does not otherwise prevent a user from starting Stratum/P2P on mainnet. While
 the readiness audit is open, public beta builds should fail closed unless the
 operator supplies a deliberate experimental-mainnet opt-in.
 
-- [ ] add an explicit experimental-mainnet opt-in required for long-lived
+- [x] add an explicit `--experimental-mainnet` opt-in required for long-lived
       mainnet runtime
-- [ ] cover the guard with CLI/regression tests
+- [x] cover the deterministic guard and network mapping with regression tests
+- [x] verify the CLI fails closed before RPC startup without the opt-in and
+      rejects the opt-in when used with testnet
 - [ ] document removal or replacement of the experimental guard as a launch
       gate
 
@@ -187,7 +190,9 @@ hardfork activation heights, which is expected and already reflected in P2Pool's
 network/sidechain separation.
 
 No address-decoder code change is required solely to distinguish classic
-mainnet and testnet standard addresses at this revision. The next code work is
-therefore deterministic runtime-network regression coverage plus an explicit
-mainnet activation guard, followed by a non-mining compatibility check against a
-synchronized mainnet daemon.
+mainnet and testnet standard addresses at this revision. Deterministic
+runtime-network regression coverage and the explicit long-lived-mainnet
+activation guard are now implemented and validated. The next local regression
+pins the durable ShareStore boundary to the canonical testnet/mainnet
+SidechainIds in both directions. After that passes, the next external gate is a
+non-mining compatibility check against a synchronized mainnet daemon.
