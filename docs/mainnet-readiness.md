@@ -79,17 +79,21 @@ surface.
 
 ### 4. Zano daemon and block-template compatibility
 
-- [x] source-audit the pinned Zano commit
+- [x] source-audit the historical pinned Zano commit
       `1508cf6ae3ef44a52d66137d30f800b06ce917ee`
+- [ ] move the launch/runtime audit pin to a current HF7-capable Zano release;
+      upstream `release` at `b400b93f5d8bae42d5f5ac643c804d30faf9f8de`
+      reports build 603 and requires minimum build 600 for HF7
 - [x] pin the source constants relevant to the current payout path:
       transaction version 4, HF6 miner-transaction output cap 32, and
       125000-byte full-reward zone
 - [x] pin HF6 activation configuration from the audited source: mainnet active
       after height 3833000 with minimum build 501; testnet active after height
       1050 with minimum build 474
-- [ ] verify the exact Zano mainnet runtime version/build selected for launch
-- [ ] confirm the synchronized mainnet daemon is beyond the required hardfork
-      activation and reports the expected runtime rules
+- [ ] verify the exact HF7-capable Zano mainnet runtime version/build selected
+      for launch; build 506 is now below the upstream minimum build 600
+- [ ] confirm the synchronized mainnet daemon is beyond the active hardfork
+      activation and reports the expected HF7 runtime rules
 - [ ] confirm mainnet `getblocktemplate` fields exercise the same canonical
       mining-header path used by the current exact-Zano tests
 - [ ] run a non-mining mainnet template/header compatibility check against a
@@ -175,9 +179,11 @@ audit gates above. The first implementation work should focus on deterministic
 mainnet configuration/address regression coverage and on verifying the active
 mainnet daemon/miner-transaction assumptions against the pinned Zano source.
 
-The existing beta.2 testnet nodes should remain running unchanged while this
-audit proceeds, and their previous binaries and unit backups should remain
-available until the longer beta soak is considered complete.
+The existing beta.2 testnet nodes must not be mutated until their current
+runtime state is inspected, but they are now subject to an urgent compatibility
+re-audit because upstream HF7 requires build 600 on testnet as well as mainnet.
+Their previous binaries and unit backups must remain available during that
+review.
 
 ## Pass 2 source-audit findings
 
@@ -197,3 +203,29 @@ directions: testnet stores are rejected by mainnet readers and mainnet stores ar
 rejected by testnet readers without mutating the original store. The exact-Zano
 suite passes 48/48 with this regression enabled. The next external gate is a
 non-mining compatibility check against a synchronized mainnet daemon.
+
+
+## Pass 3 live-daemon finding: HF7 build cutoff
+
+A clean mainnet daemon built from the historical exact-Zano pin
+`1508cf6ae3ef44a52d66137d30f800b06ce917ee` successfully installed the
+official height-3709300 LMDB snapshot, opened the expected mainnet genesis,
+bound RPC and P2P to loopback, and exposed RPC at height 3709301. It could not
+complete a P2P handshake with current public seed peers.
+
+The current upstream Zano `release` branch is
+`b400b93f5d8bae42d5f5ac643c804d30faf9f8de` (build 603). Its runtime
+configuration adds HF7 at height 3833000 on mainnet and height 1050 on testnet,
+with minimum build 600 in both networks. Current peers reject clients below the
+active hardfork minimum build during handshake. This explains why the
+historical build-506 daemon can establish TCP connections to current seed hosts
+but receives no successful protocol handshake.
+
+Consequences:
+
+- build 506 is no longer a valid mainnet compatibility target;
+- exact-Zano P2Pool tests must be re-audited against an HF7-capable source pin;
+- the beta.2 testnet daemon deployment also requires immediate read-only
+  compatibility inspection because its pinned daemon build is 506;
+- no mainnet template/mining validation may proceed until the Zano pin is
+  updated and the exact-Zano suite passes against the new pin.
