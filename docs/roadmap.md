@@ -429,18 +429,18 @@ locally on 2026-09-15.
 - [x] packaged Linux systemd service and environment template
 - [x] installation, health-check, upgrade, and rollback guide
 - [x] release-archive installation smoke test
-- [ ] sustained multi-node testnet soak test
-- [ ] backup and recovery drill
+- [x] sustained multi-node testnet soak test
+- [x] backup and recovery drill
 - [ ] permanent mainnet seed infrastructure
-- [ ] first tagged public beta release
+- [x] first tagged public beta release
 
 Checkpoint 1 converts the validated temporary VPS configuration into reusable
 operator assets without embedding a wallet, peer, or server address. Release
 archives carry a hardened systemd unit, a loopback-safe environment template,
 and an operator guide covering checksum verification, least-privilege install,
 listener exposure, health checks, upgrades, rollback, and share-store backup.
-Both default seed lists remain empty; permanent seed infrastructure is deferred
-until mainnet readiness.
+Mainnet default seeds remain intentionally empty pending dedicated mainnet
+infrastructure. Testnet now has two public DNS seed endpoints.
 
 Checkpoint 2 adds a fail-closed installation smoke test for the exact archive
 produced by the Release workflow. It verifies the published checksum, rejects
@@ -448,3 +448,27 @@ unsafe or out-of-root archive members, requires every binary, document, service,
 and configuration file, runs the packaged node's `--help` path, rechecks dynamic
 dependency policy, asserts loopback listener defaults, stages the documented
 installation modes, and parses the staged systemd unit before artifact upload.
+
+Checkpoint 3 completes sustained public-testnet deployment and recovery validation.
+Two independent public seed nodes remained converged on the same sidechain tip
+during the live soak with healthy persistence and zero template-refresh failures.
+The recovery drill on Node A backed up and restored the exact production share
+store, including the large mining-work archive, then replayed it successfully
+through the hardened restart path while preserving the validated sidechain state.
+
+Checkpoint 4 completes the first tagged public beta release and its follow-up seed
+hostname release. `v0.1.0-beta.1` was built and published from the audited Zano
+toolchain, independently checksum-verified, and marked as a prerelease. The
+subsequent `v0.1.0-beta.2` release replaced raw testnet seed IPs with
+`zano-pool.ddns.net:37888` and `zano-pool2.ddns.net:37888`. The exact published
+beta.2 binary was deployed to both public testnet nodes, passed post-deployment
+two-node convergence checks, and completed live default-seed bootstrap proofs in
+both directions without explicit peer overrides.
+
+Checkpoint 5 begins the mainnet-readiness audit. Current code already separates
+mainnet and testnet RPC defaults, share-store namespaces, P2P network identities,
+and canonical sidechain IDs; mainnet and testnet sidechains intentionally have
+different IDs even though their current economic parameters match. Mainnet seed
+defaults remain empty by design. Remaining work is tracked in
+`docs/mainnet-readiness.md` and must be completed before permanent mainnet seed
+infrastructure is provisioned.
