@@ -225,7 +225,28 @@ Consequences:
 
 - build 506 is no longer a valid mainnet compatibility target;
 - exact-Zano P2Pool tests must be re-audited against an HF7-capable source pin;
-- the beta.2 testnet daemon deployment also requires immediate read-only
-  compatibility inspection because its pinned daemon build is 506;
+- the beta.2 testnet daemon deployment requires an independent HF7-capable
+  network-view check because its historical daemon build may still be connected
+  to a legacy pre-HF7 peer partition;
 - no mainnet template/mining validation may proceed until the Zano pin is
   updated and the exact-Zano suite passes against the new pin.
+
+
+### Testnet follow-up observation
+
+The two deployed testnet daemons both reported height 212480, eight outgoing
+connections, eight synchronized connections, zero height delta, and
+`daemon_network_state=2`. This proves the deployed daemons still have a live
+peer set; it does not prove that peer set is the current HF7 network.
+
+The historical build-506 RPC returns seven `is_hardfok_active` booleans because
+that source revision defines hardfork IDs 0 through 6 only. The seven true values
+therefore demonstrate activation through HF6, not HF7. Current upstream release
+defines an eighth hardfork ID (HF7) and minimum build 600.
+
+Accordingly, the previous working hypothesis that build 506 had already been
+fully disconnected by the HF7 cutoff is too strong. The remaining ambiguity is
+whether the current build-506 testnet nodes are on the authoritative network or
+on a still-populated legacy partition. Resolve this by building an isolated
+HF7-capable release daemon and comparing its network height/peer view before
+changing either production testnet daemon.
