@@ -250,3 +250,10 @@ whether the current build-506 testnet nodes are on the authoritative network or
 on a still-populated legacy partition. Resolve this by building an isolated
 HF7-capable release daemon and comparing its network height/peer view before
 changing either production testnet daemon.
+
+
+### HF7 build integration finding
+
+The first P2Pool build against Zano release `b400b93f5d8bae42d5f5ac643c804d30faf9f8de` reached final linking but failed because current Zano `src/crypto/crypto.cpp` uses `OPENSSL_cleanse()` and P2Pool's extracted static curve backend did not propagate `OpenSSL::Crypto` to final consumers. This is a build-integration dependency change, not evidence of a consensus incompatibility.
+
+The audit branch now links the exact Zano curve backend transitively with `OpenSSL::Crypto`. HF7 exact-Zano validation remains pending until the complete 48-test suite and critical mining subset pass.
