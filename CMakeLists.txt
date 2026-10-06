@@ -107,6 +107,7 @@ if(ZANO_P2POOL_ZANO_SOURCE_DIR)
 
     enable_language(C)
     find_package(Boost REQUIRED COMPONENTS serialization)
+    find_package(OpenSSL REQUIRED COMPONENTS Crypto)
     find_package(ZLIB REQUIRED)
 
     add_subdirectory(
@@ -154,7 +155,14 @@ if(ZANO_P2POOL_ZANO_SOURCE_DIR)
             -ffunction-sections
             -fdata-sections
         )
-        target_link_libraries(zano_p2pool_zano_curve PUBLIC Threads::Threads)
+        # HF7-capable Zano crypto.cpp uses OPENSSL_cleanse(). Keep the
+        # dependency transitive because this is a static library and its
+        # consumers must carry libcrypto on the final link line.
+        target_link_libraries(zano_p2pool_zano_curve
+            PUBLIC
+                Threads::Threads
+                OpenSSL::Crypto
+        )
 
         target_compile_definitions(zano_p2pool_core PUBLIC
             ZANO_P2POOL_HAVE_ZANO_CURVE=1
