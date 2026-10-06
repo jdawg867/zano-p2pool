@@ -33,10 +33,14 @@ Built-in seed policy is asymmetric by design:
   `zano-pool.ddns.net:37888` and `zano-pool2.ddns.net:37888`;
 - mainnet has no built-in seeds yet.
 
-The standard Zano payout-address decoder currently accepts the classic
-non-auditable address format using base58 prefix `0xc5`. Its API is not
-network-parameterized, so the mainnet/testnet address-prefix assumption must be
-verified against the pinned Zano source before mainnet launch.
+The standard Zano payout-address decoder accepts the classic non-auditable
+address format using base58 prefix `0xc5`. The pinned Zano source at
+`1508cf6ae3ef44a52d66137d30f800b06ce917ee` defines
+`CURRENCY_PUBLIC_ADDRESS_BASE58_PREFIX` as `0xc5` outside the
+mainnet/testnet conditional, so the classic standard-address prefix is shared by
+both builds at this audited revision. Integrated, auditable, and gateway address
+formats use different prefixes and remain outside the P2Pool decoder's supported
+surface.
 
 ## Audit gates
 
@@ -65,22 +69,29 @@ verified against the pinned Zano source before mainnet launch.
 ### 3. Wallet and payout address semantics
 
 - [x] standard payout-address decoding is checksum- and prefix-validated
-- [ ] verify from the pinned Zano source whether base58 prefix `0xc5` is valid
-      for the intended mainnet payout address format and whether testnet uses the
-      same or a different prefix
-- [ ] add pinned mainnet address vectors from a non-secret public address
-- [ ] if network address prefixes differ, make payout-address validation
-      network-aware and reject cross-network addresses
-- [ ] confirm unsupported integrated/auditable/subaddress formats remain
-      intentionally fail-closed unless explicitly implemented
+- [x] verify from the pinned Zano source that classic standard addresses use
+      base58 prefix `0xc5` for both mainnet and testnet at the audited revision
+- [ ] add a pinned non-secret real-world mainnet standard-address vector
+- [x] network-specific prefix handling is not required for the currently
+      supported classic standard-address format at the audited revision
+- [x] integrated, auditable, gateway, and other unsupported address formats
+      remain intentionally fail-closed unless explicitly implemented
 
 ### 4. Zano daemon and block-template compatibility
 
-- [ ] verify the audited Zano commit and runtime version intended for mainnet
+- [x] source-audit the pinned Zano commit
+      `1508cf6ae3ef44a52d66137d30f800b06ce917ee`
+- [x] pin the source constants relevant to the current payout path:
+      transaction version 4, HF6 miner-transaction output cap 32, and
+      125000-byte full-reward zone
+- [x] pin HF6 activation configuration from the audited source: mainnet active
+      after height 3833000 with minimum build 501; testnet active after height
+      1050 with minimum build 474
+- [ ] verify the exact Zano mainnet runtime version/build selected for launch
+- [ ] confirm the synchronized mainnet daemon is beyond the required hardfork
+      activation and reports the expected runtime rules
 - [ ] confirm mainnet `getblocktemplate` fields exercise the same canonical
       mining-header path used by the current exact-Zano tests
-- [ ] confirm the active mainnet hardfork/miner-transaction rules are compatible
-      with the direct PPLNS miner-transaction construction path
 - [ ] run a non-mining mainnet template/header compatibility check against a
       synchronized local mainnet daemon
 - [ ] do not submit a mainnet block during compatibility validation
@@ -130,7 +141,20 @@ verified against the pinned Zano source before mainnet launch.
 - [ ] document the exact rollback trigger and procedure
 - [ ] perform a controlled restart and recovery drill before enabling miners
 
-### 9. Release and launch sequence
+### 9. Explicit mainnet activation guard
+
+The current executable accepts `--network mainnet` and emits a warning, but it
+does not otherwise prevent a user from starting Stratum/P2P on mainnet. While
+the readiness audit is open, public beta builds should fail closed unless the
+operator supplies a deliberate experimental-mainnet opt-in.
+
+- [ ] add an explicit experimental-mainnet opt-in required for long-lived
+      mainnet runtime
+- [ ] cover the guard with CLI/regression tests
+- [ ] document removal or replacement of the experimental guard as a launch
+      gate
+
+### 10. Release and launch sequence
 
 - [ ] complete all code/regression gaps on this audit branch
 - [ ] pass the full normal and exact-Zano test suites
@@ -152,3 +176,18 @@ mainnet daemon/miner-transaction assumptions against the pinned Zano source.
 The existing beta.2 testnet nodes should remain running unchanged while this
 audit proceeds, and their previous binaries and unit backups should remain
 available until the longer beta soak is considered complete.
+
+## Pass 2 source-audit findings
+
+The exact pinned Zano source confirms that classic standard-address prefix
+`0xc5`, transaction version 4, the 32-output post-HF6 transaction limit, and
+the 125000-byte full-reward zone are not testnet-only assumptions. Mainnet and
+testnet do diverge in daemon ports, network identity, formation version, and
+hardfork activation heights, which is expected and already reflected in P2Pool's
+network/sidechain separation.
+
+No address-decoder code change is required solely to distinguish classic
+mainnet and testnet standard addresses at this revision. The next code work is
+therefore deterministic runtime-network regression coverage plus an explicit
+mainnet activation guard, followed by a non-mining compatibility check against a
+synchronized mainnet daemon.
