@@ -260,3 +260,8 @@ The first P2Pool build against Zano release `b400b93f5d8bae42d5f5ac643c804d30faf
 The audit branch now links the exact Zano curve backend transitively with `OpenSSL::Crypto`. Validation against HF7 build 603 passes: the final binary resolves `libcrypto.so.3`, the complete exact-Zano suite passes 48/48, the critical mining/payout subset passes 7/7, and the long-lived mainnet guard remains fail-closed before RPC startup.
 
 CI and release workflows now pin the same HF7 commit and install the explicit OpenSSL development dependency. The packaged BUILD-INFO source pin and ProgPoWZ audit baseline were updated to the same commit. The next gate is CI/release-workflow validation followed by an isolated HF7-capable testnet daemon network-view comparison before either production testnet daemon is changed.
+
+
+### HF7 isolated testnet daemon build
+
+The isolated Zano testnet daemon built from `b400b93f5d8bae42d5f5ac643c804d30faf9f8de` completed successfully as `Zano_testnet v2.2.3.603[testnet-b400b93]`. The audited binary is `/home/jdawg/work/projects/zano-hf7-audit-b400b93/build-testnet-p2pool-audit/src/zanod` with SHA-256 `d2bc2da109e8945f1e4724a0a360c77712fd0371d9ab1bf6273d5d49ba2ed507`. Testnet RPC/P2P defaults remain 12111/11314 and no production VPS was modified. The next gate is an isolated live network-view comparison against the two deployed build-506 testnet daemons.
