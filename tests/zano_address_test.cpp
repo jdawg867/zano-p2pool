@@ -92,6 +92,21 @@ int main() {
     CHECK(decoded.payout == expected);
     CHECK(std::string(zano_address_decode_status_name(decoded.status)) == "valid");
 
+    // Public standard-address vector from exact HF7 Zano source
+    // b400b93. This address was also accepted by the synchronized
+    // build-603 mainnet daemon during the non-mining template audit.
+    constexpr std::string_view upstream_standard_address =
+        "ZxCSpsGGeJsS8fwvQ4HktDU3qBeauoJTR6j73jAWWZxFXdF7XTbGm4YfS2kXJmAP4Rf5BVsSQ9iZ45XANXEYsrLN2L2W77dH7";
+
+    const ZanoAddressDecodeResult upstream_decoded =
+        decode_zano_standard_address(upstream_standard_address);
+
+    CHECK(upstream_decoded.status == ZanoAddressDecodeStatus::Valid);
+    CHECK(bytes_to_hex(upstream_decoded.payout.spend_public_key) ==
+          "558d9e567d08964189c1d005ddf6a1b6d8c8b00a89b0223bae83990a1e7cb718");
+    CHECK(bytes_to_hex(upstream_decoded.payout.view_public_key) ==
+          "1f0468510235e5c46abd28e23da6e39e3dd3856664d71b060288f5a10f279aad");
+
     std::string bad_checksum = address;
     bad_checksum.back() = bad_checksum.back() == '1' ? '2' : '1';
     CHECK(decode_zano_standard_address(bad_checksum).status ==

@@ -61,9 +61,9 @@ surface.
 - [x] current sidechain economic parameters are pinned by deterministic
       serialization and ID vectors
 - [x] P2P handshake validation rejects wrong-network and wrong-sidechain peers
-- [ ] re-audit every consensus-relevant parameter against the intended mainnet
+- [x] re-audit every consensus-relevant parameter against the intended mainnet
       launch profile
-- [ ] record the exact mainnet sidechain ID and parameter encoding in the
+- [x] record the exact mainnet sidechain ID and parameter encoding in the
       operator launch checklist
 
 ### 3. Wallet and payout address semantics
@@ -71,7 +71,7 @@ surface.
 - [x] standard payout-address decoding is checksum- and prefix-validated
 - [x] verify from the pinned Zano source that classic standard addresses use
       base58 prefix `0xc5` for both mainnet and testnet at the audited revision
-- [ ] add a pinned non-secret real-world mainnet standard-address vector
+- [x] add a pinned non-secret real-world mainnet standard-address vector
 - [x] network-specific prefix handling is not required for the currently
       supported classic standard-address format at the audited revision
 - [x] integrated, auditable, gateway, and other unsupported address formats
@@ -363,3 +363,65 @@ This closes the synchronized-daemon and live
 build. It does not authorize public mainnet mining: mainnet sidechain launch
 parameters, seed infrastructure, operator security, observability, rollback,
 and launch sequencing remain open gates.
+
+## Mainnet v3 consensus launch profile
+
+The mainnet sidechain consensus profile was independently re-audited after the
+HF7 live-daemon compatibility pass. The canonical profile is frozen under
+parameter domain `ZP2SIDV3` with parent-network tag `2`.
+
+The launch profile is:
+
+- parameter version: 3;
+- parent network: mainnet (`2`);
+- minimum share version: 2;
+- maximum share version: 2;
+- maximum future timestamp tolerance: 60 seconds;
+- maximum parent timestamp backstep: 60 seconds;
+- target share interval: 10 seconds;
+- minimum share difficulty: 100000000;
+- difficulty history: 2160 shares;
+- PPLNS share-history cap: 32 shares;
+- PPLNS work cap: 2x current Zano network difficulty.
+
+The canonical 67-byte parameter encoding is:
+
+`5a50325349445633020202000000000000003c000000000000003c000000000000000a0000000005f5e100000000000000087000000000000000200000000000000002`
+
+The resulting canonical mainnet SidechainId is:
+
+`8cfa674d782bfc0a3824d654617c814da98ea2ec64b5701a41ddd40a522225bf`
+
+The encoding and SidechainId are pinned by `p2p_protocol_test`.
+`runtime_network_test`, `persistence_network_test`, `pplns_test`,
+`share_chain_test`, and `p2p_protocol_test` all passed during the independent
+profile audit.
+
+This profile is the v3 mainnet consensus identity. Any future
+consensus-relevant parameter change must use a new parameter version/domain and
+therefore derive a different SidechainId rather than silently altering the
+existing network.
+
+
+## Pinned public mainnet standard-address vector
+
+Exact Zano HF7 source commit
+`b400b93f5d8bae42d5f5ac643c804d30faf9f8de` publishes this classic standard
+Zano address as an RPC example:
+
+`ZxCSpsGGeJsS8fwvQ4HktDU3qBeauoJTR6j73jAWWZxFXdF7XTbGm4YfS2kXJmAP4Rf5BVsSQ9iZ45XANXEYsrLN2L2W77dH7`
+
+The exact source defines the standard-address Base58 prefix as `0xc5`.
+P2Pool decodes the public vector to:
+
+- spend public key:
+  `558d9e567d08964189c1d005ddf6a1b6d8c8b00a89b0223bae83990a1e7cb718`;
+- view public key:
+  `1f0468510235e5c46abd28e23da6e39e3dd3856664d71b060288f5a10f279aad`.
+
+The synchronized `Zano v2.2.3.603[b400b93]` mainnet daemon independently
+accepted this address as the reward destination during the successful
+non-mining `getblocktemplate` compatibility audit.
+
+The vector is pinned directly in `zano_address_test`. It contains public
+address material only and no wallet secret keys.
