@@ -93,13 +93,13 @@ surface.
 - [x] select HF7-capable Zano build 603 at
       `b400b93f5d8bae42d5f5ac643c804d30faf9f8de` as the current audit target;
       final launch selection remains subject to a freshness recheck
-- [ ] confirm the synchronized mainnet daemon is beyond the active hardfork
+- [x] confirm the synchronized mainnet daemon is beyond the active hardfork
       activation and reports the expected HF7 runtime rules
-- [ ] confirm mainnet `getblocktemplate` fields exercise the same canonical
+- [x] confirm mainnet `getblocktemplate` fields exercise the same canonical
       mining-header path used by the current exact-Zano tests
-- [ ] run a non-mining mainnet template/header compatibility check against a
+- [x] run a non-mining mainnet template/header compatibility check against a
       synchronized local mainnet daemon
-- [ ] do not submit a mainnet block during compatibility validation
+- [x] do not submit a mainnet block during compatibility validation
 
 ### 5. Persistence and restart recovery
 
@@ -259,9 +259,107 @@ The first P2Pool build against Zano release `b400b93f5d8bae42d5f5ac643c804d30faf
 
 The audit branch now links the exact Zano curve backend transitively with `OpenSSL::Crypto`. Validation against HF7 build 603 passes: the final binary resolves `libcrypto.so.3`, the complete exact-Zano suite passes 48/48, the critical mining/payout subset passes 7/7, and the long-lived mainnet guard remains fail-closed before RPC startup.
 
-CI and release workflows now pin the same HF7 commit and install the explicit OpenSSL development dependency. The packaged BUILD-INFO source pin and ProgPoWZ audit baseline were updated to the same commit. The next gate is CI/release-workflow validation followed by an isolated HF7-capable testnet daemon network-view comparison before either production testnet daemon is changed.
+CI and release workflows now pin the same HF7 commit and install the explicit OpenSSL development dependency. The packaged BUILD-INFO source pin and ProgPoWZ audit baseline were updated to the same commit. CI/release-workflow validation and the isolated HF7-capable testnet network comparison were subsequently completed; the results are recorded below.
 
 
 ### HF7 isolated testnet daemon build
 
-The isolated Zano testnet daemon built from `b400b93f5d8bae42d5f5ac643c804d30faf9f8de` completed successfully as `Zano_testnet v2.2.3.603[testnet-b400b93]`. The audited binary is `/home/jdawg/work/projects/zano-hf7-audit-b400b93/build-testnet-p2pool-audit/src/zanod` with SHA-256 `d2bc2da109e8945f1e4724a0a360c77712fd0371d9ab1bf6273d5d49ba2ed507`. Testnet RPC/P2P defaults remain 12111/11314 and no production VPS was modified. The next gate is an isolated live network-view comparison against the two deployed build-506 testnet daemons.
+The isolated Zano testnet daemon built from `b400b93f5d8bae42d5f5ac643c804d30faf9f8de` completed successfully as `Zano_testnet v2.2.3.603[testnet-b400b93]`. The audited binary is `/home/jdawg/work/projects/zano-hf7-audit-b400b93/build-testnet-p2pool-audit/src/zanod` with SHA-256 `d2bc2da109e8945f1e4724a0a360c77712fd0371d9ab1bf6273d5d49ba2ed507`. Testnet RPC/P2P defaults remain 12111/11314 and no production VPS was modified. The isolated live network-view comparison was subsequently completed; the result is recorded below.
+
+## HF7 isolated testnet network-view result
+
+The isolated build-603 testnet daemon established the authoritative HF7
+boundary behavior without modifying either production VPS. The build-603 node
+validated the same canonical history as the deployed build-506 nodes through
+height 1050. HF7 becomes active for block height 1051.
+
+At that transition the build-603 daemon rejected the legacy branch with a
+transaction whose `hardfork_id` remained 6 while the current hardfork was 7.
+It also rejected build-506/build-513 peers as below the minimum client build
+for the current hardfork era. The two deployed production testnet daemons agree
+with each other on a different height-1051 block and therefore remain healthy
+inside a populated legacy HF6 partition rather than on the authoritative HF7
+testnet chain.
+
+Consequences:
+
+- production testnet has not been mutated;
+- the existing build-506 testnet deployment must not be used as evidence of
+  HF7 compatibility;
+- upgrading only one of the two production daemons would intentionally split
+  the current P2Pool test deployment and is therefore not an appropriate
+  canary procedure;
+- the authoritative HF7 behavior is now understood well enough to continue
+  the independent mainnet-readiness audit.
+
+
+## HF7 synchronized mainnet and live-template validation
+
+An isolated mainnet daemon built from exact Zano commit
+`b400b93f5d8bae42d5f5ac643c804d30faf9f8de` was validated as
+`Zano v2.2.3.603[b400b93]`.
+
+The daemon binary used for the audit had SHA-256:
+
+`d41cdaf6bf962a0b05f87d8cf4547236a9b1700c5daabd9ec04d542a953ff765`
+
+The official LMDB predownload snapshot at height 3833000 was installed into an
+isolated workstation data directory. The resulting LMDB reached approximately
+25.64 GiB and the daemon synchronized forward onto the current HF7 mainnet
+chain. A later online-state gate reported:
+
+- local height: 3849193;
+- network height: 3849193;
+- `daemon_network_state=2`;
+- eight outgoing peers;
+- five synchronized peers;
+- all eight `is_hardfok_active` entries true.
+
+A dedicated P2Pool exact-Zano audit build was then configured against the same
+HF7 Zano source and Boost 1.84. Static Boost.Serialization was used and the
+resulting `zano-p2pool` binary had SHA-256:
+
+`08cb29b1c9d908452032e300e82296b13838574a758ba11de151cad6606b9171`
+
+The complete exact-Zano regression suite passed 48/48 before the live mainnet
+template check.
+
+The live non-mining template audit was then performed against the synchronized
+loopback-only daemon. At the start of that audit the daemon reported height and
+network height 3849231, `daemon_network_state=2`, eight outgoing peers, eight
+synchronized peers, and all eight hardfork flags active.
+
+P2Pool successfully fetched and parsed a current mainnet `getblocktemplate` and
+derived the canonical ProgPoWZ mining work:
+
+- template height: 3849231;
+- ProgPoWZ epoch: 128;
+- previous block hash:
+  `32f0f2c75f2dd27202b0d2834ddba2a22806563c0653a019a0eb593973999352`;
+- difficulty: `36291792275876`;
+- target:
+  `000000000007c181b24008b05489e84c21b31f5c74ef8d910c17b41e6d5b68d9`;
+- ProgPoWZ seed:
+  `7c4fb8a5d141973b69b521ce76b0dc50f0d2834d817c7f8310a6ab5becc6bb0c`;
+- serialized block-template size: 1873 bytes;
+- regular transaction count: 15;
+- canonical mining blob size: 81 bytes;
+- derived mining header:
+  `7b75ced7a55b80cb66157c317654bae4a15b3210501c201c658a5a8b4c3648b0`.
+
+The template's `prev_hash` was independently queried from the daemon as the
+canonical block hash at height 3849230 and matched exactly.
+
+The one-shot P2Pool process exited with status zero. Stratum, P2Pool networking,
+metrics, and persistent share storage were not started. Neither `submitblock`
+nor `submitblock2` was invoked, and no mainnet block was submitted.
+
+The captured one-shot template evidence file had SHA-256:
+
+`ed0d875302598bdfa9d814dc77105b314d2ea6d406418d02b508d52c0d19e2a5`
+
+This closes the synchronized-daemon and live
+`getblocktemplate`/mining-header compatibility gates for the audited HF7
+build. It does not authorize public mainnet mining: mainnet sidechain launch
+parameters, seed infrastructure, operator security, observability, rollback,
+and launch sequencing remain open gates.
