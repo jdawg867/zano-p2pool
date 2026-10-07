@@ -81,17 +81,18 @@ surface.
 
 - [x] source-audit the historical pinned Zano commit
       `1508cf6ae3ef44a52d66137d30f800b06ce917ee`
-- [ ] move the launch/runtime audit pin to a current HF7-capable Zano release;
-      upstream `release` at `b400b93f5d8bae42d5f5ac643c804d30faf9f8de`
-      reports build 603 and requires minimum build 600 for HF7
+- [x] move CI/release exact-Zano source pin to HF7-capable Zano release
+      `b400b93f5d8bae42d5f5ac643c804d30faf9f8de` (build 603, minimum build
+      600 for HF7); branch validation passes locally and CI is the next gate
 - [x] pin the source constants relevant to the current payout path:
       transaction version 4, HF6 miner-transaction output cap 32, and
       125000-byte full-reward zone
 - [x] pin HF6 activation configuration from the audited source: mainnet active
       after height 3833000 with minimum build 501; testnet active after height
       1050 with minimum build 474
-- [ ] verify the exact HF7-capable Zano mainnet runtime version/build selected
-      for launch; build 506 is now below the upstream minimum build 600
+- [x] select HF7-capable Zano build 603 at
+      `b400b93f5d8bae42d5f5ac643c804d30faf9f8de` as the current audit target;
+      final launch selection remains subject to a freshness recheck
 - [ ] confirm the synchronized mainnet daemon is beyond the active hardfork
       activation and reports the expected HF7 runtime rules
 - [ ] confirm mainnet `getblocktemplate` fields exercise the same canonical
@@ -256,4 +257,6 @@ changing either production testnet daemon.
 
 The first P2Pool build against Zano release `b400b93f5d8bae42d5f5ac643c804d30faf9f8de` reached final linking but failed because current Zano `src/crypto/crypto.cpp` uses `OPENSSL_cleanse()` and P2Pool's extracted static curve backend did not propagate `OpenSSL::Crypto` to final consumers. This is a build-integration dependency change, not evidence of a consensus incompatibility.
 
-The audit branch now links the exact Zano curve backend transitively with `OpenSSL::Crypto`. HF7 exact-Zano validation remains pending until the complete 48-test suite and critical mining subset pass.
+The audit branch now links the exact Zano curve backend transitively with `OpenSSL::Crypto`. Validation against HF7 build 603 passes: the final binary resolves `libcrypto.so.3`, the complete exact-Zano suite passes 48/48, the critical mining/payout subset passes 7/7, and the long-lived mainnet guard remains fail-closed before RPC startup.
+
+CI and release workflows now pin the same HF7 commit and install the explicit OpenSSL development dependency. The packaged BUILD-INFO source pin and ProgPoWZ audit baseline were updated to the same commit. The next gate is CI/release-workflow validation followed by an isolated HF7-capable testnet daemon network-view comparison before either production testnet daemon is changed.
