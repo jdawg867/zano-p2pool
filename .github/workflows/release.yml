@@ -23,7 +23,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: hyle-team/zano
-          ref: 1508cf6ae3ef44a52d66137d30f800b06ce917ee
+          ref: b400b93f5d8bae42d5f5ac643c804d30faf9f8de
           path: zano-src
           sparse-checkout: |
             contrib/ethereum/libethash
@@ -44,6 +44,7 @@ jobs:
             file \
             libcurl4-openssl-dev \
             libjson-c-dev \
+            libssl-dev \
             pkg-config
 
       - name: Build release Boost toolchain
@@ -136,7 +137,7 @@ jobs:
 
           {
             echo "zano-p2pool commit: ${GITHUB_SHA}"
-            echo "audited Zano commit: 1508cf6ae3ef44a52d66137d30f800b06ce917ee"
+            echo "audited Zano commit: b400b93f5d8bae42d5f5ac643c804d30faf9f8de"
             echo "Boost toolchain: 1.84.0 static serialization"
             echo "build type: Release"
             echo "target: Linux x86_64"
