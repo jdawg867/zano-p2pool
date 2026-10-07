@@ -107,7 +107,7 @@ surface.
 - [x] production testnet backup/restore and restart recovery have been exercised
 - [x] add a regression proving a testnet store cannot be opened as a mainnet
       store and vice versa; exact-Zano validation passes in both directions
-- [ ] define mainnet backup cadence, retention, restore drill, and rollback
+- [x] define mainnet backup cadence, retention, restore drill, and rollback
       ownership before public operation
 
 ### 6. P2P bootstrap and seed infrastructure
@@ -425,3 +425,28 @@ non-mining `getblocktemplate` compatibility audit.
 
 The vector is pinned directly in `zano_address_test`. It contains public
 address material only and no wallet secret keys.
+
+## Mainnet recovery policy
+
+The operator deployment guide now defines the mainnet recovery generation as
+the matching `shares.dat`, `shares.dat.validation`, and `shares.dat.work/`
+state together with the active/previous binaries and service configuration.
+
+The initial-mainnet policy requires:
+
+- a quiesced backup before every runtime/configuration change;
+- at least daily backups during the initial soak;
+- retention of the latest seven daily generations;
+- preservation of each pre-upgrade generation until the replacement completes
+  its bounded soak and restart/recovery validation;
+- at least one verified off-node copy;
+- SHA-256 verification after archival/copy;
+- a controlled restore drill before miners are enabled.
+
+Rollback ownership belongs to the node operator performing the canary change.
+A failed canary must be restored to the complete matching recovery generation
+and previous known-good binary rather than mixing persistence generations or
+deleting durable sidechain history.
+
+The Zano blockchain database remains outside the P2Pool recovery generation and
+is managed independently.

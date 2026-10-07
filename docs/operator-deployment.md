@@ -118,8 +118,45 @@ sudo install -m 0755 \
 sudo systemctl start zano-p2pool
 ```
 
-Before an upgrade, back up `/var/lib/zano-p2pool/shares.dat` while the service
-is stopped. Never replace a store with one from a different `SidechainId`.
+Before an upgrade, back up the complete durable P2Pool recovery set while
+`zano-p2pool` is stopped:
+
+- `shares.dat` — canonical share-store records;
+- `shares.dat.validation` — replay-validation cache associated with that store;
+- `shares.dat.work/` — durable mining-work archive associated with that store;
+- the active `zano-p2pool` binary;
+- the previous known-good binary;
+- the active systemd unit and any environment/configuration files used by it.
+
+Treat these files as one recovery generation. Never combine `shares.dat` with
+validation/work state from a different backup generation and never replace a
+store with one from a different `SidechainId`.
+
+### Mainnet backup and rollback policy
+
+For mainnet operation:
+
+1. Create a quiesced backup before every binary, unit, environment, firewall,
+   seed-policy, or consensus-affecting configuration change.
+2. During the initial mainnet soak, create one quiesced backup at least once per
+   day and retain the most recent seven daily recovery generations.
+3. Retain every pre-upgrade recovery generation until the replacement has
+   completed its bounded soak and has passed restart/recovery validation.
+4. Keep at least one verified recovery copy off the node being protected.
+5. Record a SHA-256 manifest for every recovery generation and verify the
+   archive after copying it off-host.
+6. A restore drill must stop P2Pool, verify the archive manifest, restore the
+   complete matching recovery generation, verify ownership/permissions, start
+   the previous known-good binary, and confirm health, persistence, sidechain
+   identity, daemon synchronization, and P2P state before miners are enabled.
+7. Roll back immediately if the new runtime cannot maintain daemon/template
+   synchronization, persistence health, canonical SidechainId, expected P2P
+   state, or safe restart recovery. Do not delete the share store merely because
+   a binary rollback is required.
+
+The Zano blockchain database is not part of the P2Pool recovery generation.
+It may be independently rebuilt or restored according to the Zano daemon
+operator policy.
 
 ## Firewall surface
 
