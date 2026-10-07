@@ -27,11 +27,12 @@ canonical sidechain ID from the corresponding parent network. Mainnet and
 testnet deliberately use different sidechain IDs even though their current
 economic parameters otherwise match.
 
-Built-in seed policy is asymmetric by design:
+Built-in seed policy currently fails closed on both networks:
 
-- testnet has two public DNS seeds:
-  `zano-pool.ddns.net:37888` and `zano-pool2.ddns.net:37888`;
-- mainnet has no built-in seeds yet.
+- the former beta.2 testnet DNS seed VPSs were retired after completing their
+  validation role, so testnet defaults are now empty;
+- mainnet defaults remain empty until dedicated mainnet seed infrastructure is
+  provisioned and validated.
 
 The standard Zano payout-address decoder accepts the classic non-auditable
 address format using base58 prefix `0xc5`. The pinned Zano source at
@@ -114,7 +115,10 @@ surface.
 
 - [x] seed framework supports network-specific defaults
 - [x] mainnet built-in seed list is currently empty
-- [x] testnet DNS bootstrap has been validated live without explicit peers
+- [x] testnet DNS bootstrap was validated live without explicit peers during
+      the beta.2 public-testnet deployment
+- [x] remove the retired beta.2 testnet endpoints from current built-in defaults
+      after decommissioning their VPSs
 - [ ] provision at least two dedicated mainnet seed nodes in independent failure
       domains
 - [ ] assign stable mainnet DNS names; do not reuse the testnet hostnames

@@ -259,7 +259,7 @@ exact-Zano Release suite passed 33/33 in 3.76 seconds, and branch CI #409 passed
 ## Phase 7 — public network hardening
 
 - [x] mainnet-compatible sidechain parameters
-- [x] seed-node bootstrap framework and active public testnet seeds; mainnet defaults intentionally empty
+- [x] seed-node bootstrap framework; retired testnet defaults removed and mainnet defaults intentionally empty
 - [x] observability/metrics
 - [x] rate limits
 - [x] persistence recovery
@@ -440,7 +440,8 @@ archives carry a hardened systemd unit, a loopback-safe environment template,
 and an operator guide covering checksum verification, least-privilege install,
 listener exposure, health checks, upgrades, rollback, and share-store backup.
 Mainnet default seeds remain intentionally empty pending dedicated mainnet
-infrastructure. Testnet now has two public DNS seed endpoints.
+infrastructure. The two beta.2 public testnet DNS seeds were later retired with
+their VPS deployment, so current testnet defaults are also empty.
 
 Checkpoint 2 adds a fail-closed installation smoke test for the exact archive
 produced by the Release workflow. It verifies the published checksum, rejects

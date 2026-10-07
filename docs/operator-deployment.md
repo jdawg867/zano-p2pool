@@ -62,15 +62,15 @@ Do not expose the daemon RPC or metrics endpoint publicly. To accept remote
 miners or peers, change only the corresponding bind address and allow only the
 required TCP port through the host and provider firewalls.
 
-Testnet includes built-in P2P seed endpoints at
-`zano-pool.ddns.net:37888` and `zano-pool2.ddns.net:37888`. A testnet node with P2P
-enabled uses these defaults automatically. Mainnet intentionally has no built-in
-seeds until dedicated mainnet seed infrastructure is deployed and validated.
+Both testnet and mainnet currently have empty built-in P2P seed lists. The
+former beta.2 public testnet seed VPSs were retired after their validation role
+completed, and mainnet remains intentionally empty until dedicated seed
+infrastructure is deployed and validated.
 
-Operators can still add one or more explicit `--p2p-peer HOST:PORT` entries.
-Explicit peers are combined with the built-in seeds and duplicate endpoints are
-removed. Use `--no-seed-nodes` when only explicitly configured peers should be
-used.
+Operators should add one or more explicit `--p2p-peer HOST:PORT` entries when
+bootstrap peers are required. Explicit peers are de-duplicated. Use
+`--no-seed-nodes` to guarantee explicit-peer-only operation if built-in defaults
+are added again in a future release.
 
 Persistent command-line changes under systemd should be made with
 `systemctl edit zano-p2pool`. Clear the existing `ExecStart=` before replacing

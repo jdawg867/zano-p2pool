@@ -4,16 +4,13 @@
 int main() {
     using namespace zano_p2pool;
 
+    // No retired or unvalidated infrastructure may be advertised as a
+    // built-in default. Both networks currently require explicit peers until
+    // replacement public seed infrastructure is provisioned and validated.
     const auto testnet_seeds =
         default_p2p_seed_nodes(P2pNetwork::Testnet);
 
-    CHECK(testnet_seeds.size() == 2);
-
-    CHECK(testnet_seeds[0].host == "zano-pool.ddns.net");
-    CHECK(testnet_seeds[0].port == 37888);
-
-    CHECK(testnet_seeds[1].host == "zano-pool2.ddns.net");
-    CHECK(testnet_seeds[1].port == 37888);
+    CHECK(testnet_seeds.empty());
 
     CHECK(
         default_p2p_seed_nodes(P2pNetwork::Mainnet)
@@ -24,11 +21,7 @@ int main() {
             P2pNetwork::Testnet,
             {});
 
-    CHECK(defaults_only.size() == 2);
-    CHECK(defaults_only[0].host == "zano-pool.ddns.net");
-    CHECK(defaults_only[0].port == 37888);
-    CHECK(defaults_only[1].host == "zano-pool2.ddns.net");
-    CHECK(defaults_only[1].port == 37888);
+    CHECK(defaults_only.empty());
 
     const P2pEndpoint manual{
         "seed.example",
@@ -41,19 +34,12 @@ int main() {
             {
                 manual,
                 manual,
-                testnet_seeds[0],
             });
 
-    CHECK(combined.size() == 3);
+    CHECK(combined.size() == 1);
 
     CHECK(combined[0].host == "seed.example");
     CHECK(combined[0].port == 40000);
-
-    CHECK(combined[1].host == "zano-pool.ddns.net");
-    CHECK(combined[1].port == 37888);
-
-    CHECK(combined[2].host == "zano-pool2.ddns.net");
-    CHECK(combined[2].port == 37888);
 
     const auto disabled =
         p2p_bootstrap_nodes(
