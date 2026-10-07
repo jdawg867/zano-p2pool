@@ -96,6 +96,48 @@ A healthy endpoint returns `ok`. Inspect `/metrics` locally and confirm
 may be temporarily unavailable; the long-running node retries with bounded
 backoff.
 
+### Mainnet launch health gates
+
+Do not enable public mining merely because the process is running. During the
+initial mainnet rollout, a node passes the launch health gate only when all
+applicable checks below pass.
+
+For every seed or mining node:
+
+- `GET /healthz` returns `ok`;
+- `zano_p2pool_up` equals `1`;
+- `zano_p2pool_persistence_ok` equals `1`;
+- the local Zano daemon reports an online/synchronized mainnet state;
+- `zano_p2pool_zano_height` is no more than one parent block behind the local
+  daemon's current mainnet height after startup synchronization;
+- `zano_p2pool_template_refresh_failures_total` does not increase during the
+  bounded pre-mining observation window;
+- the process is not crash-looping or accumulating unexpected systemd restarts.
+
+For the two mainnet seed nodes after both are online:
+
+- each seed has at least one P2P peer, normally including the other seed;
+- neither seed remains at zero peers for more than five minutes after DNS,
+  public TCP reachability, and explicit inter-seed wiring have been verified;
+- if the sidechain is still empty during the P2P-only soak,
+  `zano_p2pool_sidechain_tip_height 0` is valid and must not by itself be
+  treated as a failure.
+
+After the mining canary begins producing accepted shares:
+
+- `zano_p2pool_sidechain_connected_shares` becomes non-zero;
+- `zano_p2pool_sidechain_tip_height` advances while shares are being accepted;
+- after pausing the canary long enough for propagation, the seed nodes converge
+  on the same canonical sidechain tip;
+- `zano_p2pool_block_submission_failures_total` must not increase;
+- if a full-network-difficulty block candidate occurs, its submission outcome
+  must be accounted for as an accepted main-chain block or an accepted
+  alternative-chain block. The absence of a block candidate during a bounded
+  canary test is not itself a failure.
+
+Metrics counters are process-local, so compare counter deltas within the same
+process lifetime rather than comparing raw counter values across restarts.
+
 ## 5. Upgrade and roll back
 
 Keep the prior binary until the replacement is healthy:
@@ -157,6 +199,73 @@ For mainnet operation:
 The Zano blockchain database is not part of the P2Pool recovery generation.
 It may be independently rebuilt or restored according to the Zano daemon
 operator policy.
+
+### Mainnet rollback triggers and procedure
+
+Pause miner access immediately while investigating any of these conditions:
+
+- `zano_p2pool_persistence_ok` changes to `0`;
+- startup reports a wrong-network or wrong-SidechainId persistence boundary;
+- restart history recovery reports an unrecoverable/fatal condition;
+- P2Pool remains more than one parent block behind a healthy synchronized local
+  Zano daemon for more than five minutes;
+- template refresh remains continuously failed for more than two minutes;
+- a mainnet seed remains unable to establish expected P2P connectivity for more
+  than five minutes after DNS and TCP reachability are independently confirmed;
+- the seed nodes fail to converge on canonical sidechain state after share
+  production is paused for a propagation window;
+- `zano_p2pool_block_submission_failures_total` increases during the mining
+  canary;
+- the service enters a crash/restart loop, defined for launch purposes as three
+  or more unexpected restarts within ten minutes.
+
+A trigger requires rollback when evidence points to the newly deployed P2Pool
+binary, service configuration, or accompanying persistence generation. If the
+root cause is clearly external, such as an upstream daemon outage or network
+partition, keep mining disabled but do not replace a known-good binary merely
+to mask the external failure.
+
+Rollback procedure:
+
+1. Disable Stratum/public miner access before changing runtime state.
+2. Capture the failing node's current logs, `/metrics`, service status, binary
+   checksum, unit/environment configuration, and a quiesced recovery archive
+   where safe to do so.
+3. Stop `zano-p2pool`.
+4. Restore the previous known-good binary and matching service configuration.
+5. Restore an older persistence generation only if the current durable state is
+   itself incompatible or damaged; when restoration is required, restore the
+   complete matching `shares.dat`, `.validation`, and `.work/` generation.
+6. Verify ownership, permissions, binary checksum, unit contents, and the
+   canonical mainnet SidechainId before restart.
+7. Start P2Pool with Stratum still disabled.
+8. Re-run the mainnet launch health gates and a bounded P2P-only observation.
+9. Re-enable mining only after the rollback state passes those checks.
+
+Never solve a failed launch by deleting the share store and silently starting a
+new sidechain history.
+
+### Mainnet activation-guard policy
+
+The initial public mainnet release, mainnet seed deployment, P2P-only soak, and
+first mining canary must continue to require the explicit
+`--experimental-mainnet` operator opt-in.
+
+Do not remove the guard merely because HF7 compatibility or the first template
+audit passed. Removal or replacement is a separate post-canary release decision
+and requires all of the following first:
+
+- permanent mainnet seed infrastructure is deployed and independently
+  reachable;
+- the bounded P2P-only soak passes;
+- the controlled restart/recovery drill passes;
+- one mining canary passes the launch health and block-submission gates;
+- the release archive and metadata are independently verified;
+- the readiness checklist contains no unresolved safety-critical launch gate.
+
+Any later guard removal must be made in a separately reviewed commit with its
+CLI regression tests updated deliberately and with the change called out in the
+release notes.
 
 ## Firewall surface
 

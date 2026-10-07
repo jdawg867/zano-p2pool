@@ -142,12 +142,12 @@ surface.
 
 ### 8. Mainnet observability and rollback
 
-- [ ] define launch health gates for `up`, persistence, daemon height, P2P peer
+- [x] define launch health gates for `up`, persistence, daemon height, P2P peer
       count, sidechain tip, template-refresh failures, and block-submission
       outcomes
 - [ ] preserve previous binaries and unit backups through the initial mainnet
       soak
-- [ ] document the exact rollback trigger and procedure
+- [x] document the exact rollback trigger and procedure
 - [ ] perform a controlled restart and recovery drill before enabling miners
 
 ### 9. Explicit mainnet activation guard
@@ -162,7 +162,7 @@ operator supplies a deliberate experimental-mainnet opt-in.
 - [x] cover the deterministic guard and network mapping with regression tests
 - [x] verify the CLI fails closed before RPC startup without the opt-in and
       rejects the opt-in when used with testnet
-- [ ] document removal or replacement of the experimental guard as a launch
+- [x] document removal or replacement of the experimental guard as a launch
       gate
 
 ### 10. Release and launch sequence
@@ -454,3 +454,27 @@ deleting durable sidechain history.
 
 The Zano blockchain database remains outside the P2Pool recovery generation and
 is managed independently.
+
+## Mainnet launch health and activation policy
+
+The operator deployment guide now defines objective mainnet launch gates for
+runtime health, persistence, Zano height, P2P connectivity, sidechain progress,
+template-refresh failures, restart stability, and block-submission outcomes.
+
+It also defines the conditions that pause mining immediately and the conditions
+that require restoration of the previous known-good runtime. A rollback must
+preserve forensic evidence and must never silently discard the durable share
+store.
+
+The initial mainnet launch decision is to retain the
+`--experimental-mainnet` opt-in through:
+
+- permanent seed deployment;
+- the P2P-only soak;
+- the controlled restart/recovery drill; and
+- the first mining canary.
+
+Removal or replacement of the guard is explicitly deferred to a separate
+post-canary release after all safety-critical launch gates pass. This prevents
+the HF7 compatibility result from being mistaken for authorization to make
+mainnet operation automatic.
