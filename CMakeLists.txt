@@ -57,6 +57,7 @@ add_library(zano_p2pool_core
     src/pow_target.cpp
     src/progpowz.cpp
     src/rpc_client.cpp
+    src/runtime_network.cpp
     src/seed_nodes.cpp
     src/share.cpp
     src/share_chain.cpp
@@ -106,6 +107,7 @@ if(ZANO_P2POOL_ZANO_SOURCE_DIR)
 
     enable_language(C)
     find_package(Boost REQUIRED COMPONENTS serialization)
+    find_package(OpenSSL REQUIRED COMPONENTS Crypto)
     find_package(ZLIB REQUIRED)
 
     add_subdirectory(
@@ -153,7 +155,14 @@ if(ZANO_P2POOL_ZANO_SOURCE_DIR)
             -ffunction-sections
             -fdata-sections
         )
-        target_link_libraries(zano_p2pool_zano_curve PUBLIC Threads::Threads)
+        # HF7-capable Zano crypto.cpp uses OPENSSL_cleanse(). Keep the
+        # dependency transitive because this is a static library and its
+        # consumers must carry libcrypto on the final link line.
+        target_link_libraries(zano_p2pool_zano_curve
+            PUBLIC
+                Threads::Threads
+                OpenSSL::Crypto
+        )
 
         target_compile_definitions(zano_p2pool_core PUBLIC
             ZANO_P2POOL_HAVE_ZANO_CURVE=1
@@ -274,6 +283,14 @@ if(ZANO_P2POOL_BUILD_TESTS)
     add_executable(seed_nodes_test tests/seed_nodes_test.cpp)
     target_link_libraries(seed_nodes_test PRIVATE zano_p2pool_core)
     add_test(NAME seed_nodes_test COMMAND seed_nodes_test)
+
+    add_executable(runtime_network_test tests/runtime_network_test.cpp)
+    target_link_libraries(runtime_network_test PRIVATE zano_p2pool_core)
+    add_test(NAME runtime_network_test COMMAND runtime_network_test)
+
+    add_executable(persistence_network_test tests/persistence_network_test.cpp)
+    target_link_libraries(persistence_network_test PRIVATE zano_p2pool_core)
+    add_test(NAME persistence_network_test COMMAND persistence_network_test)
 
     add_executable(testnet_fixture_test tests/testnet_fixture_test.cpp)
     target_link_libraries(testnet_fixture_test PRIVATE zano_p2pool_core)

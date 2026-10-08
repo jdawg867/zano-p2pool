@@ -145,9 +145,11 @@ The seventh milestone hardens the node for persistent multi-node operation:
 - packaged Linux systemd/operator assets;
 - release-archive installation smoke testing.
 
-The built-in seed framework now includes two validated public testnet
-seed endpoints. Mainnet defaults remain intentionally empty until dedicated
-mainnet seed infrastructure is deployed and validated.
+The built-in seed bootstrap framework remains available, but both testnet and
+mainnet default seed lists are currently empty. The former beta.2 testnet seed
+VPSs were retired after completing their validation role. Nodes that require
+bootstrap must use explicit `--p2p-peer HOST:PORT` endpoints until replacement
+public seed infrastructure is provisioned and validated.
 
 Core Milestone 0.7 hardening is merged to `main`; operator/release readiness
 continues on testnet.
@@ -305,16 +307,14 @@ temporarily unavailable. RPC retries use bounded exponential backoff from 1 to
 30 seconds by default. Override the bounds with
 `--rpc-reconnect-initial-seconds` and `--rpc-reconnect-max-seconds`.
 
-Testnet includes two built-in P2P seed endpoints:
+Both testnet and mainnet currently have empty built-in P2P seed lists. The
+former public beta.2 testnet seed VPSs were intentionally retired after their
+validation role completed.
 
-- `zano-pool.ddns.net:37888`
-- `zano-pool2.ddns.net:37888`
-
-A testnet node with P2P enabled uses these defaults automatically. Explicit
-`--p2p-peer HOST:PORT` entries are combined with the default seeds and duplicate
-endpoints are removed. `--no-seed-nodes` disables the built-in defaults when an
-operator wants explicit peer control. Mainnet currently has no built-in seed
-endpoints.
+Use one or more explicit `--p2p-peer HOST:PORT` entries when bootstrap peers are
+required. Explicit endpoints are de-duplicated. `--no-seed-nodes` remains
+available for operators who want to guarantee explicit-peer-only operation if
+built-in defaults are added again in a future release.
 
 ## Current Zano network defaults
 

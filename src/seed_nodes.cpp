@@ -29,10 +29,10 @@ void append_unique(
 std::vector<P2pEndpoint> default_p2p_seed_nodes(P2pNetwork network) {
     switch (network) {
     case P2pNetwork::Testnet:
-        return {
-            {"zano-pool.ddns.net", 37888},
-            {"zano-pool2.ddns.net", 37888},
-        };
+        // The public beta.2 testnet seed VPSs were retired after completing
+        // their validation role. Keep defaults empty until replacement public
+        // testnet infrastructure is intentionally provisioned and validated.
+        return {};
 
     case P2pNetwork::Mainnet:
         return {};

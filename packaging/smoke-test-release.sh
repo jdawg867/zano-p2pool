@@ -59,7 +59,18 @@ done
 
 test -x "$root/bin/zano-p2pool"
 test -x "$root/bin/zano-p2pool-header"
-"$root/bin/zano-p2pool" --help >/dev/null
+
+help_output="$("$root/bin/zano-p2pool" --help)"
+
+grep -Fq 'testnet default seeds: none' <<<"$help_output"
+grep -Fq 'mainnet default seeds: none' <<<"$help_output"
+
+retired_seed_pattern='zano-pool\.ddns\.net|zano-pool2\.ddns\.net|45\.77\.77\.93|68\.232\.175\.242'
+
+if grep -aEq "$retired_seed_pattern" "$root/bin/zano-p2pool"; then
+  echo "Packaged binary contains a retired testnet seed endpoint" >&2
+  exit 1
+fi
 
 if grep -q "not found" "$root/DEPENDENCIES.txt"; then
   echo "Release dependency report contains an unresolved library" >&2
@@ -76,28 +87,18 @@ grep -qx 'ZANO_P2POOL_STRATUM_BIND=127.0.0.1' "$env_file"
 grep -qx 'ZANO_P2POOL_P2P_BIND=127.0.0.1' "$env_file"
 grep -qx 'ZANO_P2POOL_METRICS_BIND=127.0.0.1' "$env_file"
 grep -q 'REPLACE_WITH_A_STANDARD_TESTNET_ZANO_ADDRESS' "$env_file"
-readarray -t documented_seed_endpoints < <(
-  grep -Eo 'zano-pool2?\.ddns\.net:37888' \
-    "$root/share/doc/zano-p2pool/README.md" |
-    sort -u || true
+packaged_operator_docs=(
+  "$root/share/doc/zano-p2pool/README.md"
+  "$root/share/doc/zano-p2pool/operator-deployment.md"
 )
-
-expected_seed_endpoints=(
-  "zano-pool.ddns.net:37888"
-  "zano-pool2.ddns.net:37888"
-)
-
-if [[ "${documented_seed_endpoints[*]-}" != "${expected_seed_endpoints[*]}" ]]; then
-  echo "Packaged README seed endpoint set does not match approved testnet defaults" >&2
-  printf 'Expected: %s\n' "${expected_seed_endpoints[*]}" >&2
-  printf 'Actual:   %s\n' "${documented_seed_endpoints[*]-}" >&2
-  exit 1
-fi
 
 if grep -Eq \
-  '45\.77\.77\.93:37888|68\.232\.175\.242:37888' \
-  "$root/share/doc/zano-p2pool/README.md"; then
-  echo "Packaged README still contains retired raw testnet seed IPs" >&2
+  'zano-pool\.ddns\.net:37888|zano-pool2\.ddns\.net:37888|45\.77\.77\.93:37888|68\.232\.175\.242:37888' \
+  "${packaged_operator_docs[@]}"; then
+  echo "Packaged operator documentation contains a retired testnet seed endpoint" >&2
+  grep -nE \
+    'zano-pool\.ddns\.net:37888|zano-pool2\.ddns\.net:37888|45\.77\.77\.93:37888|68\.232\.175\.242:37888' \
+    "${packaged_operator_docs[@]}" >&2 || true
   exit 1
 fi
 

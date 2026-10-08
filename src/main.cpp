@@ -18,6 +18,7 @@
 #include "zano_p2pool/pplns_template.hpp"
 #include "zano_p2pool/rpc_backoff.hpp"
 #include "zano_p2pool/rpc_client.hpp"
+#include "zano_p2pool/runtime_network.hpp"
 #include "zano_p2pool/seed_nodes.hpp"
 #include "zano_p2pool/share.hpp"
 #include "zano_p2pool/share_store.hpp"
@@ -51,15 +52,6 @@
 
 namespace {
 
-enum class Network {
-    Mainnet,
-    Testnet,
-};
-
-constexpr const char* kMainnetRpcUrl =
-    "http://127.0.0.1:11211/json_rpc";
-constexpr const char* kTestnetRpcUrl =
-    "http://127.0.0.1:12111/json_rpc";
 constexpr std::uint16_t kDefaultStratumPort = 3333;
 constexpr std::uint16_t kDefaultMetricsPort = 37890;
 constexpr std::uint64_t kDefaultStratumDifficulty = 100000000;
@@ -85,7 +77,8 @@ void request_template_refresh() noexcept {
 }
 
 struct Options {
-    Network network{Network::Testnet};
+    zano_p2pool::RuntimeNetwork network{
+        zano_p2pool::RuntimeNetwork::Testnet};
     std::string rpc_url;
     std::string wallet;
     bool stratum{false};
@@ -114,6 +107,7 @@ struct Options {
     std::uint16_t metrics_port{kDefaultMetricsPort};
 
     bool no_share_store{false};
+    bool experimental_mainnet{false};
     std::optional<std::filesystem::path> share_store_path;
 };
 
@@ -129,48 +123,16 @@ struct LiveTemplate {
     std::optional<zano_p2pool::StratumShareParentBinding> parent_binding;
 };
 
-const char* network_name(Network network) {
-    return network == Network::Testnet ? "testnet" : "mainnet";
-}
-
-const char* default_rpc_url(Network network) {
-    return network == Network::Testnet ? kTestnetRpcUrl : kMainnetRpcUrl;
-}
-
-std::filesystem::path default_share_store_path(Network network) {
+std::filesystem::path default_share_store_path(
+    zano_p2pool::RuntimeNetwork network) {
     const char* home = std::getenv("HOME");
     if (home == nullptr || *home == '\0') {
         throw std::runtime_error(
             "HOME is not set; use --share-store PATH or --no-share-store");
     }
-    return std::filesystem::path(home) /
-           ".zano-p2pool" /
-           network_name(network) /
-           "shares.dat";
-}
-
-zano_p2pool::P2pNetwork p2p_network(Network network) {
-    return network == Network::Testnet
-        ? zano_p2pool::P2pNetwork::Testnet
-        : zano_p2pool::P2pNetwork::Mainnet;
-}
-
-zano_p2pool::SidechainParentNetwork sidechain_parent_network(Network network) {
-    return network == Network::Testnet
-        ? zano_p2pool::SidechainParentNetwork::Testnet
-        : zano_p2pool::SidechainParentNetwork::Mainnet;
-}
-
-Network parse_network(const std::string& value) {
-    if (value == "testnet") {
-        return Network::Testnet;
-    }
-    if (value == "mainnet") {
-        return Network::Mainnet;
-    }
-
-    throw std::runtime_error(
-        "--network must be either 'testnet' or 'mainnet'");
+    return zano_p2pool::runtime_default_share_store_path(
+        network,
+        std::filesystem::path(home));
 }
 
 std::uint64_t parse_u64_option(
@@ -324,6 +286,7 @@ void print_usage(const char* program) {
         << "Usage: " << program
         << " --wallet ZANO_ADDRESS"
         << " [--network testnet|mainnet]"
+        << " [--experimental-mainnet]"
         << " [--rpc-url URL]"
         << " [--rpc-reconnect-initial-seconds SECONDS]"
         << " [--rpc-reconnect-max-seconds SECONDS]"
@@ -350,8 +313,10 @@ void print_usage(const char* program) {
         << " [--template-refresh-seconds SECONDS]\n\n"
         << "Defaults:\n"
         << "  network: testnet\n"
-        << "  testnet RPC: " << kTestnetRpcUrl << '\n'
-        << "  mainnet RPC: " << kMainnetRpcUrl << '\n'
+        << "  testnet RPC: "
+        << zano_p2pool::kRuntimeTestnetRpcUrl << '\n'
+        << "  mainnet RPC: "
+        << zano_p2pool::kRuntimeMainnetRpcUrl << '\n'
         << "  RPC reconnect backoff: "
         << kDefaultRpcReconnectInitialSeconds << " to "
         << kDefaultRpcReconnectMaxSeconds << " seconds\n"
@@ -362,7 +327,7 @@ void print_usage(const char* program) {
         << "  Stratum request rate: burst 256, refill 128/s\n"
         << "  P2P bind: 127.0.0.1\n"
         << "  P2P port: 0 (ephemeral development port)\n"
-        << "  testnet default seeds: zano-pool.ddns.net:37888, zano-pool2.ddns.net:37888\n"
+        << "  testnet default seeds: none\n"
         << "  mainnet default seeds: none\n"
         << "  P2P max peers: 64\n"
         << "  P2P message rate: burst 512, refill 256/s\n"
@@ -397,7 +362,13 @@ Options parse_args(int argc, char** argv) {
             if (++i >= argc) {
                 throw std::runtime_error("--network requires a value");
             }
-            options.network = parse_network(argv[i]);
+            options.network =
+                zano_p2pool::parse_runtime_network(argv[i]);
+            continue;
+        }
+
+        if (arg == "--experimental-mainnet") {
+            options.experimental_mainnet = true;
             continue;
         }
 
@@ -634,7 +605,8 @@ Options parse_args(int argc, char** argv) {
     }
 
     if (options.rpc_url.empty()) {
-        options.rpc_url = default_rpc_url(options.network);
+        options.rpc_url = std::string(
+            zano_p2pool::runtime_default_rpc_url(options.network));
     }
 
     if (options.rpc_reconnect_max_seconds <
@@ -814,7 +786,9 @@ int main(int argc, char** argv) {
         const auto options = parse_args(argc, argv);
 
         std::cout << "zano-p2pool v" ZANO_P2POOL_VERSION "\n";
-        std::cout << "Network: " << network_name(options.network) << '\n';
+        std::cout << "Network: "
+                  << zano_p2pool::runtime_network_name(options.network)
+                  << '\n';
         std::cout << "RPC: " << options.rpc_url << '\n';
         std::cout << "ProgPoWZ backend: "
                   << (zano_p2pool::progpowz_available()
@@ -822,7 +796,26 @@ int main(int argc, char** argv) {
                           : "disabled")
                   << "\n\n";
 
-        if (options.network == Network::Mainnet) {
+        if (options.experimental_mainnet &&
+            options.network != zano_p2pool::RuntimeNetwork::Mainnet) {
+            throw std::runtime_error(
+                "--experimental-mainnet requires --network mainnet");
+        }
+
+        const bool long_lived_runtime =
+            options.stratum || options.p2p || options.metrics;
+
+        if (!zano_p2pool::runtime_network_operation_allowed(
+                options.network,
+                long_lived_runtime,
+                options.experimental_mainnet)) {
+            throw std::runtime_error(
+                "long-lived mainnet runtime is blocked while the "
+                "mainnet-readiness audit is open; pass "
+                "--experimental-mainnet to acknowledge experimental operation");
+        }
+
+        if (options.network == zano_p2pool::RuntimeNetwork::Mainnet) {
             std::cerr
                 << "WARNING: mainnet mode is experimental and not yet "
                    "recommended for production mining.\n";
@@ -840,8 +833,6 @@ int main(int argc, char** argv) {
                 "canonical PPLNS block construction");
         }
 
-        const bool long_lived_runtime =
-            options.stratum || options.p2p || options.metrics;
         if (long_lived_runtime) {
             std::signal(SIGINT, handle_signal);
             std::signal(SIGTERM, handle_signal);
@@ -881,7 +872,8 @@ int main(int argc, char** argv) {
 
         const zano_p2pool::SidechainParameters sidechain_parameters =
             zano_p2pool::canonical_sidechain_parameters(
-                sidechain_parent_network(options.network));
+                zano_p2pool::runtime_sidechain_parent_network(
+                    options.network));
         zano_p2pool::ShareChain node_chain(sidechain_parameters);
         zano_p2pool::P2pTrustedWorkRegistry trusted_work;
         std::mutex node_state_mutex;
@@ -1549,7 +1541,8 @@ int main(int argc, char** argv) {
         std::unique_ptr<zano_p2pool::P2pRuntime> p2p_runtime;
         if (options.p2p) {
             zano_p2pool::P2pHandshake handshake;
-            handshake.network = p2p_network(options.network);
+            handshake.network =
+                zano_p2pool::runtime_p2p_network(options.network);
             handshake.sidechain_id = zano_p2pool::sidechain_id(sidechain_parameters);
             handshake.node_id = generate_node_id();
             handshake.capabilities = zano_p2pool::kP2pCapabilitiesV1;

@@ -2,7 +2,7 @@
 
 This document records the consensus-facing mining path observed in the current Zano source before zano-p2pool accepts shares.
 
-Source audit baseline: Zano commit `1508cf6ae3ef44a52d66137d30f800b06ce917ee` (2026-08-28 audit).
+Source audit baseline: Zano commit `b400b93f5d8bae42d5f5ac643c804d30faf9f8de` (HF7 build 603, 2026-10-06 audit).
 
 ## Difficulty and target
 
