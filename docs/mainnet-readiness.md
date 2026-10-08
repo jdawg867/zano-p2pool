@@ -170,7 +170,7 @@ operator supplies a deliberate experimental-mainnet opt-in.
 - [x] complete all code/regression gaps on this audit branch
 - [x] pass the full normal and exact-Zano test suites
 - [x] build and smoke-test the release archive
-- [ ] independently verify the published archive, checksum, version, build
+- [x] independently verify the published archive, checksum, version, build
       metadata, dependencies, and mainnet seed policy
 - [ ] deploy mainnet seed nodes first with Stratum disabled
 - [ ] complete a bounded P2P-only mainnet soak
@@ -179,10 +179,11 @@ operator supplies a deliberate experimental-mainnet opt-in.
 
 ## Current blocking items
 
-Permanent mainnet seed infrastructure is intentionally blocked on the remaining
-audit gates above. The first implementation work should focus on deterministic
-mainnet configuration/address regression coverage and on verifying the active
-mainnet daemon/miner-transaction assumptions against the pinned Zano source.
+The pre-infrastructure code, consensus, release-build, and independently
+published-release gates are complete. Permanent mainnet seed infrastructure may
+now be provisioned from the validated `v0.1.0-rc.1` release. Mining remains
+blocked until the P2P-only seed soak and controlled restart/recovery drill pass,
+followed by the explicitly gated single-node mining canary.
 
 The existing beta.2 testnet nodes must not be mutated until their current
 runtime state is inspected, but they are now subject to an urgent compatibility
@@ -432,8 +433,9 @@ the zero-atomic rounding boundary are covered by the PPLNS, historical trust,
 historical runtime, and exact-Zano regression suites.
 
 The pre-v4 release candidate and v3 SidechainId are historical audit evidence
-only and must not be deployed. A fresh v4 release candidate and independent
-release validation are required before mainnet seed provisioning or mining.
+only and must not be deployed. The replacement v4 release candidate was built,
+published as `v0.1.0-rc.1`, and independently validated before mainnet seed
+provisioning.
 
 ## Pinned public mainnet standard-address vector
 
@@ -509,41 +511,48 @@ mainnet operation automatic.
 
 ## Mainnet release-candidate validation
 
-The final pre-infrastructure release candidate was validated from
-`8a740fab5ff56b729e6517e28a02203870726894`.
+The earlier pre-v4 release-candidate evidence from
+`8a740fab5ff56b729e6517e28a02203870726894` is historical only and must not be
+deployed because the v4 operator-fee consensus profile changed the SidechainId.
+
+The final v4 pre-infrastructure source is
+`bfbd4392f9a14738d48e3e8e3dfbbdcaaa3993a6`.
 
 Validation evidence:
 
-- CI run `37710048855` completed successfully with both the normal
-  `build-and-test` job and the exact-Zano `progpowz-compat` job passing;
-- Release workflow run `37710373866` completed successfully on Ubuntu 22.04;
-- the Linux x86_64 packaging job passed the exact-Zano regression suite,
-  package generation, installation smoke test, and artifact upload;
-- the workflow-dispatch publish job was correctly skipped, so no public release
-  was created;
-- audited Zano source remained pinned to
-  `b400b93f5d8bae42d5f5ac643c804d30faf9f8de`;
-- the release archive SHA-256 is
-  `46797e6760eab9a34d87142257971c6f834236a063e42b767375b2c4e443fb5e`;
-- the stripped `zano-p2pool` binary SHA-256 is
-  `01fffa8e56601e0e1381d81651dee0781529f209436e21bf7477789bf782c1a2`;
-- the stripped `zano-p2pool-header` binary SHA-256 is
+- main CI run `37727658546` completed successfully with both the normal
+  `build-and-test` job and exact-Zano `progpowz-compat` job passing;
+- workflow-dispatch release run `37728489302` completed successfully and
+  produced a non-published v4 release-candidate artifact;
+- the independently validated candidate archive SHA-256 was
+  `043a335cae8b777ce127dd70725144268264befc5373cfb6908875f27d34b461`;
+- annotated prerelease tag `v0.1.0-rc.1` points to the exact final source;
+- tagged release workflow run `37845081846` completed successfully, including
+  exact-Zano regression testing, packaging, installation smoke testing, artifact
+  upload, and GitHub release publication;
+- the published release is marked as a prerelease;
+- the independently downloaded published archive SHA-256 is
+  `c0db40b06618673d866f2b0b8b72cf9677099dd2b81226af75864c6f4ece3ccb`,
+  matching both its published checksum file and GitHub's asset digest;
+- the published stripped `zano-p2pool` binary SHA-256 is
+  `f2558745d6beef210b137f568f36a45aefe6563eab73601be5b2e14c606ae799`;
+- the published stripped `zano-p2pool-header` binary SHA-256 is
   `846dfa536b97a3b1dbed9cda3c7d4135821cd6bd4ef33615d972d1115b33f211`;
-- build metadata confirmed Release mode, Linux x86_64, Ubuntu 22.04, and
+- audited Zano source remains pinned to
+  `b400b93f5d8bae42d5f5ac643c804d30faf9f8de`;
+- build metadata confirms Release mode, Linux x86_64, Ubuntu 22.04, and
   Boost 1.84.0 with static Boost.Serialization;
-- independent dependency checks found no unresolved libraries and confirmed
-  the expected OpenSSL 3 crypto dependency;
-- CLI help reports both testnet and mainnet default seed lists as empty;
-- neither the packaged binary nor current packaged operator documentation
-  contains the retired beta.2 seed hostnames or raw VPS addresses;
-- packaged systemd defaults retain loopback Stratum/P2P/metrics binds, the
-  dedicated `zano-p2pool` service account, `NoNewPrivileges=true`,
-  `ProtectSystem=strict`, and `UMask=0077`.
+- independent dependency validation found no unresolved libraries and no
+  dynamic Boost.Serialization dependency;
+- tagged CLI output reports `zano-p2pool v0.1.0-rc.1`, retains the explicit
+  `--experimental-mainnet` guard, and reports both default seed lists as empty;
+- the packaged P2P protocol document pins `ZP2SIDV4` and the canonical v4
+  mainnet/testnet SidechainIds;
+- packaged operator documentation exactly matches the tagged source;
+- the independently downloaded published archive passed the installation smoke
+  test.
 
-This closes the pre-infrastructure code, regression, and release-archive
-build/smoke gates.
-
-The separate checklist item requiring independent verification of the
-**published** archive remains open. The artifact above was produced by
-`workflow_dispatch` and was intentionally not published as a tagged GitHub
-release.
+This closes the pre-infrastructure code, regression, release-build, and
+published-release verification gates. Permanent mainnet seed provisioning may
+begin, with Stratum/mining remaining disabled until the P2P-only soak and
+controlled recovery gates pass.
