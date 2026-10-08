@@ -26,6 +26,17 @@ AddShareResult submit(ShareChain& chain, const Share& share) {
     return chain.submit_share(share, {share.zano_height, share.mining_header_hash,
         share.network_difficulty}, 2000);
 }
+std::uint64_t amount_for(
+    const PplnsCoinbasePlan& plan,
+    const PayoutPublicKeys& payout) {
+    std::uint64_t amount = 0;
+    for (const auto& destination : plan.destinations) {
+        if (destination.payout == payout) {
+            amount += destination.amount;
+        }
+    }
+    return amount;
+}
 }
 int main() {
     auto params = canonical_sidechain_parameters(SidechainParentNetwork::Testnet);
@@ -106,12 +117,32 @@ int main() {
     const auto plan = derive_historical_payout_plan(chain, params, root_id, one, 100);
     CHECK(plan.status == HistoricalPayoutStatus::PlanDerived);
     CHECK(plan.parent_id == root_id);
-    CHECK(plan.plan.destinations.size() == 1);
-    CHECK(plan.plan.destinations[0].miner_id == root.miner_id);
-    CHECK(plan.plan.destinations[0].amount == 100);
-    const auto child_plan = derive_historical_payout_plan(chain, params, child_id, one, 100);
-    CHECK(child_plan.plan.destinations.size() == 2);
-    for (const auto& d : child_plan.plan.destinations) CHECK(d.amount == 50);
+    CHECK(root.payout.has_value());
+    CHECK(plan.plan.destinations.size() == 2);
+    CHECK(amount_for(plan.plan, *root.payout) == 99);
+    CHECK(amount_for(plan.plan, params.operator_fee_payout) == 1);
+
+    const auto child_plan =
+        derive_historical_payout_plan(
+            chain,
+            params,
+            child_id,
+            one,
+            100);
+
+    CHECK(child.payout.has_value());
+    CHECK(child_plan.plan.destinations.size() == 3);
+    CHECK(
+        amount_for(
+            child_plan.plan,
+            params.operator_fee_payout) == 1);
+    CHECK(
+        amount_for(
+            child_plan.plan,
+            *root.payout) +
+        amount_for(
+            child_plan.plan,
+            *child.payout) == 99);
 
     auto fork = make_share(root_id, 1, 5);
     const auto fork_id = share_id(fork);

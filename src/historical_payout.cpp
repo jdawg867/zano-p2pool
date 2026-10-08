@@ -22,8 +22,13 @@ HistoricalPayoutResult derive_historical_payout_plan(
         return result;
     }
     result.plan = make_pplns_coinbase_plan(
-        build_sidechain_pplns_window_at_parent(chain, parent_id, params, network_difficulty),
-        reward_atomic);
+        build_sidechain_pplns_window_at_parent(
+            chain,
+            parent_id,
+            params,
+            network_difficulty),
+        reward_atomic,
+        params);
     result.status = result.plan.status == PplnsCoinbasePlanStatus::Ready ?
         HistoricalPayoutStatus::PlanDerived : HistoricalPayoutStatus::PlanUnavailable;
     return result;

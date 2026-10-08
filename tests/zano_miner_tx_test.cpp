@@ -90,6 +90,12 @@ int main() {
         "ZxDNaMeZjwCjnHuU5gUNyrP1pM3U5vckbakzzV6dEHyDYeCpW8XGLBFTshcaY8LkG9RQn7FsQx8w2JeJzJwPwuDm2NfixPAXf");
     const PayoutPublicKeys payout_b = decode_payout(
         "ZxBvJDuQjMG9R2j4WnYUhBYNrwZPwuyXrC7FHdVmWqaESgowDvgfWtiXeNGu8Px9B24pkmjsA39fzSSiEQG1ekB225ZnrMTBp");
+    const PayoutPublicKeys payout_c = decode_payout(
+        "ZxCSpsGGeJsS8fwvQ4HktDU3qBeauoJTR6j73jAWWZxFXdF7XTbGm4YfS2kXJmAP4Rf5BVsSQ9iZ45XANXEYsrLN2L2W77dH7");
+
+    const SidechainParameters canonical_params =
+        canonical_sidechain_parameters(
+            SidechainParentNetwork::Testnet);
 
     PplnsCoinbasePlan plan;
     plan.status = PplnsCoinbasePlanStatus::Ready;
@@ -255,11 +261,11 @@ int main() {
     const PplnsTemplateResult rebuilt = build_canonical_pplns_template(
         daemon_template,
         chain,
-        canonical_sidechain_parameters(SidechainParentNetwork::Testnet),
+        canonical_params,
         "p2pool-test");
     CHECK(rebuilt.status == PplnsTemplateStatus::Ready);
     CHECK(rebuilt.plan.status == PplnsCoinbasePlanStatus::Ready);
-    CHECK(rebuilt.plan.destinations.size() == 2);
+    CHECK(rebuilt.plan.destinations.size() == 3);
     CHECK(rebuilt.block.blocktemplate_blob != daemon_template.blocktemplate_blob);
     CHECK(!rebuilt.block.miner_tx_tgc_json.empty());
     CHECK(rebuilt.mining_work.block_header.serialized ==
@@ -271,6 +277,8 @@ int main() {
 
     std::uint64_t payout_a_amount = 0;
     std::uint64_t payout_b_amount = 0;
+    std::uint64_t operator_fee_amount = 0;
+
     for (const auto& destination : rebuilt.plan.destinations) {
         if (destination.payout == payout_a) {
             payout_a_amount += destination.amount;
@@ -278,9 +286,17 @@ int main() {
         if (destination.payout == payout_b) {
             payout_b_amount += destination.amount;
         }
+        if (destination.payout ==
+            canonical_params.operator_fee_payout) {
+            operator_fee_amount += destination.amount;
+        }
     }
-    CHECK(payout_a_amount == 400000000000ULL);
-    CHECK(payout_b_amount == 600000000000ULL);
+
+    // 1 ZANO test vector:
+    // 1% operator fee and 99% PPLNS reward.
+    CHECK(payout_a_amount == 396000000000ULL);
+    CHECK(payout_b_amount == 594000000000ULL);
+    CHECK(operator_fee_amount == 10000000000ULL);
 
     const auto rebuilt_policy = verify_miner_tx_payout_policy(
         rebuilt.mining_work.miner_tx_prefix.serialized,
@@ -291,6 +307,118 @@ int main() {
         rebuilt.plan);
     CHECK(rebuilt_policy.status == P2pPayoutPolicyStatus::Verified);
     CHECK(rebuilt_policy.verified_reward == rebuilt.block.block_reward);
+
+    std::size_t operator_index =
+        rebuilt.plan.destinations.size();
+
+    std::size_t payout_a_index =
+        rebuilt.plan.destinations.size();
+
+    for (std::size_t i = 0;
+         i < rebuilt.plan.destinations.size();
+         ++i) {
+        if (rebuilt.plan.destinations[i].payout ==
+            canonical_params.operator_fee_payout) {
+            operator_index = i;
+        }
+
+        if (rebuilt.plan.destinations[i].payout ==
+            payout_a) {
+            payout_a_index = i;
+        }
+    }
+
+    CHECK(operator_index <
+          rebuilt.plan.destinations.size());
+
+    CHECK(payout_a_index <
+          rebuilt.plan.destinations.size());
+
+    // One atomic unit too little to the operator must fail.
+    PplnsCoinbasePlan wrong_fee_plan =
+        rebuilt.plan;
+
+    --wrong_fee_plan
+        .destinations[operator_index]
+        .amount;
+
+    ++wrong_fee_plan
+        .destinations[payout_a_index]
+        .amount;
+
+    const ZanoMinerTxResult wrong_fee_tx =
+        build_zano_hf6_pplns_miner_tx(
+            daemon_template.height,
+            daemon_template.txs_fee,
+            daemon_template.block_reward,
+            wrong_fee_plan,
+            "wrong-fee-test",
+            kDaemonCumulativeSize);
+
+    const ParsedMinerTxPrefix wrong_fee_prefix =
+        parse_hf6_miner_tx_prefix(
+            hex_to_bytes(
+                wrong_fee_tx.tx_blob_hex));
+
+    CHECK(
+        verify_miner_tx_payout_policy(
+            wrong_fee_prefix.serialized,
+            wrong_fee_tx.miner_tx_tgc_json,
+            wrong_fee_tx.block_reward_without_fee,
+            wrong_fee_tx.block_reward,
+            daemon_template.txs_fee,
+            rebuilt.plan).status ==
+        P2pPayoutPolicyStatus::
+            PayoutPlanMismatch);
+
+    // The correct amount sent to the wrong public identity
+    // must also fail.
+    PplnsCoinbasePlan wrong_recipient_plan =
+        rebuilt.plan;
+
+    wrong_recipient_plan
+        .destinations[operator_index]
+        .payout = payout_c;
+
+    wrong_recipient_plan
+        .destinations[operator_index]
+        .miner_id =
+        miner_id_from_payout(payout_c);
+
+    const ZanoMinerTxResult wrong_recipient_tx =
+        build_zano_hf6_pplns_miner_tx(
+            daemon_template.height,
+            daemon_template.txs_fee,
+            daemon_template.block_reward,
+            wrong_recipient_plan,
+            "wrong-fee-recipient-test",
+            kDaemonCumulativeSize);
+
+    const ParsedMinerTxPrefix
+        wrong_recipient_prefix =
+            parse_hf6_miner_tx_prefix(
+                hex_to_bytes(
+                    wrong_recipient_tx
+                        .tx_blob_hex));
+
+    const auto wrong_recipient_policy =
+        verify_miner_tx_payout_policy(
+            wrong_recipient_prefix.serialized,
+            wrong_recipient_tx
+                .miner_tx_tgc_json,
+            wrong_recipient_tx
+                .block_reward_without_fee,
+            wrong_recipient_tx.block_reward,
+            daemon_template.txs_fee,
+            rebuilt.plan);
+
+    CHECK(
+        wrong_recipient_policy.status ==
+            P2pPayoutPolicyStatus::
+                DestinationMismatch ||
+        wrong_recipient_policy.status ==
+            P2pPayoutPolicyStatus::
+                PayoutPlanMismatch);
 
     ShareChain empty_chain;
     const auto no_history = build_canonical_pplns_template(
