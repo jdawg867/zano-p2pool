@@ -107,6 +107,20 @@ int main() {
     CHECK(bytes_to_hex(upstream_decoded.payout.view_public_key) ==
           "1f0468510235e5c46abd28e23da6e39e3dd3856664d71b060288f5a10f279aad");
 
+    // Public operator-fee payout identity for the v4 mainnet sidechain.
+    // Only public address material is pinned here; no wallet secrets are used.
+    constexpr std::string_view operator_fee_address =
+        "ZxBoSyBE9XZKbba3ENCFJ3KU9WEuaTHrGjUpLebCcr8R39yWX6H8TXVZP6irMehS8p7z39nQ3HJ3rGT48zcvL9s41AGmS7XVg";
+
+    const ZanoAddressDecodeResult operator_fee_decoded =
+        decode_zano_standard_address(operator_fee_address);
+
+    CHECK(operator_fee_decoded.status == ZanoAddressDecodeStatus::Valid);
+    CHECK(bytes_to_hex(operator_fee_decoded.payout.spend_public_key) ==
+          "0a7e53f700f46f2e5d283aaacbfc6e69c9532a5628c9fdf807f258e0cbba0ce1");
+    CHECK(bytes_to_hex(operator_fee_decoded.payout.view_public_key) ==
+          "dd5dd90b2cc8c197ea297e06561929c0422bfe9bff495c5d6272c2373f5f129e");
+
     std::string bad_checksum = address;
     bad_checksum.back() = bad_checksum.back() == '1' ? '2' : '1';
     CHECK(decode_zano_standard_address(bad_checksum).status ==
