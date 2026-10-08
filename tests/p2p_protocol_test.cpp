@@ -94,28 +94,31 @@ int main() {
     CHECK(testnet_params.target_share_seconds == 10);
     CHECK(testnet_params.minimum_share_difficulty == 100000000);
     CHECK(testnet_params.difficulty_window_shares == 2160);
-    CHECK(testnet_params.pplns_window_shares == 32);
+    CHECK(testnet_params.pplns_window_shares == 31);
     CHECK(testnet_params.pplns_max_network_difficulty_multiplier == 2);
+    CHECK(testnet_params.operator_fee_basis_points == 100);
+    CHECK(zano_p2pool::bytes_to_hex(
+              testnet_params.operator_fee_payout.spend_public_key) ==
+          "0a7e53f700f46f2e5d283aaacbfc6e69c9532a5628c9fdf807f258e0cbba0ce1");
+    CHECK(zano_p2pool::bytes_to_hex(
+              testnet_params.operator_fee_payout.view_public_key) ==
+          "dd5dd90b2cc8c197ea297e06561929c0422bfe9bff495c5d6272c2373f5f129e");
 
     const auto testnet_params_bytes =
         zano_p2pool::serialize_sidechain_parameters(testnet_params);
     const auto mainnet_params_bytes =
         zano_p2pool::serialize_sidechain_parameters(mainnet_params);
     CHECK(zano_p2pool::bytes_to_hex(testnet_params_bytes) ==
-          "5a50325349445633010202000000000000003c000000000000003c"
-          "000000000000000a0000000005f5e1000000000000000870"
-          "00000000000000200000000000000002");
+          "5a50325349445634010202000000000000003c000000000000003c000000000000000a0000000005f5e1000000000000000870000000000000001f000000000000000200000000000000640a7e53f700f46f2e5d283aaacbfc6e69c9532a5628c9fdf807f258e0cbba0ce1dd5dd90b2cc8c197ea297e06561929c0422bfe9bff495c5d6272c2373f5f129e");
     CHECK(zano_p2pool::bytes_to_hex(mainnet_params_bytes) ==
-          "5a50325349445633020202000000000000003c000000000000003c"
-          "000000000000000a0000000005f5e1000000000000000870"
-          "00000000000000200000000000000002");
+          "5a50325349445634020202000000000000003c000000000000003c000000000000000a0000000005f5e1000000000000000870000000000000001f000000000000000200000000000000640a7e53f700f46f2e5d283aaacbfc6e69c9532a5628c9fdf807f258e0cbba0ce1dd5dd90b2cc8c197ea297e06561929c0422bfe9bff495c5d6272c2373f5f129e");
 
     const auto testnet_sidechain_id = zano_p2pool::sidechain_id(testnet_params);
     const auto mainnet_sidechain_id = zano_p2pool::sidechain_id(mainnet_params);
     CHECK(zano_p2pool::hash_to_hex(testnet_sidechain_id) ==
-          "4ac0cdc2a86e9617f18035428e103017d545c4ad7ebfb74d283e60256396e8e8");
+          "7839f2d83f198fac5e19db29f9725503a8659bc9ac777c194713aeec5a4b740c");
     CHECK(zano_p2pool::hash_to_hex(mainnet_sidechain_id) ==
-          "8cfa674d782bfc0a3824d654617c814da98ea2ec64b5701a41ddd40a522225bf");
+          "8edc01948b039c16cb7e51f47ef5dfe89a0cee085e1459f2e5b2b13ce7206f4b");
     CHECK(!zano_p2pool::is_zero_sidechain_id(testnet_sidechain_id));
     CHECK(!zano_p2pool::is_zero_sidechain_id(mainnet_sidechain_id));
     CHECK(testnet_sidechain_id != mainnet_sidechain_id);
@@ -188,7 +191,7 @@ int main() {
 
     const std::string expected_payload_hex =
         "01"
-        "4ac0cdc2a86e9617f18035428e103017d545c4ad7ebfb74d283e60256396e8e8"
+        "7839f2d83f198fac5e19db29f9725503a8659bc9ac777c194713aeec5a4b740c"
         "101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f"
         "0000000000000007"
         "0d06"
@@ -209,7 +212,7 @@ int main() {
     const std::string expected_frame_hex =
         "5a5032500201000000000073"
         "01"
-        "4ac0cdc2a86e9617f18035428e103017d545c4ad7ebfb74d283e60256396e8e8"
+        "7839f2d83f198fac5e19db29f9725503a8659bc9ac777c194713aeec5a4b740c"
         "101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f"
         "0000000000000007"
         "0d06"
