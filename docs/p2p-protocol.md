@@ -76,17 +76,22 @@ and `0x4` for mining-context exchange. Current nodes advertise `0x7`. Unknown
 capability bits do not make the handshake malformed, but grant no behavior.
 
 The canonical sidechain ID is `cn_fast_hash` of the canonical sidechain
-parameter encoding. Current IDs are:
+parameter encoding. Current v4 IDs are:
 
 | Parent network | Sidechain ID (hex) |
 |---|---|
-| testnet | `4ac0cdc2a86e9617f18035428e103017d545c4ad7ebfb74d283e60256396e8e8` |
-| mainnet | `8cfa674d782bfc0a3824d654617c814da98ea2ec64b5701a41ddd40a522225bf` |
+| testnet | `7839f2d83f198fac5e19db29f9725503a8659bc9ac777c194713aeec5a4b740c` |
+| mainnet | `8edc01948b039c16cb7e51f47ef5dfe89a0cee085e1459f2e5b2b13ce7206f4b` |
 
-The parameter encoding uses the eight-byte domain `ZP2SIDV3`, followed by the
-parent-network byte, minimum and maximum share-version bytes, then seven
-big-endian `uint64` consensus parameters. See `sidechain_params.hpp` for the
-canonical values and encoding.
+The v4 parameter encoding is 139 bytes. It uses the eight-byte domain
+`ZP2SIDV4`, followed by the parent-network byte, minimum and maximum
+share-version bytes, then eight big-endian `uint64` consensus parameters:
+maximum future timestamp tolerance, maximum parent timestamp backstep, target
+share interval, minimum share difficulty, difficulty-history window, PPLNS
+share-history cap, PPLNS network-difficulty multiplier, and operator fee basis
+points. The final 64 bytes are the operator payout identity: 32-byte public
+spend key followed by the 32-byte public view key. See `sidechain_params.hpp`
+for the canonical values and encoding.
 
 ## Canonical share encoding
 
