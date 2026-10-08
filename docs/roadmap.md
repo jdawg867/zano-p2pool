@@ -435,6 +435,7 @@ locally on 2026-09-15.
 - [x] backup and recovery drill
 - [ ] permanent mainnet seed infrastructure
 - [x] first tagged public beta release
+- [x] independently validated v4 mainnet release candidate
 
 Checkpoint 1 converts the validated temporary VPS configuration into reusable
 operator assets without embedding a wallet, peer, or server address. Release
@@ -472,6 +473,16 @@ Checkpoint 5 begins the mainnet-readiness audit. Current code already separates
 mainnet and testnet RPC defaults, share-store namespaces, P2P network identities,
 and canonical sidechain IDs; mainnet and testnet sidechains intentionally have
 different IDs even though their current economic parameters match. Mainnet seed
-defaults remain empty by design. Remaining work is tracked in
-`docs/mainnet-readiness.md` and must be completed before permanent mainnet seed
-infrastructure is provisioned.
+defaults remain empty by design. The v4 code, regression, tagged-release, and
+independent published-archive gates are now complete; permanent mainnet seed
+infrastructure is the next Phase 8 deployment checkpoint.
+
+Checkpoint 6 completes the v4 pre-infrastructure release gate. The final source
+`bfbd4392f9a14738d48e3e8e3dfbbdcaaa3993a6` was published as prerelease
+`v0.1.0-rc.1` after exact-Zano CI and release-package validation. The published
+archive was independently downloaded, checksum-verified against both its
+checksum file and GitHub asset digest, smoke-tested, and inspected for exact
+source/Zano provenance, dependency policy, tagged CLI version, and the v4
+SidechainId protocol specification. Permanent mainnet seed provisioning is now
+the next deployment step; mining remains gated on the P2P-only soak and
+controlled recovery drill.
