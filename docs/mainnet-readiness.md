@@ -167,9 +167,9 @@ operator supplies a deliberate experimental-mainnet opt-in.
 
 ### 10. Release and launch sequence
 
-- [ ] complete all code/regression gaps on this audit branch
-- [ ] pass the full normal and exact-Zano test suites
-- [ ] build and smoke-test the release archive
+- [x] complete all code/regression gaps on this audit branch
+- [x] pass the full normal and exact-Zano test suites
+- [x] build and smoke-test the release archive
 - [ ] independently verify the published archive, checksum, version, build
       metadata, dependencies, and mainnet seed policy
 - [ ] deploy mainnet seed nodes first with Stratum disabled
@@ -478,3 +478,44 @@ Removal or replacement of the guard is explicitly deferred to a separate
 post-canary release after all safety-critical launch gates pass. This prevents
 the HF7 compatibility result from being mistaken for authorization to make
 mainnet operation automatic.
+
+## Mainnet release-candidate validation
+
+The final pre-infrastructure release candidate was validated from
+`8a740fab5ff56b729e6517e28a02203870726894`.
+
+Validation evidence:
+
+- CI run `37710048855` completed successfully with both the normal
+  `build-and-test` job and the exact-Zano `progpowz-compat` job passing;
+- Release workflow run `37710373866` completed successfully on Ubuntu 22.04;
+- the Linux x86_64 packaging job passed the exact-Zano regression suite,
+  package generation, installation smoke test, and artifact upload;
+- the workflow-dispatch publish job was correctly skipped, so no public release
+  was created;
+- audited Zano source remained pinned to
+  `b400b93f5d8bae42d5f5ac643c804d30faf9f8de`;
+- the release archive SHA-256 is
+  `46797e6760eab9a34d87142257971c6f834236a063e42b767375b2c4e443fb5e`;
+- the stripped `zano-p2pool` binary SHA-256 is
+  `01fffa8e56601e0e1381d81651dee0781529f209436e21bf7477789bf782c1a2`;
+- the stripped `zano-p2pool-header` binary SHA-256 is
+  `846dfa536b97a3b1dbed9cda3c7d4135821cd6bd4ef33615d972d1115b33f211`;
+- build metadata confirmed Release mode, Linux x86_64, Ubuntu 22.04, and
+  Boost 1.84.0 with static Boost.Serialization;
+- independent dependency checks found no unresolved libraries and confirmed
+  the expected OpenSSL 3 crypto dependency;
+- CLI help reports both testnet and mainnet default seed lists as empty;
+- neither the packaged binary nor current packaged operator documentation
+  contains the retired beta.2 seed hostnames or raw VPS addresses;
+- packaged systemd defaults retain loopback Stratum/P2P/metrics binds, the
+  dedicated `zano-p2pool` service account, `NoNewPrivileges=true`,
+  `ProtectSystem=strict`, and `UMask=0077`.
+
+This closes the pre-infrastructure code, regression, and release-archive
+build/smoke gates.
+
+The separate checklist item requiring independent verification of the
+**published** archive remains open. The artifact above was produced by
+`workflow_dispatch` and was intentionally not published as a tagged GitHub
+release.
