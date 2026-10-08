@@ -91,6 +91,51 @@ void prove_cross_network_rejection(
     CHECK(final_matching.records_loaded == 0);
 }
 
+void prove_v3_mainnet_store_rejected_by_v4(
+    const std::filesystem::path& path) {
+
+    using namespace zano_p2pool;
+
+    // Historical pre-v4 mainnet SidechainId. Keep this as raw bytes so it is
+    // unambiguously a negative persistence fixture rather than an active
+    // network identifier.
+    const SidechainId v3_mainnet_id{
+        0x8c, 0xfa, 0x67, 0x4d, 0x78, 0x2b, 0xfc, 0x0a,
+        0x38, 0x24, 0xd6, 0x54, 0x61, 0x7c, 0x81, 0x4d,
+        0xa9, 0x8e, 0xa2, 0xec, 0x64, 0xb5, 0x70, 0x1a,
+        0x41, 0xdd, 0xd4, 0x0a, 0x52, 0x22, 0x25, 0xbf,
+    };
+
+    const SidechainParameters v4_params =
+        canonical_sidechain_parameters(
+            SidechainParentNetwork::Mainnet);
+
+    const SidechainId v4_mainnet_id =
+        sidechain_id(v4_params);
+
+    CHECK(v3_mainnet_id != v4_mainnet_id);
+
+    // Materialize an empty durable store carrying the historical v3 identity.
+    ShareStore v3_store(path, v3_mainnet_id);
+    v3_store.rewrite({});
+
+    // A v4 node must reject both recovery and mutation of that store.
+    ShareStore v4_store(path, v4_mainnet_id);
+    ShareChain v4_chain(v4_params);
+
+    CHECK(rejects([&] {
+        static_cast<void>(
+            v4_store.load_into(v4_chain));
+    }));
+
+    CHECK(rejects([&] {
+        v4_store.rewrite({});
+    }));
+
+    // The rejected v4 mutation must not replace the original v3 header.
+    v3_store.rewrite({});
+}
+
 }  // namespace
 
 int main() {
@@ -107,6 +152,9 @@ int main() {
         temporary.path / "mainnet-store.dat",
         SidechainParentNetwork::Mainnet,
         SidechainParentNetwork::Testnet);
+
+    prove_v3_mainnet_store_rejected_by_v4(
+        temporary.path / "v3-mainnet-store.dat");
 
     return 0;
 }

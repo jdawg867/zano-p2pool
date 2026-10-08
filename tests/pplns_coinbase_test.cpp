@@ -2,6 +2,7 @@
 #include "test_check.hpp"
 
 #include <cstdint>
+#include <limits>
 #include <string>
 
 namespace {
@@ -299,6 +300,80 @@ int main() {
             first_nonzero_fee,
             params.operator_fee_payout) ==
         1);
+
+    // Floor rounding remains stable immediately above the first nonzero
+    // atomic-fee boundary.
+    const auto fee_101 =
+        make_pplns_coinbase_plan(
+            window,
+            101,
+            params);
+
+    CHECK(
+        fee_101.status ==
+        PplnsCoinbasePlanStatus::Ready);
+    CHECK(sum_plan(fee_101) == 101);
+    CHECK(
+        amount_for(
+            fee_101,
+            params.operator_fee_payout) ==
+        1);
+
+    const auto fee_199 =
+        make_pplns_coinbase_plan(
+            window,
+            199,
+            params);
+
+    CHECK(
+        fee_199.status ==
+        PplnsCoinbasePlanStatus::Ready);
+    CHECK(sum_plan(fee_199) == 199);
+    CHECK(
+        amount_for(
+            fee_199,
+            params.operator_fee_payout) ==
+        1);
+
+    const auto fee_200 =
+        make_pplns_coinbase_plan(
+            window,
+            200,
+            params);
+
+    CHECK(
+        fee_200.status ==
+        PplnsCoinbasePlanStatus::Ready);
+    CHECK(sum_plan(fee_200) == 200);
+    CHECK(
+        amount_for(
+            fee_200,
+            params.operator_fee_payout) ==
+        2);
+
+    // Prove the overflow-safe basis-point implementation at the largest
+    // representable block reward. For 100 basis points,
+    // floor(reward * 100 / 10000) == floor(reward / 100).
+    const std::uint64_t max_reward =
+        std::numeric_limits<std::uint64_t>::max();
+
+    const auto max_reward_plan =
+        make_pplns_coinbase_plan(
+            window,
+            max_reward,
+            params);
+
+    CHECK(
+        max_reward_plan.status ==
+        PplnsCoinbasePlanStatus::Ready);
+
+    CHECK(sum_plan(max_reward_plan) == max_reward);
+
+    CHECK(
+        amount_for(
+            max_reward_plan,
+            params.operator_fee_payout) ==
+        max_reward / 100);
 
     PplnsWindow zero_miner;
 
