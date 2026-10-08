@@ -57,7 +57,9 @@ struct PplnsTemplateResult {
         const PplnsWindow window = build_sidechain_pplns_window(
             chain, params, network_difficulty);
         result.plan = make_pplns_coinbase_plan(
-            window, daemon_template.block_reward);
+            window,
+            daemon_template.block_reward,
+            params);
         if (result.plan.status != PplnsCoinbasePlanStatus::Ready) {
             result.status = PplnsTemplateStatus::PayoutPlanUnavailable;
             result.error = pplns_coinbase_plan_status_name(result.plan.status);

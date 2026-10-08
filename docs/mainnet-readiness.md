@@ -368,15 +368,19 @@ build. It does not authorize public mainnet mining: mainnet sidechain launch
 parameters, seed infrastructure, operator security, observability, rollback,
 and launch sequencing remain open gates.
 
-## Mainnet v3 consensus launch profile
+## Mainnet v4 consensus launch profile
 
-The mainnet sidechain consensus profile was independently re-audited after the
-HF7 live-daemon compatibility pass. The canonical profile is frozen under
-parameter domain `ZP2SIDV3` with parent-network tag `2`.
+The previous v3 profile is superseded before public mainnet launch. No v3
+mainnet deployment occurred. The operator-fee change is consensus-relevant and
+therefore uses a new parameter version, a new domain, and a new SidechainId
+rather than silently changing the v3 network.
+
+The canonical v4 profile is frozen under parameter domain `ZP2SIDV4` with
+parent-network tag `2`.
 
 The launch profile is:
 
-- parameter version: 3;
+- parameter version: 4;
 - parent network: mainnet (`2`);
 - minimum share version: 2;
 - maximum share version: 2;
@@ -385,27 +389,51 @@ The launch profile is:
 - target share interval: 10 seconds;
 - minimum share difficulty: 100000000;
 - difficulty history: 2160 shares;
-- PPLNS share-history cap: 32 shares;
-- PPLNS work cap: 2x current Zano network difficulty.
+- PPLNS share-history cap: 31 shares;
+- PPLNS work cap: 2x current Zano network difficulty;
+- operator fee: 100 basis points (1.00%);
+- operator fee rounding:
+  `floor(block_reward_atomic * 100 / 10000)`;
+- operator payout address:
+  `ZxBoSyBE9XZKbba3ENCFJ3KU9WEuaTHrGjUpLebCcr8R39yWX6H8TXVZP6irMehS8p7z39nQ3HJ3rGT48zcvL9s41AGmS7XVg`;
+- operator public spend key:
+  `0a7e53f700f46f2e5d283aaacbfc6e69c9532a5628c9fdf807f258e0cbba0ce1`;
+- operator public view key:
+  `dd5dd90b2cc8c197ea297e06561929c0422bfe9bff495c5d6272c2373f5f129e`.
 
-The canonical 67-byte parameter encoding is:
+Zano permits at most 32 current PoW coinbase outputs. V4 reserves one logical
+destination for the operator fee, so the canonical PPLNS history admits at most
+31 distinct miner payout identities. If the operator address is itself present
+as a miner payout identity, its mining reward and operator fee are merged into
+one logical destination.
 
-`5a50325349445633020202000000000000003c000000000000003c000000000000000a0000000005f5e100000000000000087000000000000000200000000000000002`
+Fee calculation uses exact integer atomic-unit arithmetic. If the mathematical
+fee is below one atomic unit, floor rounding produces zero and no zero-valued
+operator destination is emitted. For the normal 1 ZANO reward vector,
+1,000,000,000,000 atomic units are split into 10,000,000,000 atomic units for
+the operator and 990,000,000,000 atomic units for PPLNS miners.
+
+The canonical 139-byte mainnet parameter encoding is:
+
+`5a50325349445634020202000000000000003c000000000000003c000000000000000a0000000005f5e1000000000000000870000000000000001f000000000000000200000000000000640a7e53f700f46f2e5d283aaacbfc6e69c9532a5628c9fdf807f258e0cbba0ce1dd5dd90b2cc8c197ea297e06561929c0422bfe9bff495c5d6272c2373f5f129e`
 
 The resulting canonical mainnet SidechainId is:
 
-`8cfa674d782bfc0a3824d654617c814da98ea2ec64b5701a41ddd40a522225bf`
+`8edc01948b039c16cb7e51f47ef5dfe89a0cee085e1459f2e5b2b13ce7206f4b`
 
-The encoding and SidechainId are pinned by `p2p_protocol_test`.
-`runtime_network_test`, `persistence_network_test`, `pplns_test`,
-`share_chain_test`, and `p2p_protocol_test` all passed during the independent
-profile audit.
+The corresponding canonical testnet SidechainId is:
 
-This profile is the v3 mainnet consensus identity. Any future
-consensus-relevant parameter change must use a new parameter version/domain and
-therefore derive a different SidechainId rather than silently altering the
-existing network.
+`7839f2d83f198fac5e19db29f9725503a8659bc9ac777c194713aeec5a4b740c`
 
+The encoding and SidechainIds are pinned by `p2p_protocol_test`. Direct
+coinbase construction, historical payout reconstruction, exact miner
+transaction generation, wrong-fee rejection, wrong-recipient rejection, and
+the zero-atomic rounding boundary are covered by the PPLNS, historical trust,
+historical runtime, and exact-Zano regression suites.
+
+The pre-v4 release candidate and v3 SidechainId are historical audit evidence
+only and must not be deployed. A fresh v4 release candidate and independent
+release validation are required before mainnet seed provisioning or mining.
 
 ## Pinned public mainnet standard-address vector
 

@@ -145,9 +145,9 @@ PplnsWindow build_sidechain_pplns_window_at_parent(
     const SidechainParameters& params,
     const Difficulty128& network_difficulty) {
     if (params.pplns_window_shares == 0 ||
-        params.pplns_window_shares > 32) {
+        params.pplns_window_shares > kCanonicalPplnsWindowShares) {
         throw std::invalid_argument(
-            "sidechain PPLNS share window must be between 1 and 32");
+            "sidechain PPLNS share window must be between 1 and 31");
     }
     if (params.pplns_max_network_difficulty_multiplier == 0) {
         throw std::invalid_argument(

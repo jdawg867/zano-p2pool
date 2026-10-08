@@ -235,8 +235,9 @@ int main() {
     CHECK(find_work(work_capped, miner_b) == nullptr);
     CHECK(find_work(work_capped, miner_c)->work == work("400"));
 
-    // A long history with one distinct miner per share is still bounded by the
-    // HF6-safe 32-share policy, so it can never require more than 32 recipients.
+    // V4 reserves one of Zano's 32 coinbase destinations for the operator fee.
+    // With one distinct miner per share, the canonical PPLNS history therefore
+    // admits at most 31 miner payout identities.
     ShareChain many_miners;
     ShareId many_parent{};
     for (std::uint64_t height = 0; height < 40; ++height) {
@@ -247,16 +248,16 @@ int main() {
             "1",
             miner(static_cast<std::uint8_t>(height + 1)));
     }
-    policy.pplns_window_shares = 32;
+    policy.pplns_window_shares = 31;
     const PplnsWindow bounded = build_sidechain_pplns_window(
         many_miners, policy, difficulty128_from_decimal("1000"));
     CHECK(bounded.complete);
-    CHECK(bounded.requested_work == work("32"));
-    CHECK(bounded.covered_work == work("32"));
-    CHECK(bounded.included_shares == 32);
-    CHECK(bounded.miners.size() == 32);
-    CHECK(find_work(bounded, miner(0x08)) == nullptr);
-    CHECK(find_work(bounded, miner(0x09)) != nullptr);
+    CHECK(bounded.requested_work == work("31"));
+    CHECK(bounded.covered_work == work("31"));
+    CHECK(bounded.included_shares == 31);
+    CHECK(bounded.miners.size() == 31);
+    CHECK(find_work(bounded, miner(0x09)) == nullptr);
+    CHECK(find_work(bounded, miner(0x0a)) != nullptr);
     CHECK(find_work(bounded, miner(0x28)) != nullptr);
 
     // A consensus-configured chain may contain structurally connected replay

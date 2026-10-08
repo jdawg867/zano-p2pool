@@ -277,22 +277,24 @@ silently retaining an all-zero placeholder.
 Checkpoint 2 completes the current mainnet-compatible economic sidechain profile.
 Both mainnet and testnet profiles commit to a 10-second target share interval, a
 100,000,000 minimum share difficulty, a 2160-share difficulty-estimation history,
-a 32-share direct-payout PPLNS history cap, and a PPLNS work cap of twice the current
-Zano network difficulty. The next-share difficulty is derived from the selected
-parent branch's own cumulative-work/timestamp history, trims the oldest/newest 10%
-by timestamp before estimating work rate, floors at the configured minimum, and is
-capped at current parent-network difficulty. Configured `ShareChain` admission
-rejects a share whose claimed difficulty differs from that branch-relative result,
-including orphan promotion, while Stratum publishes the same consensus target so
-local miners cannot drift from the sidechain rule.
+a 31-share direct-payout PPLNS history cap, and a PPLNS work cap of twice the current
+Zano network difficulty. V4 additionally commits to a fixed 100-basis-point
+(1.00%) operator fee and its public Zano payout identity. The next-share difficulty
+is derived from the selected parent branch's own cumulative-work/timestamp history,
+trims the oldest/newest 10% by timestamp before estimating work rate, floors at the
+configured minimum, and is capped at current parent-network difficulty. Configured
+`ShareChain` admission rejects a share whose claimed difficulty differs from that
+branch-relative result, including orphan promotion, while Stratum publishes the same
+consensus target so local miners cannot drift from the sidechain rule.
 
 The policy-level PPLNS builder deterministically uses the lesser of the work present
-in the newest 32 best-chain shares and twice current Zano network difficulty. This
-keeps bootstrap payout windows complete once verified history exists, preserves
-partial-oldest-share accounting, follows reorg-selected best-chain history, and
-guarantees no more than 32 credited share identities can enter the direct HF6
-coinbase plan. On 2026-08-30 the local exact-Zano Release suite passed 33/33 in 3.76
-seconds, and CI #449 passed both `build-and-test` and `progpowz-compat`.
+in the newest 31 best-chain shares and twice current Zano network difficulty. One
+of Zano's 32 available coinbase destinations is reserved for the operator fee,
+leaving at most 31 distinct miner payout identities. The fee is computed using
+floor-rounded atomic-unit basis-point arithmetic; the remaining reward is allocated
+through the existing deterministic largest-remainder PPLNS algorithm. If the
+operator identity is also mining, both amounts are merged into one logical
+destination. Historical payout reconstruction applies the identical rule.
 
 Checkpoint 3 completes live multi-recipient PPLNS template replacement and direct
 HF6 payout submission. Canonical payout-capable share v2 is enforced by sidechain
