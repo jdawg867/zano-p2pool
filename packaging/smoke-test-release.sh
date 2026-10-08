@@ -127,4 +127,4 @@ sed -i \
   "$install_root/etc/systemd/system/zano-p2pool.service"
 systemd-analyze verify "$install_root/etc/systemd/system/zano-p2pool.service"
 
-echo "Release archive installation smoke test passed: $package"\n
+echo "Release archive installation smoke test passed: $package"
