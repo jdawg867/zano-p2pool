@@ -59,7 +59,18 @@ done
 
 test -x "$root/bin/zano-p2pool"
 test -x "$root/bin/zano-p2pool-header"
-"$root/bin/zano-p2pool" --help >/dev/null
+
+help_output="$("$root/bin/zano-p2pool" --help)"
+
+grep -Fq 'testnet default seeds: none' <<<"$help_output"
+grep -Fq 'mainnet default seeds: none' <<<"$help_output"
+
+retired_seed_pattern='zano-pool\.ddns\.net|zano-pool2\.ddns\.net|45\.77\.77\.93|68\.232\.175\.242'
+
+if grep -aEq "$retired_seed_pattern" "$root/bin/zano-p2pool"; then
+  echo "Packaged binary contains a retired testnet seed endpoint" >&2
+  exit 1
+fi
 
 if grep -q "not found" "$root/DEPENDENCIES.txt"; then
   echo "Release dependency report contains an unresolved library" >&2
@@ -116,4 +127,4 @@ sed -i \
   "$install_root/etc/systemd/system/zano-p2pool.service"
 systemd-analyze verify "$install_root/etc/systemd/system/zano-p2pool.service"
 
-echo "Release archive installation smoke test passed: $package"
+echo "Release archive installation smoke test passed: $package"\n

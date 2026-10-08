@@ -327,7 +327,7 @@ void print_usage(const char* program) {
         << "  Stratum request rate: burst 256, refill 128/s\n"
         << "  P2P bind: 127.0.0.1\n"
         << "  P2P port: 0 (ephemeral development port)\n"
-        << "  testnet default seeds: zano-pool.ddns.net:37888, zano-pool2.ddns.net:37888\n"
+        << "  testnet default seeds: none\n"
         << "  mainnet default seeds: none\n"
         << "  P2P max peers: 64\n"
         << "  P2P message rate: burst 512, refill 256/s\n"
